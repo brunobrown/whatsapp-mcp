@@ -657,8 +657,10 @@ func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFrom
 		}
 		downloader.DirectPath = result.notif.GetDirectPath()
 		return client.Download(ctx, downloader)
-	case <-time.After(30 * time.Second):
-		return nil, fmt.Errorf("timed out waiting for media retry response from WhatsApp (make sure your phone is online and connected to the internet)")
+	case <-time.After(90 * time.Second):
+		// A phone waking up from battery-saver/background restrictions to process the push and
+		// answer can genuinely take a while, so this is deliberately generous.
+		return nil, fmt.Errorf("timed out waiting for media retry response from WhatsApp (make sure your phone is online, unlocked, and WhatsApp is not force-stopped)")
 	}
 }
 
