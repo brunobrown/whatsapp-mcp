@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
+	"go.mau.fi/whatsmeow/proto/waMmsRetry"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -507,6 +509,16 @@ func (store *MessageStore) GetMediaInfo(id, chatJID string) (string, string, str
 	return mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength, err
 }
 
+// GetMessageSenderInfo returns who sent a message and whether it was sent by us,
+// needed to build the MessageInfo required for a media retry request.
+func (store *MessageStore) GetMessageSenderInfo(id, chatJID string) (sender string, isFromMe bool, err error) {
+	err = store.db.QueryRow(
+		"SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?",
+		id, chatJID,
+	).Scan(&sender, &isFromMe)
+	return sender, isFromMe, err
+}
+
 // MediaDownloader implements the whatsmeow.DownloadableMessage interface
 type MediaDownloader struct {
 	URL           string
@@ -551,6 +563,103 @@ func (d *MediaDownloader) GetFileEncSHA256() []byte {
 // GetMediaType implements the DownloadableMessage interface
 func (d *MediaDownloader) GetMediaType() whatsmeow.MediaType {
 	return d.MediaType
+}
+
+// mediaRetryResult carries either the decrypted notification or the error that occurred
+// while waiting for / decrypting the media retry response.
+type mediaRetryResult struct {
+	notif *waMmsRetry.MediaRetryNotification
+	err   error
+}
+
+// mediaRetryPendingEntry tracks a media retry request awaiting a response from WhatsApp
+type mediaRetryPendingEntry struct {
+	mediaKey   []byte
+	resultChan chan mediaRetryResult
+}
+
+var (
+	mediaRetryMu      sync.Mutex
+	mediaRetryPending = make(map[string]*mediaRetryPendingEntry)
+)
+
+// handleMediaRetryNotification decrypts an incoming media retry response and delivers it
+// (or the error from trying to) to whichever goroutine is waiting for that message ID, if any.
+func handleMediaRetryNotification(evt *events.MediaRetry) {
+	mediaRetryMu.Lock()
+	entry, ok := mediaRetryPending[evt.MessageID]
+	mediaRetryMu.Unlock()
+	if !ok {
+		// Not something we requested (or we already gave up waiting for it)
+		return
+	}
+
+	notif, err := whatsmeow.DecryptMediaRetryNotification(evt, entry.mediaKey)
+	entry.resultChan <- mediaRetryResult{notif: notif, err: err}
+}
+
+// resolveSenderJID builds the JID to use as a message's participant/sender. WhatsApp accounts
+// that have migrated to LID-based addressing may not respond to protocol requests (like a media
+// retry) that reference a contact by phone number, so prefer the LID whatsmeow already knows
+// about for this contact, if any, and only fall back to the phone-number JID otherwise.
+func resolveSenderJID(client *whatsmeow.Client, sender string) types.JID {
+	phoneJID := types.JID{User: sender, Server: "s.whatsapp.net"}
+	if client == nil || client.Store == nil || client.Store.LIDs == nil {
+		return phoneJID
+	}
+	if lidJID, err := client.Store.LIDs.GetLIDForPN(context.Background(), phoneJID); err == nil && !lidJID.IsEmpty() {
+		return lidJID
+	}
+	return phoneJID
+}
+
+// retryDownloadMedia asks WhatsApp to re-upload media whose original download link has expired
+// (this is the same "media retry" mechanism the official WhatsApp clients use), then retries
+// the download using the fresh direct path returned by the server.
+func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFromMe bool, messageID string, downloader *MediaDownloader) ([]byte, error) {
+	chatParsedJID, err := types.ParseJID(chatJID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse chat JID for media retry: %v", err)
+	}
+
+	msgInfo := &types.MessageInfo{
+		ID: messageID,
+		MessageSource: types.MessageSource{
+			Chat:     chatParsedJID,
+			Sender:   resolveSenderJID(client, sender),
+			IsFromMe: isFromMe,
+			IsGroup:  chatParsedJID.Server == "g.us",
+		},
+	}
+
+	resultChan := make(chan mediaRetryResult, 1)
+	mediaRetryMu.Lock()
+	mediaRetryPending[messageID] = &mediaRetryPendingEntry{mediaKey: downloader.MediaKey, resultChan: resultChan}
+	mediaRetryMu.Unlock()
+	defer func() {
+		mediaRetryMu.Lock()
+		delete(mediaRetryPending, messageID)
+		mediaRetryMu.Unlock()
+	}()
+
+	ctx := context.Background()
+	if err := client.SendMediaRetryReceipt(ctx, msgInfo, downloader.MediaKey); err != nil {
+		return nil, fmt.Errorf("failed to send media retry receipt: %v", err)
+	}
+
+	select {
+	case result := <-resultChan:
+		if result.err != nil {
+			return nil, fmt.Errorf("media retry request failed: %v", result.err)
+		}
+		if result.notif.GetResult() != waMmsRetry.MediaRetryNotification_SUCCESS {
+			return nil, fmt.Errorf("media is no longer available (retry result: %v) - your phone may have already deleted it", result.notif.GetResult())
+		}
+		downloader.DirectPath = result.notif.GetDirectPath()
+		return client.Download(ctx, downloader)
+	case <-time.After(30 * time.Second):
+		return nil, fmt.Errorf("timed out waiting for media retry response from WhatsApp (make sure your phone is online and connected to the internet)")
+	}
 }
 
 // Function to download media from a message
@@ -643,7 +752,20 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	// Download the media using whatsmeow client
 	mediaData, err := client.Download(context.Background(), downloader)
 	if err != nil {
-		return false, "", "", "", fmt.Errorf("failed to download media: %v", err)
+		// The original link is likely expired (common for old media). Ask WhatsApp to
+		// re-upload it and retry, the same recovery mechanism the official clients use.
+		fmt.Printf("Initial download failed for message %s (%v), requesting a fresh link via media retry...\n", messageID, err)
+
+		sender, isFromMe, senderErr := messageStore.GetMessageSenderInfo(messageID, chatJID)
+		if senderErr != nil {
+			return false, "", "", "", fmt.Errorf("failed to download media: %v (could not look up sender for retry: %v)", err, senderErr)
+		}
+
+		retriedData, retryErr := retryDownloadMedia(client, chatJID, sender, isFromMe, messageID, downloader)
+		if retryErr != nil {
+			return false, "", "", "", fmt.Errorf("failed to download media: %v (retry also failed: %v)", err, retryErr)
+		}
+		mediaData = retriedData
 	}
 
 	// Save the downloaded media to file
@@ -845,6 +967,10 @@ func main() {
 			// Process history sync events
 			handleHistorySync(client, messageStore, v, logger)
 
+		case *events.MediaRetry:
+			// Response to a SendMediaRetryReceipt request (expired media link recovery)
+			handleMediaRetryNotification(v)
+
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
 
@@ -1005,6 +1131,16 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 	return name
 }
 
+// jidUserPart extracts just the user portion (e.g. phone number or LID) from a raw JID string,
+// stripping the "@server" suffix so it matches the convention used for stored sender values.
+func jidUserPart(rawJID string) string {
+	parsed, err := types.ParseJID(rawJID)
+	if err != nil {
+		return rawJID
+	}
+	return parsed.User
+}
+
 // Handle history sync events
 func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, historySync *events.HistorySync, logger waLog.Logger) {
 	fmt.Printf("Received history sync event with %d conversations\n", len(historySync.Data.Conversations))
@@ -1083,18 +1219,21 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				// Determine sender
 				var sender string
 				isFromMe := false
-				if msg.Message.Key != nil {
-					if msg.Message.Key.FromMe != nil {
-						isFromMe = *msg.Message.Key.FromMe
-					}
-					if !isFromMe && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "" {
-						sender = *msg.Message.Key.Participant
-					} else if isFromMe {
-						sender = client.Store.ID.User
-					} else {
-						sender = jid.User
-					}
-				} else {
+				if msg.Message.Key != nil && msg.Message.Key.FromMe != nil {
+					isFromMe = *msg.Message.Key.FromMe
+				}
+
+				switch {
+				case isFromMe:
+					sender = client.Store.ID.User
+				case msg.Message.Key != nil && msg.Message.Key.Participant != nil && *msg.Message.Key.Participant != "":
+					// Present on real-time/group messages
+					sender = jidUserPart(*msg.Message.Key.Participant)
+				case msg.Message.Participant != nil && *msg.Message.Participant != "":
+					// History-synced group messages carry the sender here instead of in Key
+					sender = jidUserPart(*msg.Message.Participant)
+				default:
+					// Not a group message (or truly no sender info available)
 					sender = jid.User
 				}
 
