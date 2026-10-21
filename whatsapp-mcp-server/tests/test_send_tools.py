@@ -11,10 +11,10 @@ import main  # noqa: E402
 
 OK_BODY = {
     "success": True,
-    "message": "Message sent to chat@g.us",
+    "message": "Message sent to 120363999@g.us",
     "message_id": "3EB0ABC",
     "timestamp": "2026-10-21T10:30:00-03:00",
-    "chat_jid": "chat@g.us",
+    "chat_jid": "120363999@g.us",
 }
 
 
@@ -36,12 +36,12 @@ def media_file(tmp_path):
 def invoke(tool, response, media_file):
     with mock.patch("whatsapp.requests.post", return_value=response):
         if tool == "send_message":
-            return main.send_message("chat@g.us", "oi")
+            return main.send_message("120363999@g.us", "oi")
         if tool == "send_file":
-            return getattr(main, "send_file")("chat@g.us", media_file)
+            return getattr(main, "send_file")("120363999@g.us", media_file)
         ogg = media_file.replace(".pdf", ".ogg")
         os.rename(media_file, ogg)
-        return main.send_audio_message("chat@g.us", ogg)
+        return main.send_audio_message("120363999@g.us", ogg)
 
 
 TOOLS = ["send_message", "send_file", "send_audio_message"]
@@ -52,10 +52,10 @@ def test_success_returns_identifiers(tool, media_file):  # SENT-08
     out = invoke(tool, fake_response(200, OK_BODY), media_file)
     assert out == {
         "success": True,
-        "message": "Message sent to chat@g.us",
+        "message": "Message sent to 120363999@g.us",
         "message_id": "3EB0ABC",
         "timestamp": "2026-10-21T10:30:00-03:00",
-        "chat_jid": "chat@g.us",
+        "chat_jid": "120363999@g.us",
     }
 
 

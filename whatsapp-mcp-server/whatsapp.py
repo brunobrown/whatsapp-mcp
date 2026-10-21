@@ -3,6 +3,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Callable, Optional, List, Tuple
 import os.path
+from pathlib import Path
 import requests
 import json
 import audio
@@ -753,38 +754,57 @@ def _post_send(payload: dict) -> SendResult:
     )
 
 
-def _chat_jids_by_name(name: str) -> List[str]:
-    """JIDs of the chats named exactly `name`, ignoring case."""
-    wanted = name.strip().casefold()
+def _open_chats() -> sqlite3.Connection:
+    """Open the bridge database read-only (never creating it) and check that chats can be read."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
         try:
-            rows = conn.execute("SELECT jid, name FROM chats WHERE name IS NOT NULL").fetchall()
-        finally:
+            conn.execute("SELECT 1 FROM chats LIMIT 1")
+        except sqlite3.Error:
             conn.close()
+            raise
+        return conn
     except sqlite3.Error as e:
-        logger.error("Database error: %s", e)
-        return []
+        raise send_policy.DirectoryError(str(e)) from e
+
+
+def _chat_jids_by_name(name: str) -> List[str]:
+    """JIDs of the chats named exactly `name`, ignoring case. Raises DirectoryError when chats are unreadable."""
+    wanted = name.strip().casefold()
+    conn = _open_chats()
+    try:
+        rows = conn.execute("SELECT jid, name FROM chats WHERE name IS NOT NULL").fetchall()
+    except sqlite3.Error as e:
+        raise send_policy.DirectoryError(str(e)) from e
+    finally:
+        conn.close()
     return [jid for jid, chat_name in rows if wanted and chat_name.strip().casefold() == wanted]
 
 
 def _chat_name_of(jid: str) -> Optional[str]:
-    """Name of the chat of a JID, trying the other ids of the same person (phone/LID) for direct chats."""
+    """Name of the chat of a JID, trying the other ids of the same person (phone/LID) for direct chats.
+    Only used to word messages and to match name rules; an unreadable database gives None."""
     candidates = [jid]
     if not jid.endswith("@g.us"):
         candidates += _person_ids_and_jids(jid)[1]
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
-        try:
-            for candidate in candidates:
-                row = conn.execute("SELECT name FROM chats WHERE jid = ?", (candidate,)).fetchone()
-                if row and row[0]:
-                    return row[0]
-        finally:
-            conn.close()
+        conn = _open_chats()
+    except send_policy.DirectoryError:
+        return None
+    try:
+        for candidate in candidates:
+            row = conn.execute("SELECT name FROM chats WHERE jid = ?", (candidate,)).fetchone()
+            if row and row[0]:
+                return row[0]
     except sqlite3.Error as e:
         logger.error("Database error: %s", e)
+    finally:
+        conn.close()
     return None
+
+
+def _directory_ready() -> None:
+    _open_chats().close()
 
 
 SEND_DIRECTORY = send_policy.Directory(
@@ -792,6 +812,7 @@ SEND_DIRECTORY = send_policy.Directory(
     name_of=_chat_name_of,
     ids_of=sender_ids,
     is_phone=lambda text: bool(_digits(text)),
+    ready=_directory_ready,
 )
 
 

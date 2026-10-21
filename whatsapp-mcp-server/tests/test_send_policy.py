@@ -327,3 +327,164 @@ def test_empty_recipient_is_still_rejected_without_a_log_of_a_destination(db, po
 
     assert out["success"] is False
     post.assert_not_called()
+
+
+# --- correções da verificação e da revisão de segurança ---------------------------------------
+
+@pytest.mark.parametrize("sneaky", [
+    f"{CLIENT}@s.whatsapp.net",        # o whatsmeow só lê as duas primeiras partes do split por @
+    "120363111:7@g.us",                # sufixo de dispositivo
+    "120363111.0:7@g.us",              # agente + dispositivo
+    "120363111@G.US",                  # servidor em maiúsculas
+    f"  {CLIENT}  ",                   # espaços
+])
+def test_jid_variants_cannot_bypass_a_deny_rule(db, post, sneaky):  # POLICY-25
+    write_policy(None, mode="denylist", deny=[CLIENT])
+
+    out = main.send_message(sneaky, "oi")
+
+    assert out["success"] is False
+    assert out["error_code"] in ("SEND_BLOCKED_BY_POLICY", "RECIPIENT_INVALID")
+    post.assert_not_called()
+
+
+def test_equivalent_jid_forms_are_blocked_as_the_same_chat(db, post):  # POLICY-25
+    write_policy(None, mode="denylist", deny=[CLIENT])
+
+    for variant in ("120363111:7@g.us", "120363111@G.US", f"  {CLIENT}  "):
+        assert blocked(main.send_message(variant, "oi")), variant
+
+
+@pytest.mark.parametrize("bad", ["a@b@g.us", "120363111@c.us", "status@broadcast", "@g.us", "abc@g.us", "123@s.whatsapp.net\n@g.us"])
+def test_invalid_destinations_are_refused_before_the_bridge(db, post, bad):  # POLICY-26
+    out = main.send_message(bad, "oi")
+
+    assert out["success"] is False and out["error_code"] == "RECIPIENT_INVALID"
+    post.assert_not_called()
+
+
+def test_the_bridge_receives_the_canonical_jid(db, post):  # POLICY-27
+    main.send_message("120363222:3@G.US", "oi")
+
+    assert post.call_args.kwargs["json"]["recipient"] == TECH
+
+
+@pytest.mark.parametrize("entry", [" 120363111@g.us ", "120363111@G.US", "120363111:4@g.us"])
+def test_jid_rule_written_in_another_form_still_matches(db, post, entry):  # POLICY-28
+    write_policy(None, mode="denylist", deny=[entry])
+
+    assert blocked(main.send_message(CLIENT, "oi"))
+
+
+@pytest.mark.parametrize("entry", ["a@b@g.us", "120363111@c.us", "texto@g.us"])
+def test_malformed_jid_rule_invalidates_the_policy(db, post, entry):  # POLICY-28
+    write_policy(None, mode="denylist", deny=[entry])
+
+    out = main.send_message(TECH, "oi")
+
+    assert blocked(out) and "not a valid JID" in out["message"]
+    post.assert_not_called()
+
+
+def test_group_and_person_with_the_same_digits_are_different_destinations(db, post):  # POLICY-25 (sem falso positivo)
+    write_policy(None, mode="denylist", deny=[CLIENT])
+
+    assert main.send_message("120363111@s.whatsapp.net", "oi")["success"] is True
+
+
+def test_unreadable_directory_blocks_even_with_a_token(db, post, monkeypatch, tmp_path):  # POLICY-29
+    write_policy(None, mode="denylist", deny=["Software Elbratec"], override_token=TOKEN)
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "ausente.db"))
+
+    out = main.send_message(TECH, "oi", override_token=TOKEN)
+
+    assert blocked(out) and "could not be read" in out["message"]
+    post.assert_not_called()
+    assert not (tmp_path / "ausente.db").exists()  # nunca cria um banco vazio
+
+
+def test_unreadable_directory_does_not_block_when_there_is_no_policy(tmp_path, monkeypatch, post):  # POLICY-07
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "ausente.db"))
+
+    assert main.send_message("5511999990000", "oi")["success"] is True
+
+
+def test_name_recipient_with_unreadable_directory_is_refused(tmp_path, monkeypatch, post):  # POLICY-29
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "ausente.db"))
+
+    out = main.send_message("Projeto Elbratec", "oi")
+
+    assert out["success"] is False and out["error_code"] == "DIRECTORY_UNAVAILABLE"
+    post.assert_not_called()
+
+
+def test_deny_by_name_still_blocks_a_jid_whose_chat_has_that_name(db, post):  # POLICY-30
+    write_policy(None, mode="denylist", deny=["Software Elbratec"])
+
+    assert blocked(main.send_message(CLIENT, "oi"))
+
+
+def test_unknown_group_cannot_be_checked_against_name_rules(db, post):  # POLICY-30
+    write_policy(None, mode="denylist", deny=["Software Elbratec"])
+
+    out = main.send_message("120363777@g.us", "oi")
+
+    assert blocked(out) and "not in the chat list" in out["message"]
+    post.assert_not_called()
+
+
+def test_unknown_group_is_fine_when_rules_are_only_jids(db, post):  # POLICY-30
+    write_policy(None, mode="denylist", deny=[CLIENT])
+
+    assert main.send_message("120363777@g.us", "oi")["success"] is True
+
+
+def test_unknown_group_can_be_released_with_the_token(db, post):  # POLICY-30
+    write_policy(None, mode="denylist", deny=["Software Elbratec"], override_token=TOKEN)
+
+    assert main.send_message("120363777@g.us", "oi", override_token=TOKEN)["success"] is True
+
+
+def test_block_message_names_the_chat_apart_from_the_rule(db, post):  # POLICY-05
+    write_policy(None, mode="denylist", deny=[CLIENT])
+
+    out = main.send_message(CLIENT, "oi")
+
+    assert 'chat "Software Elbratec" (120363111@g.us)' in out["message"]
+    assert f'deny rule "{CLIENT}"' in out["message"]
+
+
+def test_blocked_audio_is_not_converted(db, post, tmp_path):  # POLICY-09
+    write_policy(None, mode="denylist", deny=[CLIENT])
+    mp3 = tmp_path / "a.mp3"
+    mp3.write_bytes(b"x")
+
+    with mock.patch("whatsapp.audio.convert_to_opus_ogg_temp") as convert:
+        out = main.send_audio_message(CLIENT, str(mp3))
+
+    assert blocked(out)
+    convert.assert_not_called()
+    post.assert_not_called()
+
+
+def test_refused_recipients_are_audited(db, post):  # POLICY-21
+    main.send_message("Grupo que não existe", "oi")
+    main.send_message("Gêmeo", "oi")
+    main.send_message("a@b@g.us", "oi")
+
+    rules = [(l["result"], l["rule"]) for l in audit_lines()]
+
+    assert rules == [("failed", "RECIPIENT_NOT_FOUND"), ("failed", "RECIPIENT_AMBIGUOUS"), ("failed", "RECIPIENT_INVALID")]
+
+
+def test_recipient_with_surrounding_spaces_is_trimmed(db, post):  # POLICY-14
+    assert main.send_message("  Projeto Elbratec  ", "oi")["success"] is True
+    assert post.call_args.kwargs["json"]["recipient"] == TECH
+
+
+def test_audit_line_is_one_json_line_and_bounded(db, post):  # POLICY-22
+    main.send_message("x" * 5000 + "\nfalsa linha", "oi")
+
+    lines = open(send_policy.AUDIT_PATH).read().splitlines()
+
+    assert len(lines) == 1 and len(json.loads(lines[0])["recipient"]) <= 200
