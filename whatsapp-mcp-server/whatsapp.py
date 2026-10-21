@@ -24,6 +24,12 @@ class Message:
     id: str
     chat_name: Optional[str] = None
     media_type: Optional[str] = None
+    filename: Optional[str] = None
+    mimetype: Optional[str] = None
+    file_length: Optional[int] = None
+    forwarded: bool = False
+    quoted_message_id: Optional[str] = None
+    local_path: Optional[str] = None
 
 @dataclass
 class Chat:
@@ -189,6 +195,75 @@ def resolve_mentions(content: str) -> str:
         return f"@{name}" if name else match.group(0)
     return _MENTION.sub(replace, content or "")
 
+# Columns the bridge added over time; a database from an older bridge may lack them.
+_OPTIONAL_MESSAGE_COLUMNS = ("filename", "mimetype", "file_length", "forwarded", "quoted_id", "local_path")
+
+
+def _message_select(cursor: sqlite3.Cursor) -> str:
+    """SELECT list for Message rows. Columns missing from the database read as NULL."""
+    have = {row[1] for row in cursor.execute("PRAGMA table_info(messages)")}
+    optional = ", ".join(f"messages.{c}" if c in have else f"NULL AS {c}" for c in _OPTIONAL_MESSAGE_COLUMNS)
+    return (
+        "messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, "
+        f"chats.jid, messages.id, messages.media_type, {optional}"
+    )
+
+
+def _message_from_row(row) -> Message:
+    return Message(
+        timestamp=datetime.fromisoformat(row[0]),
+        sender=row[1],
+        chat_name=row[2],
+        content=row[3],
+        is_from_me=row[4],
+        chat_jid=row[5],
+        id=row[6],
+        media_type=row[7],
+        filename=row[8],
+        file_length=row[10],
+        mimetype=row[9],
+        forwarded=bool(row[11]),
+        quoted_message_id=row[12] or None,
+        local_path=row[13],
+    )
+
+
+def format_size(size: Optional[int]) -> str:
+    """Human readable file size; empty when the size is unknown."""
+    if not size or size < 0:
+        return ""
+    if size < 1024:
+        return f"{size} B"
+    for unit in ("KB", "MB", "GB"):
+        size /= 1024
+        if size < 1024 or unit == "GB":
+            return f"{size:.1f} {unit}"
+
+
+def _file_details(message: Message) -> str:
+    """` - File: name (mime, size)` for a message with media, or ''."""
+    details = ", ".join(part for part in (message.mimetype, format_size(message.file_length)) if part)
+    if message.filename:
+        return f" - File: {message.filename}" + (f" ({details})" if details else "")
+    return f" ({details})" if details else ""
+
+
+def _message_prefix(message: Message) -> str:
+    """The bracketed prefix of a message: media type and IDs, then forwarded, reply and local path."""
+    notes = []
+    if message.forwarded:
+        notes.append("Forwarded")
+    if message.quoted_message_id:
+        notes.append(f"Reply to: {message.quoted_message_id}")
+    if message.media_type:
+        # a file that was deleted (retention) is not offered
+        if message.local_path and os.path.isfile(message.local_path):
+            notes.append(f"Local path: {message.local_path}")
+        extra = "".join(f" - {note}" for note in notes)
+        return f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}{_file_details(message)}{extra}] "
+    return f"[{' - '.join(notes)}] " if notes else ""
+
+
 def format_message(message: Message, show_chat_info: bool = True) -> None:
     """Print a single message with consistent formatting."""
     output = ""
@@ -198,9 +273,7 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     else:
         output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] "
         
-    content_prefix = ""
-    if hasattr(message, 'media_type') and message.media_type:
-        content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
+    content_prefix = _message_prefix(message)
     
     try:
         sender_name = sender_label(message.sender) if not message.is_from_me else "Me"
@@ -237,7 +310,7 @@ def list_messages(
         cursor = conn.cursor()
         
         # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
+        query_parts = [f"SELECT {_message_select(cursor)} FROM messages"]
         query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
@@ -286,19 +359,7 @@ def list_messages(
         cursor.execute(" ".join(query_parts), tuple(params))
         messages = cursor.fetchall()
         
-        result = []
-        for msg in messages:
-            message = Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            )
-            result.append(message)
+        result = [_message_from_row(msg) for msg in messages]
             
         if include_context and result:
             # Add context for each message
@@ -331,10 +392,11 @@ def get_message_context(
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
+        columns = _message_select(cursor)
         
         # Get the target message first
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.id = ?
@@ -344,62 +406,29 @@ def get_message_context(
         if not msg_data:
             raise ValueError(f"Message with ID {message_id} not found")
             
-        target_message = Message(
-            timestamp=datetime.fromisoformat(msg_data[0]),
-            sender=msg_data[1],
-            chat_name=msg_data[2],
-            content=msg_data[3],
-            is_from_me=msg_data[4],
-            chat_jid=msg_data[5],
-            id=msg_data[6],
-            media_type=msg_data[8]
-        )
+        target_message = _message_from_row(msg_data)
         
         # Get messages before
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
             ORDER BY messages.timestamp DESC
             LIMIT ?
-        """, (msg_data[7], msg_data[0], before))
-        
-        before_messages = []
-        for msg in cursor.fetchall():
-            before_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
+        """, (msg_data[5], msg_data[0], before))
+        before_messages = [_message_from_row(msg) for msg in cursor.fetchall()]
         
         # Get messages after
-        cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+        cursor.execute(f"""
+            SELECT {columns}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
             ORDER BY messages.timestamp ASC
             LIMIT ?
-        """, (msg_data[7], msg_data[0], after))
-        
-        after_messages = []
-        for msg in cursor.fetchall():
-            after_messages.append(Message(
-                timestamp=datetime.fromisoformat(msg[0]),
-                sender=msg[1],
-                chat_name=msg[2],
-                content=msg[3],
-                is_from_me=msg[4],
-                chat_jid=msg[5],
-                id=msg[6],
-                media_type=msg[7]
-            ))
+        """, (msg_data[5], msg_data[0], after))
+        after_messages = [_message_from_row(msg) for msg in cursor.fetchall()]
         
         return MessageContext(
             message=target_message,
