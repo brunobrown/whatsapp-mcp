@@ -2,7 +2,9 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -175,5 +177,46 @@ func TestIdentityTableRejectsDuplicateIds(t *testing.T) { // IDN-03, IDN-04 (red
 	}
 	if _, err := store.db.Exec("INSERT INTO contacts_identity (lid) VALUES (NULL), (NULL)"); err != nil {
 		t.Errorf("rows without LID must not collide with each other: %v", err)
+	}
+}
+
+func TestConcurrentUpsertsDoNotFail(t *testing.T) { // eventos, sincronização e REST escrevem ao mesmo tempo
+	store := newTestStore(t)
+	const workers, perWorker = 8, 40
+	errs := make(chan error, workers*perWorker)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < perWorker; i++ {
+				lid := fmt.Sprintf("lid%d", i) // os workers disputam as mesmas pessoas
+				phone := fmt.Sprintf("55%d", i)
+				if err := store.UpsertIdentity(lid, "", "", fmt.Sprintf("push%d", w)); err != nil {
+					errs <- err
+				}
+				if err := store.UpsertIdentity("", phone, fmt.Sprintf("Nome%d", i), ""); err != nil {
+					errs <- err
+				}
+				if err := store.UpsertIdentity(lid, phone, "", ""); err != nil {
+					errs <- err
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent upsert failed: %v", err)
+	}
+	// cada pessoa acaba numa única linha, com LID, telefone e nome
+	rows := identityRows(t, store)
+	if len(rows) != perWorker {
+		t.Fatalf("rows = %d, want %d (one per person)", len(rows), perWorker)
+	}
+	for _, r := range rows {
+		if r.LID == "" || r.Phone == "" || r.FullName == "" {
+			t.Errorf("incomplete row after concurrent merge: %+v", r)
+		}
 	}
 }

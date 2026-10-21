@@ -218,8 +218,16 @@ func TestGroupParticipantsListedAndRecorded(t *testing.T) { // GRP-01, GRP-02
 			t.Errorf("participant %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	if recorded := getID(t, store, "241841085649006"); recorded.Phone != "558181282941" {
-		t.Errorf("participant link not recorded: %+v", recorded)
+	for lid, phone := range map[string]string{"160889625940144": "555181993271", "241841085649006": "558181282941"} {
+		if recorded := getID(t, store, lid); recorded.Phone != phone {
+			t.Errorf("link %s -> %s not recorded: %+v", lid, phone, recorded)
+		}
+	}
+	if recorded := getID(t, store, "558100000000"); recorded.LID != "" {
+		t.Errorf("phone-only participant recorded with a LID: %+v", recorded)
+	}
+	if _, known, _ := store.GetIdentity("555555"); !known {
+		t.Error("LID-only participant not recorded")
 	}
 }
 
