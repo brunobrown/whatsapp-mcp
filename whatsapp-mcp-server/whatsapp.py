@@ -72,7 +72,7 @@ class Identity:
         return self.full_name or self.push_name or None
 
 
-_PHONE_LIKE = re.compile(r"[+\d\s().-]+")
+_PHONE_LIKE = re.compile(r"[+\d\s().-]+", re.ASCII)
 
 
 def _digits(value: str) -> str:
@@ -80,7 +80,7 @@ def _digits(value: str) -> str:
     ident = value.split("@")[0]
     if not _PHONE_LIKE.fullmatch(ident):
         return ""  # text such as "Teilor2024" is not a phone number
-    return re.sub(r"\D", "", ident)
+    return re.sub(r"\D", "", ident, flags=re.ASCII)
 
 
 def lookup_identity(value: str) -> Optional[Identity]:

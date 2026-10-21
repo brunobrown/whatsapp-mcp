@@ -488,3 +488,48 @@ def test_audit_line_is_one_json_line_and_bounded(db, post):  # POLICY-22
     lines = open(send_policy.AUDIT_PATH).read().splitlines()
 
     assert len(lines) == 1 and len(json.loads(lines[0])["recipient"]) <= 200
+
+
+def test_fullwidth_digits_are_not_a_phone_number(db, post):  # POLICY-26
+    write_policy(None, mode="denylist", deny=[PHONE])
+
+    out = main.send_message("５５５１８１９９３２７１", "oi")
+
+    assert out["success"] is False and out["error_code"] == "RECIPIENT_NOT_FOUND"
+    post.assert_not_called()
+
+
+def test_deny_rule_in_another_jid_form_is_the_reason_of_the_block(db, post):  # POLICY-28
+    write_policy(None, mode="denylist", deny=["120363111@G.US"])
+
+    out = main.send_message(CLIENT, "oi")
+
+    assert blocked(out) and 'deny rule "120363111@G.US"' in out["message"]
+
+
+def test_jid_only_rules_are_blocked_without_a_readable_directory(db, post, monkeypatch, tmp_path):  # POLICY-29
+    write_policy(None, mode="denylist", deny=[CLIENT])
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "ausente.db"))
+
+    assert blocked(main.send_message(CLIENT, "oi"))
+    assert blocked(main.send_message(TECH, "oi"))
+    post.assert_not_called()
+
+
+def test_unknown_person_is_not_blocked_by_name_rules(db, post):  # POLICY-30 (só grupo)
+    write_policy(None, mode="denylist", deny=["Software Elbratec"])
+
+    assert main.send_message("5511888880000", "oi")["success"] is True
+
+
+def test_hyphenated_user_is_only_valid_for_groups(db, post):  # POLICY-26
+    out = main.send_message("5511999-1600000000@s.whatsapp.net", "oi")
+
+    assert out["success"] is False and out["error_code"] == "RECIPIENT_INVALID"
+    assert main.send_message("5511999-1600000000@g.us", "oi")["success"] is True
+
+
+def test_audit_bounds_chat_name_and_invalid_recipient_message(db, post, monkeypatch):  # POLICY-22
+    out = main.send_message("a@b@" + "x" * 5000, "oi")
+
+    assert len(out["message"]) < 600

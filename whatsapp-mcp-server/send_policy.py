@@ -30,6 +30,7 @@ AMBIGUOUS = "RECIPIENT_AMBIGUOUS"
 INVALID = "RECIPIENT_INVALID"
 UNAVAILABLE = "DIRECTORY_UNAVAILABLE"
 _MAX_LOGGED = 200
+_ASCII_DIGITS = "0123456789"
 _MODES = ("allowlist", "denylist")
 
 
@@ -84,7 +85,6 @@ class Decision:
     rule: str = ""
     override: bool = False
     message: str = ""
-    releasable: bool = True
 
 
 def resolve_target(recipient: str, directory: Directory) -> Target:
@@ -98,7 +98,7 @@ def resolve_target(recipient: str, directory: Directory) -> Target:
                                   "a JID such as 123@g.us or 123@s.whatsapp.net, or a chat name. Nothing was sent.")
         return Target(True, jid, jid, directory.name_of(jid))
     if directory.is_phone(recipient):
-        digits = "".join(c for c in recipient if c.isdigit())
+        digits = "".join(c for c in recipient if c in _ASCII_DIGITS)
         jid = f"{digits}@s.whatsapp.net"
         return Target(True, digits, jid, directory.name_of(jid))
     try:
@@ -156,7 +156,7 @@ def _entry_jids(entry: str, directory: Directory) -> List[str]:
     if "@" in entry:
         return [canonical_jid(entry)]
     if directory.is_phone(entry):
-        return [f"{''.join(c for c in entry if c.isdigit())}@s.whatsapp.net"]
+        return [f"{''.join(c for c in entry if c in _ASCII_DIGITS)}@s.whatsapp.net"]
     return directory.jids_by_name(entry)
 
 
@@ -180,9 +180,7 @@ def _blocked(target: Target, reason: str) -> Decision:
 
 def _unverifiable(target: Target, why: str) -> Decision:
     """A block that no token releases: the policy could not be checked at all."""
-    decision = _blocked(target, why)
-    decision.releasable = False
-    return decision
+    return _blocked(target, why)
 
 
 def evaluate(target: Target, override_token: Optional[str], directory: Directory) -> Decision:
