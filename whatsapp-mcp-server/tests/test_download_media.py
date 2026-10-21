@@ -52,6 +52,7 @@ def test_media_not_found(bridge_msg):  # DLERR-02
     assert out["success"] is False
     assert out["error_code"] == "MEDIA_NOT_FOUND"
     assert out["message"] == bridge_msg
+    assert "hint" not in out
 
 
 @pytest.mark.parametrize("exc", [
@@ -63,6 +64,7 @@ def test_bridge_unreachable(exc):  # DLERR-03
     assert out["success"] is False
     assert out["error_code"] == "BRIDGE_UNREACHABLE"
     assert str(exc) in out["message"]
+    assert "hint" not in out
 
 
 def test_unknown_error_keeps_bridge_message():  # DLERR-04
@@ -70,6 +72,7 @@ def test_unknown_error_keeps_bridge_message():  # DLERR-04
     out = call(fake_response(500, {"success": False, "message": msg}))
     assert out["error_code"] == "UNKNOWN"
     assert out["message"] == msg
+    assert "hint" not in out
 
 
 def test_403_without_retry_timeout_is_not_phone_offline():  # DLERR-04 (fronteira de DLERR-01)
