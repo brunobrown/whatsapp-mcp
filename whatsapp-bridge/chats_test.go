@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -145,5 +146,33 @@ func TestMessagesIndexIsCreatedIdempotently(t *testing.T) { // CHT-06
 		if n != 1 {
 			t.Fatalf("open #%d: idx_messages_chat_ts count = %d, want 1", i+1, n)
 		}
+	}
+}
+
+func TestRepairChatTimesPicksTheLatestOfSeveralMessages(t *testing.T) { // CHT-04
+	store := newTestStore(t)
+	base := time.Date(2026, 10, 21, 12, 0, 0, 0, brt)
+	if _, err := store.db.Exec("INSERT INTO chats (jid, name, last_message_time) VALUES ('multi@g.us', 'x', ?)", base.Add(-90*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// 11:00-03:00 = 14:00Z é a mais nova; 13:00+00:00 é mais antiga mas maior como texto;
+	// a de 08:00-03:00 (11:00Z) é a mais antiga e foi gravada por último
+	for i, ts := range []time.Time{
+		time.Date(2026, 10, 21, 11, 0, 0, 0, brt),
+		time.Date(2026, 10, 21, 13, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 21, 8, 0, 0, 0, brt),
+	} {
+		if err := store.StoreMessage(fmt.Sprintf("m%d", i), "multi@g.us", "alice", "oi", ts, false, "", "", "", nil, nil, nil, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if n, err := store.RepairChatTimes(); err != nil || n != 1 {
+		t.Fatalf("RepairChatTimes = (%d, %v), want (1, nil)", n, err)
+	}
+
+	want := time.Date(2026, 10, 21, 14, 0, 0, 0, time.UTC)
+	if _, last := chatState(t, store, "multi@g.us"); !last.Time.Equal(want) {
+		t.Errorf("time = %v, want the latest instant %v", last.Time, want)
 	}
 }
