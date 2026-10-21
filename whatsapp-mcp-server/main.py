@@ -18,6 +18,17 @@ from whatsapp import (
 # Initialize FastMCP server
 mcp = FastMCP("whatsapp")
 
+
+def send_response(result) -> Dict[str, Any]:
+    """Build a send tool's answer; message_id, timestamp and chat_jid appear only when the bridge reported them."""
+    response: Dict[str, Any] = {"success": result.success, "message": result.message}
+    if result.success:
+        for field in ("message_id", "timestamp", "chat_jid"):
+            value = getattr(result, field)
+            if value:
+                response[field] = value
+    return response
+
 @mcp.tool()
 def search_contacts(query: str) -> List[Dict[str, Any]]:
     """Search WhatsApp contacts by name or phone number.
@@ -167,7 +178,7 @@ def send_message(
         message: The message text to send
     
     Returns:
-        A dictionary containing success status and a status message
+        A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
     """
     # Validate input
     if not recipient:
@@ -177,11 +188,7 @@ def send_message(
         }
     
     # Call the whatsapp_send_message function with the unified recipient parameter
-    success, status_message = whatsapp_send_message(recipient, message)
-    return {
-        "success": success,
-        "message": status_message
-    }
+    return send_response(whatsapp_send_message(recipient, message))
 
 @mcp.tool()
 def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
@@ -193,15 +200,11 @@ def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
         media_path: The absolute path to the media file to send (image, video, document)
     
     Returns:
-        A dictionary containing success status and a status message
+        A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
     """
     
     # Call the whatsapp_send_file function
-    success, status_message = whatsapp_send_file(recipient, media_path)
-    return {
-        "success": success,
-        "message": status_message
-    }
+    return send_response(whatsapp_send_file(recipient, media_path))
 
 @mcp.tool()
 def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
@@ -213,13 +216,9 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file)
     
     Returns:
-        A dictionary containing success status and a status message
+        A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
     """
-    success, status_message = whatsapp_audio_voice_message(recipient, media_path)
-    return {
-        "success": success,
-        "message": status_message
-    }
+    return send_response(whatsapp_audio_voice_message(recipient, media_path))
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
