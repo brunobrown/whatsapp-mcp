@@ -205,6 +205,23 @@ func editTarget(msg *waProto.Message) (string, bool) {
 	return pm.GetKey().GetID(), true
 }
 
+// applyEdit applies msg to the stored message it edits. isEdit reports whether
+// msg is an edit at all, so the caller must not store it as a new message.
+func applyEdit(store *MessageStore, chatJID, sender string, msg *waProto.Message) (isEdit, updated bool, err error) {
+	targetID, ok := editTarget(msg)
+	if !ok {
+		return false, false, nil
+	}
+	updated, err = store.UpdateMessageContent(targetID, chatJID, sender, extractTextContent(msg))
+	return true, updated, err
+}
+
+// historyMessageContent extracts the content of a history sync message with
+// the same rules as live messages.
+func historyMessageContent(msg *waProto.HistorySyncMsg) string {
+	return extractTextContent(msg.GetMessage().GetMessage())
+}
+
 // Extract text content from a message: the text of plain and extended text
 // messages, the caption of image, video and document messages, or the new
 // text of an edit.
@@ -494,11 +511,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	}
 
 	// An edit updates the original message instead of creating a new one
-	if targetID, ok := editTarget(msg.Message); ok {
-		if updated, err := messageStore.UpdateMessageContent(targetID, chatJID, sender, extractTextContent(msg.Message)); err != nil {
-			logger.Warnf("Failed to apply edit to message %s: %v", targetID, err)
+	if isEdit, updated, err := applyEdit(messageStore, chatJID, sender, msg.Message); isEdit {
+		if err != nil {
+			logger.Warnf("Failed to apply edit: %v", err)
 		} else if !updated {
-			logger.Infof("Ignoring edit of unknown message %s, or by a sender other than its author", targetID)
+			logger.Infof("Ignoring edit of unknown message, or by a sender other than its author")
 		}
 		return
 	}
@@ -1287,7 +1304,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				}
 
 				// Extract text content (including media captions)
-				content := extractTextContent(msg.Message.Message)
+				content := historyMessageContent(msg)
 
 				// Message ID (needed up front so extractMediaInfo can build a unique filename)
 				msgID := ""

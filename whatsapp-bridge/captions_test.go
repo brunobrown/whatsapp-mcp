@@ -133,3 +133,54 @@ func TestUpdateMessageContentRejectsOtherSender(t *testing.T) {
 		t.Errorf("content = %q, want original", content)
 	}
 }
+
+func TestHistoryMessageContentReadsCaption(t *testing.T) { // CAP-07
+	msg := &waProto.HistorySyncMsg{Message: &waProto.WebMessageInfo{Message: &waProto.Message{
+		ImageMessage: &waProto.ImageMessage{Caption: proto.String("legenda do history")},
+	}}}
+	if got := historyMessageContent(msg); got != "legenda do history" {
+		t.Errorf("historyMessageContent = %q, want legenda do history", got)
+	}
+	if got := historyMessageContent(nil); got != "" {
+		t.Errorf("historyMessageContent(nil) = %q, want empty", got)
+	}
+}
+
+func TestApplyEdit(t *testing.T) { // CAP-05, CAP-06, CAP-03
+	store := newTestStore(t)
+	now := time.Now()
+	if err := store.StoreChat("chat@g.us", "Chat", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreMessage("ORIG", "chat@g.us", "alice", "velho", now, false, "", "", "", nil, nil, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	isEdit, updated, err := applyEdit(store, "chat@g.us", "alice", editMessage("ORIG", "novo"))
+	if err != nil || !isEdit || !updated {
+		t.Fatalf("applyEdit = (%v, %v, %v), want (true, true, nil)", isEdit, updated, err)
+	}
+	isEdit, updated, _ = applyEdit(store, "chat@g.us", "alice", editMessage("GHOST", "x"))
+	if !isEdit || updated {
+		t.Errorf("edit of unknown message = (isEdit %v, updated %v), want (true, false)", isEdit, updated)
+	}
+	if isEdit, _, _ := applyEdit(store, "chat@g.us", "alice", &waProto.Message{Conversation: proto.String("oi")}); isEdit {
+		t.Error("plain text reported as edit")
+	}
+	var content string
+	store.db.QueryRow("SELECT content FROM messages WHERE id='ORIG'").Scan(&content)
+	if content != "novo" || countMessages(t, store) != 1 {
+		t.Errorf("content=%q rows=%d, want novo and 1 row", content, countMessages(t, store))
+	}
+}
+
+func TestExtractTextContentVideoWithoutCaption(t *testing.T) { // CAP-04
+	for _, msg := range []*waProto.Message{
+		{VideoMessage: &waProto.VideoMessage{}},
+		{DocumentMessage: &waProto.DocumentMessage{}},
+	} {
+		if got := extractTextContent(msg); got != "" {
+			t.Errorf("extractTextContent = %q, want empty", got)
+		}
+	}
+}
