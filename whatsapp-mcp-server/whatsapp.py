@@ -1,11 +1,12 @@
 import sqlite3
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Callable, Optional, List, Tuple
 import os.path
 import requests
 import json
 import audio
+import send_policy
 import logging
 import re
 
@@ -720,6 +721,7 @@ class SendResult:
     message_id: Optional[str] = None
     timestamp: Optional[str] = None
     chat_jid: Optional[str] = None
+    error_code: Optional[str] = None
 
 
 def _post_send(payload: dict) -> SendResult:
@@ -751,35 +753,103 @@ def _post_send(payload: dict) -> SendResult:
     )
 
 
-def send_message(recipient: str, message: str) -> SendResult:
-    if not recipient:
-        return SendResult(False, "Recipient must be provided")
-    return _post_send({"recipient": recipient, "message": message})
-
-
-def send_file(recipient: str, media_path: str) -> SendResult:
-    if not recipient:
-        return SendResult(False, "Recipient must be provided")
-    if not media_path:
-        return SendResult(False, "Media path must be provided")
-    if not os.path.isfile(media_path):
-        return SendResult(False, f"Media file not found: {media_path}")
-    return _post_send({"recipient": recipient, "media_path": media_path})
-
-
-def send_audio_message(recipient: str, media_path: str) -> SendResult:
-    if not recipient:
-        return SendResult(False, "Recipient must be provided")
-    if not media_path:
-        return SendResult(False, "Media path must be provided")
-    if not os.path.isfile(media_path):
-        return SendResult(False, f"Media file not found: {media_path}")
-    if not media_path.endswith(".ogg"):
+def _chat_jids_by_name(name: str) -> List[str]:
+    """JIDs of the chats named exactly `name`, ignoring case."""
+    wanted = name.strip().casefold()
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
         try:
-            media_path = audio.convert_to_opus_ogg_temp(media_path)
-        except Exception as e:
-            return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
-    return _post_send({"recipient": recipient, "media_path": media_path})
+            rows = conn.execute("SELECT jid, name FROM chats WHERE name IS NOT NULL").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+        return []
+    return [jid for jid, chat_name in rows if wanted and chat_name.strip().casefold() == wanted]
+
+
+def _chat_name_of(jid: str) -> Optional[str]:
+    """Name of the chat of a JID, trying the other ids of the same person (phone/LID) for direct chats."""
+    candidates = [jid]
+    if not jid.endswith("@g.us"):
+        candidates += _person_ids_and_jids(jid)[1]
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        try:
+            for candidate in candidates:
+                row = conn.execute("SELECT name FROM chats WHERE jid = ?", (candidate,)).fetchone()
+                if row and row[0]:
+                    return row[0]
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+    return None
+
+
+SEND_DIRECTORY = send_policy.Directory(
+    jids_by_name=_chat_jids_by_name,
+    name_of=_chat_name_of,
+    ids_of=sender_ids,
+    is_phone=lambda text: bool(_digits(text)),
+)
+
+
+def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional[str],
+                  send: "Callable[[str], SendResult]") -> SendResult:
+    """Resolve the destination, apply the send policy, call `send` with the bridge recipient, audit it."""
+    target = send_policy.resolve_target(recipient, SEND_DIRECTORY)
+    if not target.ok:
+        send_policy.audit(kind, recipient, None, size, "failed", rule=target.error_code)
+        return SendResult(False, target.message, error_code=target.error_code)
+
+    decision = send_policy.evaluate(target, override_token, SEND_DIRECTORY)
+    if not decision.allowed:
+        send_policy.audit(kind, recipient, target, size, "blocked", rule=decision.rule)
+        return SendResult(False, decision.message, error_code=send_policy.BLOCKED)
+
+    result = send(target.recipient)
+    send_policy.audit(kind, recipient, target, size, "sent" if result.success else "failed",
+                      rule=decision.rule, override=decision.override, message_id=result.message_id)
+    return result
+
+
+def send_message(recipient: str, message: str, override_token: Optional[str] = None) -> SendResult:
+    if not recipient:
+        return SendResult(False, "Recipient must be provided")
+    return _guarded_send("message", recipient, len(message or ""), override_token,
+                         lambda to: _post_send({"recipient": to, "message": message}))
+
+
+def send_file(recipient: str, media_path: str, override_token: Optional[str] = None) -> SendResult:
+    if not recipient:
+        return SendResult(False, "Recipient must be provided")
+    if not media_path:
+        return SendResult(False, "Media path must be provided")
+    if not os.path.isfile(media_path):
+        return SendResult(False, f"Media file not found: {media_path}")
+    return _guarded_send("file", recipient, os.path.getsize(media_path), override_token,
+                         lambda to: _post_send({"recipient": to, "media_path": media_path}))
+
+
+def send_audio_message(recipient: str, media_path: str, override_token: Optional[str] = None) -> SendResult:
+    if not recipient:
+        return SendResult(False, "Recipient must be provided")
+    if not media_path:
+        return SendResult(False, "Media path must be provided")
+    if not os.path.isfile(media_path):
+        return SendResult(False, f"Media file not found: {media_path}")
+
+    def send(to: str) -> SendResult:
+        path = media_path
+        if not path.endswith(".ogg"):
+            try:
+                path = audio.convert_to_opus_ogg_temp(path)
+            except Exception as e:
+                return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
+        return _post_send({"recipient": to, "media_path": path})
+
+    return _guarded_send("audio", recipient, os.path.getsize(media_path), override_token, send)
 
 
 @dataclass

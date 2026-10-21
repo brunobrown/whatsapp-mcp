@@ -76,7 +76,7 @@ def test_failure_with_http_200_has_no_message_id(tool, media_file):  # SENT-09
 
 
 def test_old_bridge_without_identifiers_still_succeeds():  # compatibilidade
-    body = {"success": True, "message": "Message sent to x"}
+    body = {"success": True, "message": "Message sent to 5511999990000"}
     with mock.patch("whatsapp.requests.post", return_value=fake_response(200, body)):
-        out = main.send_message("x", "oi")
-    assert out == {"success": True, "message": "Message sent to x"}
+        out = main.send_message("5511999990000", "oi")
+    assert out == {"success": True, "message": "Message sent to 5511999990000"}

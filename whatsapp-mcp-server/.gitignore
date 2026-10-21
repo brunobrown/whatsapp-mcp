@@ -8,3 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
+# Local send policy (holds the override token) and its audit log
+send_policy.json
+send_audit.log
