@@ -89,7 +89,7 @@ func TestUpdateMessageContent(t *testing.T) {
 	}
 
 	// CAP-05: edição troca o content e não cria linha
-	updated, err := store.UpdateMessageContent("ORIG", "chat@g.us", "texto novo")
+	updated, err := store.UpdateMessageContent("ORIG", "chat@g.us", "me", "texto novo")
 	if err != nil || !updated {
 		t.Fatalf("UpdateMessageContent = (%v, %v), want (true, nil)", updated, err)
 	}
@@ -102,11 +102,34 @@ func TestUpdateMessageContent(t *testing.T) {
 	}
 
 	// CAP-06: edição de mensagem ausente não grava nada
-	updated, err = store.UpdateMessageContent("GHOST", "chat@g.us", "x")
+	updated, err = store.UpdateMessageContent("GHOST", "chat@g.us", "me", "x")
 	if err != nil || updated {
 		t.Fatalf("UpdateMessageContent(ghost) = (%v, %v), want (false, nil)", updated, err)
 	}
 	if countMessages(t, store) != 1 {
 		t.Errorf("rows = %d, want 1", countMessages(t, store))
+	}
+}
+
+func TestUpdateMessageContentRejectsOtherSender(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now()
+	if err := store.StoreChat("chat@g.us", "Chat", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreMessage("ORIG", "chat@g.us", "alice", "original", now, false, "", "", "", nil, nil, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.UpdateMessageContent("ORIG", "chat@g.us", "mallory", "adulterado")
+	if err != nil || updated {
+		t.Fatalf("edit by another sender = (%v, %v), want (false, nil)", updated, err)
+	}
+	var content string
+	if err := store.db.QueryRow("SELECT content FROM messages WHERE id='ORIG'").Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if content != "original" {
+		t.Errorf("content = %q, want original", content)
 	}
 }

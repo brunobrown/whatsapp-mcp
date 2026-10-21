@@ -128,9 +128,10 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 }
 
 // UpdateMessageContent replaces the content of a stored message and reports
-// whether the message existed.
-func (store *MessageStore) UpdateMessageContent(id, chatJID, content string) (bool, error) {
-	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?", content, id, chatJID)
+// whether it was updated. Only the original sender may edit a message, so an
+// edit naming someone else's message ID leaves it untouched.
+func (store *MessageStore) UpdateMessageContent(id, chatJID, sender, content string) (bool, error) {
+	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND sender = ?", content, id, chatJID, sender)
 	if err != nil {
 		return false, err
 	}
@@ -494,10 +495,10 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// An edit updates the original message instead of creating a new one
 	if targetID, ok := editTarget(msg.Message); ok {
-		if updated, err := messageStore.UpdateMessageContent(targetID, chatJID, extractTextContent(msg.Message)); err != nil {
+		if updated, err := messageStore.UpdateMessageContent(targetID, chatJID, sender, extractTextContent(msg.Message)); err != nil {
 			logger.Warnf("Failed to apply edit to message %s: %v", targetID, err)
 		} else if !updated {
-			logger.Infof("Ignoring edit of unknown message %s", targetID)
+			logger.Infof("Ignoring edit of unknown message %s, or by a sender other than its author", targetID)
 		}
 		return
 	}
