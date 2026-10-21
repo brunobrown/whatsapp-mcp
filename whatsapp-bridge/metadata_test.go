@@ -173,3 +173,20 @@ func TestRecordSentMessageStoresMetadata(t *testing.T) { // MEDIA-01
 		t.Errorf("sent document mimetype = %q, want application/pdf", mime.String)
 	}
 }
+
+func TestSetMessageMetaEmptyKeepsEveryStoredField(t *testing.T) { // MEDIA-05
+	store := newTestStore(t)
+	ts := time.Now()
+	store.StoreChat("chat@g.us", "Chat", ts)
+	store.StoreMessage("M", "chat@g.us", "alice", "", ts, false, "document", "a.pdf", "", nil, nil, nil, 1)
+	if err := store.SetMessageMeta("M", "chat@g.us", MessageMeta{Mimetype: "application/pdf", Forwarded: true, QuotedID: "Q1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetMessageMeta("M", "chat@g.us", MessageMeta{}); err != nil {
+		t.Fatal(err)
+	}
+	mime, quoted, fwd := readMeta(t, store, "M")
+	if mime.String != "application/pdf" || quoted.String != "Q1" || !fwd.Bool {
+		t.Errorf("an empty meta replaced stored values: %v %v %v", mime, quoted, fwd)
+	}
+}
