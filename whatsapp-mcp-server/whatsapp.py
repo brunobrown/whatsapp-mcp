@@ -723,6 +723,7 @@ class SendResult:
     timestamp: Optional[str] = None
     chat_jid: Optional[str] = None
     error_code: Optional[str] = None
+    preview: Optional[dict] = None
 
 
 def _post_send(payload: dict) -> SendResult:
@@ -817,8 +818,9 @@ SEND_DIRECTORY = send_policy.Directory(
 
 
 def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional[str],
-                  send: "Callable[[str], SendResult]") -> SendResult:
-    """Resolve the destination, apply the send policy, call `send` with the bridge recipient, audit it."""
+                  send: "Callable[[send_policy.Target], SendResult]",
+                  preview: "Optional[Callable[[send_policy.Target], SendResult]]" = None) -> SendResult:
+    """Resolve the destination, apply the send policy, then send (or only preview) and audit the attempt."""
     target = send_policy.resolve_target(recipient, SEND_DIRECTORY)
     if not target.ok:
         send_policy.audit(kind, recipient, None, size, "failed", rule=target.error_code)
@@ -829,17 +831,131 @@ def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional
         send_policy.audit(kind, recipient, target, size, "blocked", rule=decision.rule)
         return SendResult(False, decision.message, error_code=send_policy.BLOCKED)
 
-    result = send(target.recipient)
+    if preview is not None:
+        return preview(target)  # a dry run sends nothing and is not audited
+
+    result = send(target)
     send_policy.audit(kind, recipient, target, size, "sent" if result.success else "failed",
                       rule=decision.rule, override=decision.override, message_id=result.message_id)
     return result
 
 
-def send_message(recipient: str, message: str, override_token: Optional[str] = None) -> SendResult:
+@dataclass
+class Mention:
+    token: str   # the digits written after @ in the text
+    jid: str
+
+
+# @+55518175-1110, @555181751110 or @<lid>: digits with optional + . - ( ); no spaces
+_MENTION_TOKEN = re.compile(r"(?<![\w@])@\+?(\d[\d().\-]*\d)")
+_MIN_MENTION_DIGITS, _MAX_MENTION_DIGITS = 7, 20
+_MAX_PHONE_DIGITS = 13  # longer ids are LIDs, the same rule as the bridge
+
+
+def _mention_jid(digits: str) -> str:
+    return f"{digits}@{'s.whatsapp.net' if len(digits) <= _MAX_PHONE_DIGITS else 'lid'}"
+
+
+def convert_mentions(text: str, explicit: Optional[List[str]] = None) -> Tuple[str, List[Mention]]:
+    """Turn @+55… / @<phone> / @<lid> tokens into `@<digits>` plus the people to tag.
+
+    The rest of the text is left alone. `explicit` adds people by JID, phone or LID. Raises ValueError
+    for an explicit mention that is none of those.
+    """
+    mentions: List[Mention] = []
+
+    def add(digits: str, jid: str) -> None:
+        if all(m.jid != jid for m in mentions):
+            mentions.append(Mention(digits, jid))
+
+    def replace(match: "re.Match[str]") -> str:
+        digits = re.sub(r"\D", "", match.group(1), flags=re.ASCII)
+        if not _MIN_MENTION_DIGITS <= len(digits) <= _MAX_MENTION_DIGITS:
+            return match.group(0)
+        add(digits, _mention_jid(digits))
+        return f"@{digits}"
+
+    text = _MENTION_TOKEN.sub(replace, text or "")
+
+    for entry in explicit or []:
+        if "@" in entry:
+            jid = send_policy.canonical_jid(entry)
+            if jid is None or jid.endswith("@g.us"):
+                raise ValueError(f"Invalid mention: {entry!r}")
+            add(jid.split("@")[0], jid)
+            continue
+        digits = _digits(entry)
+        if not _MIN_MENTION_DIGITS <= len(digits) <= _MAX_MENTION_DIGITS:
+            raise ValueError(f"Invalid mention: {entry!r}")
+        add(digits, _mention_jid(digits))
+    return text, mentions
+
+
+def _find_reply_target(message_id: str, chat_jid: str) -> Optional[dict]:
+    """The stored message `message_id` of the chat, as {id, sender, text}; direct chats may be stored
+    under the other addressing of the same person."""
+    candidates = [chat_jid] if chat_jid.endswith("@g.us") else _person_ids_and_jids(chat_jid)[1]
+    try:
+        conn = sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+        return None
+    try:
+        for candidate in candidates:
+            row = conn.execute("SELECT id, sender, content FROM messages WHERE id = ? AND chat_jid = ?",
+                               (message_id, candidate)).fetchone()
+            if row:
+                return {"id": row[0], "sender": row[1], "text": row[2] or ""}
+    except sqlite3.Error as e:
+        logger.error("Database error: %s", e)
+    finally:
+        conn.close()
+    return None
+
+
+def send_message(recipient: str, message: str, override_token: Optional[str] = None,
+                 mentions: Optional[List[str]] = None, reply_to: Optional[str] = None,
+                 dry_run: bool = False) -> SendResult:
     if not recipient:
         return SendResult(False, "Recipient must be provided")
-    return _guarded_send("message", recipient, len(message or ""), override_token,
-                         lambda to: _post_send({"recipient": to, "message": message}))
+    try:
+        text, tagged = convert_mentions(message or "", mentions)
+    except ValueError as e:
+        return SendResult(False, str(e), error_code="INVALID_MENTION")
+
+    def reply_target(target: send_policy.Target) -> "Tuple[Optional[dict], Optional[SendResult]]":
+        if not reply_to:
+            return None, None
+        found = _find_reply_target(reply_to, target.jid)
+        if found is None:
+            return None, SendResult(False, f"Message {reply_to} was not found in {target.jid}. Nothing was sent.",
+                                    error_code="REPLY_TARGET_NOT_FOUND")
+        return found, None
+
+    def send(target: send_policy.Target) -> SendResult:
+        _, error = reply_target(target)
+        if error:
+            return error
+        payload = {"recipient": target.recipient, "message": text}
+        if tagged:
+            payload["mentions"] = [m.jid for m in tagged]
+        if reply_to:
+            payload["reply_to"] = reply_to
+        return _post_send(payload)
+
+    def preview(target: send_policy.Target) -> SendResult:
+        found, error = reply_target(target)
+        if error:
+            return error
+        return SendResult(True, "Dry run: nothing was sent", preview={
+            "text": text,
+            "chat_jid": target.jid,
+            "chat_name": target.chat_name,
+            "mentions": [{"token": m.token, "jid": m.jid} for m in tagged],
+            "reply_to": found,
+        })
+
+    return _guarded_send("message", recipient, len(text), override_token, send, preview if dry_run else None)
 
 
 def send_file(recipient: str, media_path: str, override_token: Optional[str] = None) -> SendResult:
@@ -850,7 +966,7 @@ def send_file(recipient: str, media_path: str, override_token: Optional[str] = N
     if not os.path.isfile(media_path):
         return SendResult(False, f"Media file not found: {media_path}")
     return _guarded_send("file", recipient, os.path.getsize(media_path), override_token,
-                         lambda to: _post_send({"recipient": to, "media_path": media_path}))
+                         lambda target: _post_send({"recipient": target.recipient, "media_path": media_path}))
 
 
 def send_audio_message(recipient: str, media_path: str, override_token: Optional[str] = None) -> SendResult:
@@ -861,14 +977,14 @@ def send_audio_message(recipient: str, media_path: str, override_token: Optional
     if not os.path.isfile(media_path):
         return SendResult(False, f"Media file not found: {media_path}")
 
-    def send(to: str) -> SendResult:
+    def send(target: send_policy.Target) -> SendResult:
         path = media_path
         if not path.endswith(".ogg"):
             try:
                 path = audio.convert_to_opus_ogg_temp(path)
             except Exception as e:
                 return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
-        return _post_send({"recipient": to, "media_path": path})
+        return _post_send({"recipient": target.recipient, "media_path": path})
 
     return _guarded_send("audio", recipient, os.path.getsize(media_path), override_token, send)
 

@@ -25,6 +25,9 @@ def send_response(result) -> Dict[str, Any]:
     response: Dict[str, Any] = {"success": result.success, "message": result.message}
     if result.error_code:
         response["error_code"] = result.error_code
+    if result.preview is not None:
+        response["dry_run"] = True
+        response["preview"] = result.preview
     if result.success:
         for field in ("message_id", "timestamp", "chat_jid"):
             value = getattr(result, field)
@@ -172,18 +175,28 @@ def get_message_context(
 def send_message(
     recipient: str,
     message: str,
-    override_token: Optional[str] = None
+    override_token: Optional[str] = None,
+    mentions: Optional[List[str]] = None,
+    reply_to: Optional[str] = None,
+    dry_run: bool = False
 ) -> Dict[str, Any]:
     """Send a WhatsApp message to a person or group. For group chats use the JID.
 
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
-        message: The message text to send
+        message: The message text to send. Formatting (*bold*, _italic_, > quote) is sent as written.
+                 Write @+5551981993271 (or @<number>, @<lid>) to really tag a person: the token becomes @<digits>
+                 and the person is notified. Text without spaces inside the token; 7 to 20 digits
         override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
+        mentions: Optional people to tag besides the @tokens in the text: JIDs, phone numbers or LIDs
+        reply_to: Optional ID of a message of that chat to quote (REPLY_TARGET_NOT_FOUND when it is not there)
+        dry_run: When true nothing is sent: returns preview with the final text, the resolved chat (name and JID),
+                 the mentions and the quoted message, so it can be reviewed first. The send policy still applies
     
     Returns:
         A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid.
+        A dry run returns dry_run=true and preview.
         A send the policy blocks returns success=false with error_code=SEND_BLOCKED_BY_POLICY and nothing is sent;
         a recipient name that matches no chat or several returns RECIPIENT_NOT_FOUND or RECIPIENT_AMBIGUOUS
     """
@@ -195,7 +208,7 @@ def send_message(
         }
     
     # Call the whatsapp_send_message function with the unified recipient parameter
-    return send_response(whatsapp_send_message(recipient, message, override_token))
+    return send_response(whatsapp_send_message(recipient, message, override_token, mentions, reply_to, dry_run))
 
 @mcp.tool()
 def send_file(recipient: str, media_path: str, override_token: Optional[str] = None) -> Dict[str, Any]:
