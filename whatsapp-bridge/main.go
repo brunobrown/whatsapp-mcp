@@ -674,7 +674,7 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			MediaType:     waType,
 		}
 		download := func(f whatsmeow.File) error { return client.DownloadToFile(context.Background(), downloader, f) }
-		maybeAutoDownload(messageStore, autoDownloadCfg, autoDownloadLimiter, download, err,
+		maybeAutoDownload(messageStore, autoDownloadCfg, autoDownloadLimiter, download, err, msg.Info.IsFromMe,
 			msg.Info.ID, chatJID, mediaType, filename, fileLength, logger)
 	}
 
@@ -1186,11 +1186,12 @@ func autoDownload(store *MessageStore, cfg AutoDownloadConfig, download func(wha
 }
 
 // maybeAutoDownload starts the background download of a message that was just stored. It does
-// nothing when the message could not be stored or the config skips the media. The download
+// nothing when the message could not be stored, was sent by the user (who already has the
+// file) or the config skips the media. The download
 // must not hold up message handling, and the limiter bounds how many run at once.
-func maybeAutoDownload(store *MessageStore, cfg AutoDownloadConfig, limiter downloadLimiter, download func(whatsmeow.File) error, storeErr error,
+func maybeAutoDownload(store *MessageStore, cfg AutoDownloadConfig, limiter downloadLimiter, download func(whatsmeow.File) error, storeErr error, isFromMe bool,
 	messageID, chatJID, mediaType, filename string, fileLength uint64, logger waLog.Logger) {
-	if storeErr != nil || !cfg.allows(mediaType, fileLength) {
+	if storeErr != nil || isFromMe || !cfg.allows(mediaType, fileLength) {
 		return
 	}
 	go limiter.run(func() {
@@ -1198,6 +1199,84 @@ func maybeAutoDownload(store *MessageStore, cfg AutoDownloadConfig, limiter down
 			logger.Warnf("Auto download of %s in %s failed (use download_media to retry): %v", messageID, chatJID, err)
 		}
 	})
+}
+
+// loadRetentionDays reads WHATSAPP_MEDIA_RETENTION_DAYS. Anything but a positive whole number
+// disables the cleanup, since deleting files has to be an explicit choice.
+func loadRetentionDays(getenv func(string) string) int {
+	days, err := strconv.Atoi(strings.TrimSpace(getenv("WHATSAPP_MEDIA_RETENTION_DAYS")))
+	if err != nil || days <= 0 {
+		return 0
+	}
+	return days
+}
+
+// CleanupExpiredMedia deletes the downloaded file of every message older than days and clears
+// its local_path, keeping the message itself. The age is the message's, not the file's, since
+// the download can happen long after the message. Only paths inside store/ are ever deleted.
+func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, error) {
+	storeRoot, err := filepath.Abs("store")
+	if err != nil {
+		return 0, err
+	}
+	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
+
+	type expired struct{ id, chatJID, path string }
+	rows, err := store.db.Query("SELECT id, chat_jid, local_path, timestamp FROM messages WHERE local_path IS NOT NULL AND local_path != ''")
+	if err != nil {
+		return 0, err
+	}
+	var candidates []expired
+	for rows.Next() {
+		var e expired
+		var ts time.Time
+		if err := rows.Scan(&e.id, &e.chatJID, &e.path, &ts); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if ts.Before(cutoff) {
+			candidates = append(candidates, e)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, e := range candidates {
+		abs, err := filepath.Abs(e.path)
+		if err != nil || !strings.HasPrefix(abs, storeRoot+string(os.PathSeparator)) {
+			continue // never touch anything outside store/
+		}
+		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+			continue
+		} else if err == nil {
+			deleted++
+		}
+		os.Remove(filepath.Dir(abs)) // only succeeds when the directory is empty
+		if err := store.SetLocalPath(e.id, e.chatJID, ""); err != nil {
+			return deleted, err
+		}
+	}
+	return deleted, nil
+}
+
+// startMediaRetention runs the cleanup at startup and every 6 hours.
+func startMediaRetention(store *MessageStore, days int, logger waLog.Logger) {
+	if days <= 0 {
+		return
+	}
+	go func() {
+		for {
+			if n, err := store.CleanupExpiredMedia(time.Now(), days); err != nil {
+				logger.Warnf("Media retention cleanup failed: %v", err)
+			} else if n > 0 {
+				logger.Infof("Media retention removed %d files older than %d days", n, days)
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
 }
 
 // downloadLimiter bounds how many automatic downloads run at once.
@@ -1470,6 +1549,7 @@ func main() {
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
+	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
 	startRESTServer(client, messageStore, 8080, logger)
 
 	// Create a channel to keep the main goroutine alive

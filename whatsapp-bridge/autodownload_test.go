@@ -487,7 +487,7 @@ func TestMaybeAutoDownloadSkipsWhenStoreFailed(t *testing.T) { // hook de handle
 	store := newTestStore(t)
 	called := make(chan struct{}, 1)
 	dl := func(whatsmeow.File) error { called <- struct{}{}; return nil }
-	maybeAutoDownload(store, loadAutoDownloadConfig(env(nil)), newDownloadLimiter(1), dl, errors.New("db down"),
+	maybeAutoDownload(store, loadAutoDownloadConfig(env(nil)), newDownloadLimiter(1), dl, errors.New("db down"), false,
 		"M1", "chat@g.us", "image", "f.jpg", 10, nil)
 	select {
 	case <-called:
@@ -517,7 +517,7 @@ func TestMaybeAutoDownloadUsesLimiterAndRuns(t *testing.T) { // hook de handleMe
 	limiter := newDownloadLimiter(1)
 	for _, id := range []string{"A", "B", "C"} {
 		wg.Add(1)
-		maybeAutoDownload(store, loadAutoDownloadConfig(env(nil)), limiter, dl, nil, id, "chat@g.us", "image", "f_"+id+".jpg", 1, nil)
+		maybeAutoDownload(store, loadAutoDownloadConfig(env(nil)), limiter, dl, nil, false, id, "chat@g.us", "image", "f_"+id+".jpg", 1, nil)
 	}
 	wg.Wait()
 	if peak != 1 {
