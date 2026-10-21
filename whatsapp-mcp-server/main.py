@@ -230,21 +230,25 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         chat_jid: The JID of the chat containing the message
     
     Returns:
-        A dictionary containing success status, a status message, and the file path if successful
+        On success: success, message and file_path. On failure: success=false, the bridge's real message, an error_code
+        (LINK_EXPIRED_PHONE_OFFLINE, MEDIA_NOT_FOUND, BRIDGE_UNREACHABLE or UNKNOWN) and, when actionable, a hint
     """
-    file_path = whatsapp_download_media(message_id, chat_jid)
-    
-    if file_path:
+    result = whatsapp_download_media(message_id, chat_jid)
+
+    if result.success:
         return {
             "success": True,
-            "message": "Media downloaded successfully",
-            "file_path": file_path
+            "message": result.message,
+            "file_path": result.path
         }
-    else:
-        return {
-            "success": False,
-            "message": "Failed to download media"
-        }
+    response = {
+        "success": False,
+        "message": result.message,
+        "error_code": result.error_code
+    }
+    if result.hint:
+        response["hint"] = result.hint
+    return response
 
 if __name__ == "__main__":
     # Initialize and run the server

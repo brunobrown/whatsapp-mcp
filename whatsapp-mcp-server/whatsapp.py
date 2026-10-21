@@ -6,8 +6,11 @@ import os.path
 import requests
 import json
 import audio
+import logging
 
 MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
+logger = logging.getLogger(__name__)
+
 WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
 
 @dataclass
@@ -724,44 +727,61 @@ def send_audio_message(recipient: str, media_path: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def download_media(message_id: str, chat_jid: str) -> Optional[str]:
-    """Download media from a message and return the local file path.
-    
+LINK_EXPIRED_HINT = (
+    "O link da mídia expirou e o celular não respondeu ao pedido de reenvio. "
+    "Abra o WhatsApp no celular conectado ao bridge, desbloqueado e online, e tente de novo."
+)
+
+
+@dataclass
+class DownloadResult:
+    success: bool
+    message: str
+    path: Optional[str] = None
+    error_code: Optional[str] = None
+    hint: Optional[str] = None
+
+
+def _classify_download_error(message: str) -> str:
+    lowered = message.lower()
+    if "status code 403" in lowered and "timed out waiting for media retry" in lowered:
+        return "LINK_EXPIRED_PHONE_OFFLINE"
+    if "not a media message" in lowered or "failed to find message" in lowered:
+        return "MEDIA_NOT_FOUND"
+    return "UNKNOWN"
+
+
+def _download_failure(message: str, error_code: Optional[str] = None) -> DownloadResult:
+    code = error_code or _classify_download_error(message)
+    hint = LINK_EXPIRED_HINT if code == "LINK_EXPIRED_PHONE_OFFLINE" else None
+    logger.error("download_media failed (%s): %s", code, message)
+    return DownloadResult(False, message, error_code=code, hint=hint)
+
+
+def download_media(message_id: str, chat_jid: str) -> DownloadResult:
+    """Download media from a message through the bridge.
+
     Args:
         message_id: The ID of the message containing the media
         chat_jid: The JID of the chat containing the message
-    
+
     Returns:
-        The local file path if download was successful, None otherwise
+        A DownloadResult with the local path on success, or the bridge's real
+        error message and a stable error_code on failure.
     """
     try:
-        url = f"{WHATSAPP_API_BASE_URL}/download"
-        payload = {
-            "message_id": message_id,
-            "chat_jid": chat_jid
-        }
-        
-        response = requests.post(url, json=payload)
-        
-        if response.status_code == 200:
-            result = response.json()
-            if result.get("success", False):
-                path = result.get("path")
-                print(f"Media downloaded successfully: {path}")
-                return path
-            else:
-                print(f"Download failed: {result.get('message', 'Unknown error')}")
-                return None
-        else:
-            print(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-            
+        response = requests.post(
+            f"{WHATSAPP_API_BASE_URL}/download",
+            json={"message_id": message_id, "chat_jid": chat_jid},
+        )
     except requests.RequestException as e:
-        print(f"Request error: {str(e)}")
-        return None
-    except json.JSONDecodeError:
-        print(f"Error parsing response: {response.text}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error: {str(e)}")
-        return None
+        return _download_failure(f"Could not reach the WhatsApp bridge: {e}", "BRIDGE_UNREACHABLE")
+
+    try:
+        result = response.json()
+    except ValueError:
+        return _download_failure(f"HTTP {response.status_code} - {response.text}")
+
+    if response.status_code == 200 and result.get("success", False):
+        return DownloadResult(True, "Media downloaded successfully", path=result.get("path"))
+    return _download_failure(result.get("message") or f"HTTP {response.status_code}")
