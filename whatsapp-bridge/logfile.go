@@ -48,12 +48,20 @@ func (r *rotatingFile) open() error {
 		f.Close()
 		return err
 	}
+	// the mode of OpenFile only applies to a file it creates
+	if err := f.Chmod(logFileMode); err != nil {
+		f.Close()
+		return err
+	}
 	r.file, r.size = f, info.Size()
 	return nil
 }
 
+// rotate shifts the old files. A rename that fails only leaves a file where it was: the log keeps
+// working (the current file then grows past the limit) rather than stopping.
 func (r *rotatingFile) rotate() error {
 	r.file.Close()
+	r.file = nil
 	os.Remove(r.path + "." + strconv.Itoa(r.keep))
 	for i := r.keep - 1; i >= 1; i-- {
 		os.Rename(r.path+"."+strconv.Itoa(i), r.path+"."+strconv.Itoa(i+1))
@@ -65,8 +73,13 @@ func (r *rotatingFile) rotate() error {
 func (r *rotatingFile) Write(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.size > 0 && r.size+int64(len(p)) > r.maxBytes {
+	if r.file != nil && r.size > 0 && r.size+int64(len(p)) > r.maxBytes {
 		if err := r.rotate(); err != nil {
+			return 0, err
+		}
+	}
+	if r.file == nil { // an earlier rotation could not reopen the file
+		if err := r.open(); err != nil {
 			return 0, err
 		}
 	}
@@ -78,6 +91,9 @@ func (r *rotatingFile) Write(p []byte) (int, error) {
 func (r *rotatingFile) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.file == nil {
+		return nil
+	}
 	return r.file.Close()
 }
 
@@ -94,7 +110,19 @@ func teeStdout(out io.Writer) (terminal *os.File, stop func(), err error) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		io.Copy(io.MultiWriter(terminal, out), r)
+		// Each destination fails on its own (full disk, closed terminal) and the pipe is always
+		// drained: a reader that stops would block every goroutine that prints.
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := r.Read(buf)
+			if n > 0 {
+				terminal.Write(buf[:n])
+				out.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
 	return terminal, func() {
 		os.Stdout = terminal
