@@ -56,21 +56,35 @@ def list_messages(
     page: int = 0,
     include_context: bool = True,
     context_before: int = 1,
-    context_after: int = 1
-) -> List[Dict[str, Any]]:
+    context_after: int = 1,
+    format: str = "text",
+    order: str = "desc",
+    chat_name: Optional[str] = None
+) -> Any:
     """Get WhatsApp messages matching specified criteria with optional context.
     
     Args:
-        after: Optional ISO-8601 formatted string to only return messages after this date
-        before: Optional ISO-8601 formatted string to only return messages before this date
+        after: Optional ISO-8601 date or datetime, with a UTC offset (2026-10-21T22:12:00-03:00), to only return messages after this instant.
+               Without an offset it is read in the WHATSAPP_TIMEZONE zone (an IANA name such as America/Recife) or, when that is not set, in the system zone
+        before: Optional ISO-8601 date or datetime to only return messages before this instant; same zone rule as after
         sender_phone_number: Optional phone number to filter messages by sender
         chat_jid: Optional chat JID to filter messages by chat
+        chat_name: Optional part of the chat name (any case) to filter messages by chat; combines with chat_jid
         query: Optional search term to filter messages by content
         limit: Maximum number of messages to return (default 20)
         page: Page number for pagination (default 0)
-        include_context: Whether to include messages before and after matches (default True)
+        order: "desc" (newest first, default) or "asc" (oldest first); pages follow this order
+        format: "text" (default) or "structured"
+        include_context: Whether to include messages before and after matches (default True).
+                         The context is grouped by chat, chronological, without repeats; the found messages are marked
+                         (">>" in text, is_match=true in structured)
         context_before: Number of messages to include before each match (default 1)
         context_after: Number of messages to include after each match (default 1)
+
+    Returns:
+        With format="text", the messages as text. With format="structured", a dict: messages (each with id, timestamp in ISO-8601
+        with offset, chat_jid, chat_name, sender, sender_name, content, is_from_me, is_match and media), total (matches, without
+        context), page, limit, has_more and next_page (null on the last page)
     """
     messages = whatsapp_list_messages(
         after=after,
@@ -82,7 +96,10 @@ def list_messages(
         page=page,
         include_context=include_context,
         context_before=context_before,
-        context_after=context_after
+        context_after=context_after,
+        format=format,
+        order=order,
+        chat_name=chat_name
     )
     return messages
 
@@ -159,16 +176,18 @@ def get_last_interaction(jid: str) -> str:
 def get_message_context(
     message_id: str,
     before: int = 5,
-    after: int = 5
+    after: int = 5,
+    chat_jid: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Get context around a specific WhatsApp message.
+    """Get context around a specific WhatsApp message, both sides in chronological order.
     
     Args:
         message_id: The ID of the message to get context for
         before: Number of messages to include before the target message (default 5)
         after: Number of messages to include after the target message (default 5)
+        chat_jid: Optional chat JID, for when the same message ID exists in more than one chat
     """
-    context = whatsapp_get_message_context(message_id, before, after)
+    context = whatsapp_get_message_context(message_id, before, after, chat_jid)
     return context
 
 @mcp.tool()

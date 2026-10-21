@@ -1,5 +1,6 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass
 from typing import Callable, Optional, List, Tuple
 import os.path
@@ -32,6 +33,7 @@ class Message:
     forwarded: bool = False
     quoted_message_id: Optional[str] = None
     local_path: Optional[str] = None
+    rowid: Optional[int] = None  # write order, breaks ties between messages of the same instant
 
 @dataclass
 class Chat:
@@ -207,7 +209,7 @@ def _message_select(cursor: sqlite3.Cursor) -> str:
     optional = ", ".join(f"messages.{c}" if c in have else f"NULL AS {c}" for c in _OPTIONAL_MESSAGE_COLUMNS)
     return (
         "messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, "
-        f"chats.jid, messages.id, messages.media_type, {optional}"
+        f"chats.jid, messages.id, messages.media_type, {optional}, messages.rowid"
     )
 
 
@@ -227,6 +229,7 @@ def _message_from_row(row) -> Message:
         forwarded=bool(row[11]),
         quoted_message_id=row[12] or None,
         local_path=row[13],
+        rowid=row[14],
     )
 
 
@@ -266,9 +269,9 @@ def _message_prefix(message: Message) -> str:
     return f"[{' - '.join(notes)}] " if notes else ""
 
 
-def format_message(message: Message, show_chat_info: bool = True) -> None:
-    """Print a single message with consistent formatting."""
-    output = ""
+def format_message(message: Message, show_chat_info: bool = True, marked: bool = False) -> str:
+    """One line for a message. A found message (marked) starts with '>> '."""
+    output = ">> " if marked else ""
     
     if show_chat_info and message.chat_name:
         output += f"[{message.timestamp:%Y-%m-%d %H:%M:%S}] Chat: {message.chat_name} "
@@ -284,7 +287,7 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
         logger.error("Error formatting message: %s", e)
     return output
 
-def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> None:
+def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> str:
     output = ""
     if not messages:
         output += "No messages to display."
@@ -293,6 +296,109 @@ def format_messages_list(messages: List[Message], show_chat_info: bool = True) -
     for message in messages:
         output += format_message(message, show_chat_info)
     return output
+
+
+# Stored times carry the offset they were written with, so they are compared as instants
+# (milliseconds, UTC), never as text. SQLite reads a time without offset as UTC.
+_INSTANT = "strftime('%Y-%m-%d %H:%M:%f', messages.timestamp)"
+_FORMATS = ("text", "structured")
+_ORDERS = ("asc", "desc")
+
+
+def _default_zone():
+    """The zone for a date given without one: WHATSAPP_TIMEZONE, or None for the system zone."""
+    name = os.environ.get("WHATSAPP_TIMEZONE")
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError(f"WHATSAPP_TIMEZONE '{name}' is not a known time zone (use an IANA name such as America/Recife)")
+
+
+def _instant_param(value: str, label: str) -> str:
+    """ISO-8601 text (with or without offset) as the UTC millisecond text that _INSTANT yields."""
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"Invalid date format for '{label}': {value}. Please use ISO-8601 format.")
+    if moment.tzinfo is None:
+        zone = _default_zone()
+        moment = moment.replace(tzinfo=zone) if zone else moment.astimezone()
+    moment = moment.astimezone(timezone.utc)
+    return moment.strftime("%Y-%m-%d %H:%M:%S.") + f"{moment.microsecond // 1000:03d}"
+
+
+def _aware(moment: datetime) -> datetime:
+    """The stored time with its offset; one stored without is UTC, as SQLite reads it."""
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _message_dict(message: Message, is_match: bool) -> dict:
+    media = None
+    if message.media_type:
+        local = message.local_path if message.local_path and os.path.isfile(message.local_path) else None
+        media = {
+            "type": message.media_type,
+            "filename": message.filename,
+            "mimetype": message.mimetype,
+            "size": message.file_length,
+            "forwarded": message.forwarded,
+            "quoted_message_id": message.quoted_message_id,
+            "local_path": local,
+        }
+    return {
+        "id": message.id,
+        "timestamp": _aware(message.timestamp).isoformat(),
+        "chat_jid": message.chat_jid,
+        "chat_name": message.chat_name,
+        "sender": message.sender,
+        "sender_name": "Me" if message.is_from_me else sender_label(message.sender),
+        "content": resolve_mentions(message.content),
+        "is_from_me": bool(message.is_from_me),
+        "is_match": is_match,
+        "media": media,
+    }
+
+
+def _neighbours(cursor: sqlite3.Cursor, columns: str, target: tuple, count: int, earlier: bool) -> List[Message]:
+    """Messages of the target's chat before (earlier) or after it by instant, then write order; chronological."""
+    chat_jid, instant, rowid = target
+    if count <= 0:
+        return []
+    sign, direction = ("<", "DESC") if earlier else (">", "ASC")
+    cursor.execute(f"""
+        SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid
+        WHERE messages.chat_jid = ? AND ({_INSTANT}, messages.rowid) {sign} (?, ?)
+        ORDER BY {_INSTANT} {direction}, messages.rowid {direction} LIMIT ?
+    """, (chat_jid, instant, rowid, count))
+    found = [_message_from_row(row) for row in cursor.fetchall()]
+    return found[::-1] if earlier else found
+
+
+def _target_of(cursor: sqlite3.Cursor, message: Message) -> Optional[tuple]:
+    cursor.execute(f"SELECT {_INSTANT} FROM messages WHERE messages.rowid = ?", (message.rowid,))
+    row = cursor.fetchone()
+    return (message.chat_jid, row[0], message.rowid) if row else None
+
+
+def _with_context(cursor: sqlite3.Cursor, columns: str, found: List[Message], before: int, after: int):
+    """(message, is_match) for the found messages and their neighbours: one group per chat, chronological, no repeats."""
+    groups: dict = {}
+    for message in found:
+        group = groups.setdefault(message.chat_jid, {})
+        group[message.id] = (message, True)
+    for message in found:
+        target = _target_of(cursor, message)
+        if not target:
+            continue
+        for neighbour in _neighbours(cursor, columns, target, before, True) + _neighbours(cursor, columns, target, after, False):
+            groups[message.chat_jid].setdefault(neighbour.id, (neighbour, False))
+    ordered = []
+    for group in groups.values():  # chats in the order their first match came
+        ordered.append(sorted(group.values(), key=lambda pair: (_aware(pair[0].timestamp), pair[0].rowid)))
+    return ordered
+
 
 def list_messages(
     after: Optional[str] = None,
@@ -304,37 +410,36 @@ def list_messages(
     page: int = 0,
     include_context: bool = True,
     context_before: int = 1,
-    context_after: int = 1
-) -> List[Message]:
-    """Get messages matching the specified criteria with optional context."""
+    context_after: int = 1,
+    format: str = "text",
+    order: str = "desc",
+    chat_name: Optional[str] = None
+):
+    """Get messages matching the specified criteria with optional context.
+
+    Text (default) or, with format="structured", a dict of messages, total, page, limit, has_more, next_page.
+    """
+    if format not in _FORMATS:
+        raise ValueError(f"Invalid format: {format}. Use one of: {', '.join(_FORMATS)}.")
+    if order not in _ORDERS:
+        raise ValueError(f"Invalid order: {order}. Use one of: {', '.join(_ORDERS)}.")
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn.create_function("casefold", 1, lambda v: v.casefold() if isinstance(v, str) else v)
         cursor = conn.cursor()
+        columns = _message_select(cursor)
         
-        # Build base query
-        query_parts = [f"SELECT {_message_select(cursor)} FROM messages"]
-        query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
         
         # Add filters
         if after:
-            try:
-                after = datetime.fromisoformat(after)
-            except ValueError:
-                raise ValueError(f"Invalid date format for 'after': {after}. Please use ISO-8601 format.")
-            
-            where_clauses.append("messages.timestamp > ?")
-            params.append(after)
+            where_clauses.append(f"{_INSTANT} > ?")
+            params.append(_instant_param(after, "after"))
 
         if before:
-            try:
-                before = datetime.fromisoformat(before)
-            except ValueError:
-                raise ValueError(f"Invalid date format for 'before': {before}. Please use ISO-8601 format.")
-            
-            where_clauses.append("messages.timestamp < ?")
-            params.append(before)
+            where_clauses.append(f"{_INSTANT} < ?")
+            params.append(_instant_param(before, "before"))
 
         if sender_phone_number:
             ids = sender_ids(sender_phone_number)
@@ -344,42 +449,55 @@ def list_messages(
         if chat_jid:
             where_clauses.append("messages.chat_jid = ?")
             params.append(chat_jid)
+
+        if chat_name:
+            where_clauses.append("casefold(chats.name) LIKE ? ESCAPE '\\'")
+            escaped = chat_name.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params.append(f"%{escaped}%")
             
         if query:
             where_clauses.append("LOWER(messages.content) LIKE LOWER(?)")
             params.append(f"%{query}%")
-            
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))
-            
-        # Add pagination
+
+        where = (" WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        source = "FROM messages JOIN chats ON messages.chat_jid = chats.jid" + where
+
+        cursor.execute(f"SELECT COUNT(*) {source}", tuple(params))
+        total = cursor.fetchone()[0]
+
         offset = page * limit
-        query_parts.append("ORDER BY messages.timestamp DESC")
-        query_parts.append("LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
-        
-        cursor.execute(" ".join(query_parts), tuple(params))
-        messages = cursor.fetchall()
-        
-        result = [_message_from_row(msg) for msg in messages]
-            
+        direction = order.upper()
+        cursor.execute(
+            f"SELECT {columns} {source} ORDER BY {_INSTANT} {direction}, messages.rowid {direction} LIMIT ? OFFSET ?",
+            tuple(params) + (limit, offset))
+        result = [_message_from_row(row) for row in cursor.fetchall()]
+
         if include_context and result:
-            # Add context for each message
-            messages_with_context = []
-            for msg in result:
-                context = get_message_context(msg.id, context_before, context_after)
-                messages_with_context.extend(context.before)
-                messages_with_context.append(context.message)
-                messages_with_context.extend(context.after)
-            
-            return format_messages_list(messages_with_context, show_chat_info=True)
-            
-        # Format and display messages without context
-        return format_messages_list(result, show_chat_info=True)    
+            groups = _with_context(cursor, columns, result, context_before, context_after)
+        else:
+            groups = [[(message, True) for message in result]] if result else []
+
+        if format == "text":
+            if not groups:
+                return format_messages_list([])
+            return "\n".join(
+                "".join(format_message(m, True, marked=include_context and is_match) for m, is_match in group)
+                for group in groups)
+
+        has_more = offset + len(result) < total
+        return {
+            "messages": [_message_dict(m, is_match) for group in groups for m, is_match in group],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "has_more": has_more,
+            "next_page": page + 1 if has_more else None,
+        }
         
     except sqlite3.Error as e:
         print(f"Database error: {e}")
-        return []
+        return [] if format == "text" else {"messages": [], "total": 0, "page": page, "limit": limit,
+                                            "has_more": False, "next_page": None, "error": str(e)}
     finally:
         if 'conn' in locals():
             conn.close()
@@ -388,54 +506,39 @@ def list_messages(
 def get_message_context(
     message_id: str,
     before: int = 5,
-    after: int = 5
+    after: int = 5,
+    chat_jid: Optional[str] = None
 ) -> MessageContext:
-    """Get context around a specific message."""
+    """Get context around a specific message; chat_jid picks the chat when the ID exists in several.
+
+    Both sides are in chronological order.
+    """
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         columns = _message_select(cursor)
         
         # Get the target message first
+        scope, scope_params = ("AND messages.chat_jid = ?", (chat_jid,)) if chat_jid else ("", ())
         cursor.execute(f"""
-            SELECT {columns}
+            SELECT {columns}, {_INSTANT}
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.id = ?
-        """, (message_id,))
+            WHERE messages.id = ? {scope}
+            ORDER BY {_INSTANT} DESC, messages.rowid DESC
+        """, (message_id,) + scope_params)
         msg_data = cursor.fetchone()
         
         if not msg_data:
             raise ValueError(f"Message with ID {message_id} not found")
             
         target_message = _message_from_row(msg_data)
-        
-        # Get messages before
-        cursor.execute(f"""
-            SELECT {columns}
-            FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.chat_jid = ? AND messages.timestamp < ?
-            ORDER BY messages.timestamp DESC
-            LIMIT ?
-        """, (msg_data[5], msg_data[0], before))
-        before_messages = [_message_from_row(msg) for msg in cursor.fetchall()]
-        
-        # Get messages after
-        cursor.execute(f"""
-            SELECT {columns}
-            FROM messages
-            JOIN chats ON messages.chat_jid = chats.jid
-            WHERE messages.chat_jid = ? AND messages.timestamp > ?
-            ORDER BY messages.timestamp ASC
-            LIMIT ?
-        """, (msg_data[5], msg_data[0], after))
-        after_messages = [_message_from_row(msg) for msg in cursor.fetchall()]
+        target = (target_message.chat_jid, msg_data[-1], target_message.rowid)
         
         return MessageContext(
             message=target_message,
-            before=before_messages,
-            after=after_messages
+            before=_neighbours(cursor, columns, target, before, True),
+            after=_neighbours(cursor, columns, target, after, False)
         )
         
     except sqlite3.Error as e:
