@@ -12,7 +12,8 @@ from whatsapp import (
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
+    get_group_participants as whatsapp_get_group_participants
 )
 
 # Initialize FastMCP server
@@ -248,6 +249,23 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
     if result.hint:
         response["hint"] = result.hint
     return response
+
+@mcp.tool()
+def get_group_participants(chat_jid: str) -> Dict[str, Any]:
+    """List the participants of a WhatsApp group with their name, phone number, LID and admin status.
+
+    Args:
+        chat_jid: The JID of the group (e.g., "123456789@g.us")
+
+    Returns:
+        On success: success=true and participants, a list of {name, phone, lid, is_admin}.
+        A participant WhatsApp has no name for has an empty name; phone or lid can be empty when unknown.
+        On failure: success=false and a message.
+    """
+    result = whatsapp_get_group_participants(chat_jid)
+    if result.success:
+        return {"success": True, "participants": result.participants}
+    return {"success": False, "message": result.message}
 
 if __name__ == "__main__":
     # Initialize and run the server

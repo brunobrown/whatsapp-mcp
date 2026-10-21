@@ -7,6 +7,7 @@ import requests
 import json
 import audio
 import logging
+import re
 
 MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
 logger = logging.getLogger(__name__)
@@ -50,7 +51,64 @@ class MessageContext:
     before: List[Message]
     after: List[Message]
 
+@dataclass
+class Identity:
+    lid: Optional[str]
+    phone: Optional[str]
+    full_name: Optional[str]
+    push_name: Optional[str]
+
+    @property
+    def display_name(self) -> Optional[str]:
+        """The address-book name when there is one, otherwise the push name."""
+        return self.full_name or self.push_name or None
+
+
+def _digits(value: str) -> str:
+    """Keep the id part of a JID and only its digits: '+55 (51) 8199-3271' and '5551819932 71@s.whatsapp.net' both work."""
+    return re.sub(r"\D", "", value.split("@")[0])
+
+
+def lookup_identity(value: str) -> Optional[Identity]:
+    """Find a person by LID or phone number. None when unknown or when the bridge has not created the table yet."""
+    if not value:
+        return None
+    ident = value.split("@")[0]
+    candidates = [ident] + ([_digits(value)] if _digits(value) != ident else [])
+    try:
+        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        try:
+            for candidate in candidates:
+                row = conn.execute(
+                    "SELECT lid, phone, full_name, push_name FROM contacts_identity WHERE lid = ? OR phone = ? LIMIT 1",
+                    (candidate, candidate),
+                ).fetchone()
+                if row:
+                    return Identity(*row)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return None
+
+
+def sender_ids(value: str) -> List[str]:
+    """Every id the same person is stored under (the given one, their LID and their phone)."""
+    ids = [value.split("@")[0]]
+    if _digits(value) and _digits(value) not in ids:
+        ids.append(_digits(value))
+    identity = lookup_identity(value)
+    if identity:
+        for extra in (identity.lid, identity.phone):
+            if extra and extra not in ids:
+                ids.append(extra)
+    return ids
+
+
 def get_sender_name(sender_jid: str) -> str:
+    identity = lookup_identity(sender_jid)
+    if identity and identity.display_name:
+        return identity.display_name
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
@@ -88,11 +146,31 @@ def get_sender_name(sender_jid: str) -> str:
             return sender_jid
         
     except sqlite3.Error as e:
-        print(f"Database error while getting sender name: {e}")
+        logger.error("Database error while getting sender name: %s", e)
         return sender_jid
     finally:
         if 'conn' in locals():
             conn.close()
+
+
+def sender_label(sender: str) -> str:
+    """'Name (id)' when the sender's name is known, otherwise just the id."""
+    name = get_sender_name(sender)
+    if name and name != sender:
+        return f"{name} ({sender})"
+    return sender
+
+
+_MENTION = re.compile(r"(?<![\w@])@(\d{5,20})\b")
+
+
+def resolve_mentions(content: str) -> str:
+    """Replace @<digits> of known people with @Name. Unknown ids and other text stay as they are."""
+    def replace(match: "re.Match[str]") -> str:
+        identity = lookup_identity(match.group(1))
+        name = identity.display_name if identity else None
+        return f"@{name}" if name else match.group(0)
+    return _MENTION.sub(replace, content or "")
 
 def format_message(message: Message, show_chat_info: bool = True) -> None:
     """Print a single message with consistent formatting."""
@@ -108,10 +186,10 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
         content_prefix = f"[{message.media_type} - Message ID: {message.id} - Chat JID: {message.chat_jid}] "
     
     try:
-        sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
-        output += f"From: {sender_name}: {content_prefix}{message.content}\n"
+        sender_name = sender_label(message.sender) if not message.is_from_me else "Me"
+        output += f"From: {sender_name}: {content_prefix}{resolve_mentions(message.content)}\n"
     except Exception as e:
-        print(f"Error formatting message: {e}")
+        logger.error("Error formatting message: %s", e)
     return output
 
 def format_messages_list(messages: List[Message], show_chat_info: bool = True) -> None:
@@ -167,8 +245,9 @@ def list_messages(
             params.append(before)
 
         if sender_phone_number:
-            where_clauses.append("messages.sender = ?")
-            params.append(sender_phone_number)
+            ids = sender_ids(sender_phone_number)
+            where_clauses.append(f"messages.sender IN ({','.join('?' * len(ids))})")
+            params.extend(ids)
             
         if chat_jid:
             where_clauses.append("messages.chat_jid = ?")
@@ -393,13 +472,40 @@ def list_chats(
             conn.close()
 
 
+def _search_identities(conn: sqlite3.Connection, query: str) -> Tuple[List[Contact], set]:
+    """Known people whose name, phone or LID matches, and every id they are stored under.
+
+    Both are empty when the bridge has not created contacts_identity yet."""
+    pattern = f"%{query.lower()}%"
+    digits = _digits(query)
+    digit_pattern = f"%{digits}%" if len(digits) >= 3 else pattern
+    try:
+        rows = conn.execute("""
+            SELECT lid, phone, full_name, push_name
+            FROM contacts_identity
+            WHERE LOWER(full_name) LIKE ? OR LOWER(push_name) LIKE ?
+                OR lid LIKE ? OR phone LIKE ?
+            ORDER BY COALESCE(full_name, push_name), phone, lid
+            LIMIT 50
+        """, (pattern, pattern, digit_pattern, digit_pattern)).fetchall()
+    except sqlite3.Error:
+        return [], set()
+    people, ids = [], set()
+    for lid, phone, full_name, push_name in rows:
+        jid = f"{phone}@s.whatsapp.net" if phone else f"{lid}@lid"
+        people.append(Contact(phone_number=phone or lid, name=full_name or push_name, jid=jid))
+        ids.update(i for i in (lid, phone) if i)
+    return people, ids
+
+
 def search_contacts(query: str) -> List[Contact]:
-    """Search contacts by name or phone number."""
+    """Search contacts by name, phone number or LID."""
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        # Split query into characters to support partial matching
+
+        result, known_ids = _search_identities(conn, query)
+
         search_pattern = '%' +query + '%'
         
         cursor.execute("""
@@ -414,21 +520,16 @@ def search_contacts(query: str) -> List[Contact]:
             LIMIT 50
         """, (search_pattern, search_pattern))
         
-        contacts = cursor.fetchall()
-        
-        result = []
-        for contact_data in contacts:
-            contact = Contact(
-                phone_number=contact_data[0].split('@')[0],
-                name=contact_data[1],
-                jid=contact_data[0]
-            )
-            result.append(contact)
+        for jid, name in cursor.fetchall():
+            user = jid.split('@')[0]
+            if user in known_ids:
+                continue  # the same person is already listed with their name
+            result.append(Contact(phone_number=user, name=name, jid=jid))
             
-        return result
+        return result[:50]
         
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error("Database error: %s", e)
         return []
     finally:
         if 'conn' in locals():
@@ -692,6 +793,30 @@ def send_audio_message(recipient: str, media_path: str) -> SendResult:
         except Exception as e:
             return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
     return _post_send({"recipient": recipient, "media_path": media_path})
+
+
+@dataclass
+class GroupParticipantsResult:
+    success: bool
+    message: Optional[str] = None
+    participants: Optional[List[dict]] = None
+
+
+def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
+    """List a group's participants (name, phone, LID, is_admin) through the bridge."""
+    if not chat_jid:
+        return GroupParticipantsResult(False, "chat_jid must be provided")
+    try:
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/group_participants", json={"chat_jid": chat_jid})
+    except requests.RequestException as e:
+        return GroupParticipantsResult(False, f"Could not reach the WhatsApp bridge: {e}")
+    try:
+        body = response.json()
+    except ValueError:
+        return GroupParticipantsResult(False, f"HTTP {response.status_code} - {response.text}")
+    if response.status_code == 200 and body.get("success", False):
+        return GroupParticipantsResult(True, participants=body.get("participants") or [])
+    return GroupParticipantsResult(False, body.get("message") or f"HTTP {response.status_code}")
 
 
 LINK_EXPIRED_HINT = (
