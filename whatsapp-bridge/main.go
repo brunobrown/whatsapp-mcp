@@ -486,10 +486,13 @@ type SendMessageRequest struct {
 	Recipient string `json:"recipient"`
 	Message   string `json:"message"`
 	MediaPath string `json:"media_path,omitempty"`
+	// Mentions are full JIDs of the people to tag; ReplyTo is the ID of a stored message of the chat to quote.
+	Mentions []string `json:"mentions,omitempty"`
+	ReplyTo  string   `json:"reply_to,omitempty"`
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, store *MessageStore, recipient string, message string, mediaPath string, logger waLog.Logger) SendResult {
+func sendWhatsAppMessage(client *whatsmeow.Client, store *MessageStore, recipient string, message string, mediaPath string, mentions []string, replyTo string, logger waLog.Logger) SendResult {
 	if !client.IsConnected() {
 		return SendResult{Message: "Not connected to WhatsApp"}
 	}
@@ -644,7 +647,11 @@ func sendWhatsAppMessage(client *whatsmeow.Client, store *MessageStore, recipien
 			}
 		}
 	} else {
-		msg.Conversation = proto.String(message)
+		built, errMsg := buildTextSend(client, store, recipientJID, message, mentions, replyTo)
+		if errMsg != "" {
+			return SendResult{Message: errMsg}
+		}
+		msg = built
 	}
 
 	// Send message
@@ -1505,7 +1512,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		result := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, logger)
+		result := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, req.Mentions, req.ReplyTo, logger)
 		fmt.Println("Message sent", result.Success, result.Message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
