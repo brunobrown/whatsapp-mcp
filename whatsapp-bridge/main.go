@@ -647,7 +647,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, store *MessageStore, recipien
 			}
 		}
 	} else {
-		built, errMsg := buildTextSend(client, store, recipientJID, message, mentions, replyTo)
+		built, errMsg := buildTextSend(newSendEnv(client), store, recipientJID, message, mentions, replyTo)
 		if errMsg != "" {
 			return SendResult{Message: errMsg}
 		}

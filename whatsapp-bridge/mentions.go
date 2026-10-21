@@ -132,16 +132,40 @@ func quoteParticipant(ref QuotedRef, own types.JID, resolve func(user string) ty
 	return resolve(ref.Sender)
 }
 
+// sendEnv is what buildTextSend needs from the WhatsApp client, so it can be replaced in tests.
+type sendEnv struct {
+	groupParticipants func(group types.JID) ([]types.GroupParticipant, error)
+	own               types.JID
+	resolveSender     func(user string) types.JID
+}
+
+func newSendEnv(client *whatsmeow.Client) sendEnv {
+	env := sendEnv{
+		groupParticipants: func(group types.JID) ([]types.GroupParticipant, error) {
+			info, err := client.GetGroupInfo(context.Background(), group)
+			if err != nil {
+				return nil, err
+			}
+			return info.Participants, nil
+		},
+		resolveSender: func(user string) types.JID { return resolveSenderJID(client, user) },
+	}
+	if client.Store != nil && client.Store.ID != nil {
+		env.own = *client.Store.ID
+	}
+	return env
+}
+
 // buildTextSend makes the message for a text send, with mentions aligned to the group and the quote
 // resolved from the stored messages. A non-empty error text means the send must not happen.
-func buildTextSend(client *whatsmeow.Client, store *MessageStore, to types.JID, text string, rawMentions []string, replyTo string) (*waProto.Message, string) {
+func buildTextSend(env sendEnv, store *MessageStore, to types.JID, text string, rawMentions []string, replyTo string) (*waProto.Message, string) {
 	mentions, err := parseMentions(rawMentions)
 	if err != nil {
 		return nil, err.Error()
 	}
 	if len(mentions) > 0 && to.Server == types.GroupServer {
-		if info, err := client.GetGroupInfo(context.Background(), to); err == nil {
-			text, mentions = resolveGroupMentions(text, mentions, info.Participants)
+		if participants, err := env.groupParticipants(to); err == nil {
+			text, mentions = resolveGroupMentions(text, mentions, participants)
 		}
 	}
 	var quote *QuoteInfo
@@ -153,15 +177,7 @@ func buildTextSend(client *whatsmeow.Client, store *MessageStore, to types.JID, 
 		if !ok {
 			return nil, fmt.Sprintf("Message to reply to not found in %s: %s", to, replyTo)
 		}
-		own := types.JID{}
-		if client.Store != nil && client.Store.ID != nil {
-			own = *client.Store.ID
-		}
-		quote = &QuoteInfo{
-			ID:          ref.ID,
-			Participant: quoteParticipant(ref, own, func(user string) types.JID { return resolveSenderJID(client, user) }),
-			Text:        ref.Content,
-		}
+		quote = &QuoteInfo{ID: ref.ID, Participant: quoteParticipant(ref, env.own, env.resolveSender), Text: ref.Content}
 	}
 	return buildTextMessage(text, mentions, quote), ""
 }

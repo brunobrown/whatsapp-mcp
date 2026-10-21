@@ -194,3 +194,69 @@ def test_real_send_with_mentions_is_audited_by_size_of_the_final_text(db, post):
 
     [line] = [json.loads(l) for l in open(send_policy.AUDIT_PATH)]
     assert line["result"] == "sent" and "oi" not in json.dumps(line) and line["size"] == len("@555181993271 oi")
+
+
+def test_dry_run_blocked_or_unresolved_is_not_audited(db, post):  # DRY-03
+    with open(send_policy.POLICY_PATH, "w") as f:
+        json.dump({"mode": "denylist", "deny": [CLIENT]}, f)
+
+    blocked = main.send_message(CLIENT, "oi", dry_run=True)
+    missing = main.send_message("Chat que não existe", "oi", dry_run=True)
+
+    assert blocked["error_code"] == "SEND_BLOCKED_BY_POLICY" and missing["error_code"] == "RECIPIENT_NOT_FOUND"
+    assert not os.path.exists(send_policy.AUDIT_PATH)
+
+
+def test_real_blocked_send_is_still_audited(db, post):  # regressão de DRY-03
+    with open(send_policy.POLICY_PATH, "w") as f:
+        json.dump({"mode": "denylist", "deny": [CLIENT]}, f)
+
+    main.send_message(CLIENT, "oi")
+
+    assert [json.loads(l)["result"] for l in open(send_policy.AUDIT_PATH)] == ["blocked"]
+
+
+def test_too_many_mentions_are_refused(db, post):  # MENT-08
+    text = " ".join(f"@55518199{n:04d}" for n in range(51))
+
+    out = main.send_message(GROUP, text)
+
+    assert out["success"] is False and out["error_code"] == "INVALID_MENTION" and "Too many" in out["message"]
+    post.assert_not_called()
+
+
+def test_fifty_mentions_are_accepted(db, post):  # MENT-08
+    text = " ".join(f"@55518199{n:04d}" for n in range(50))
+
+    assert main.send_message(GROUP, text)["success"] is True
+    assert len(sent(post)["mentions"]) == 50
+
+
+@pytest.mark.parametrize("text", [
+    "veja https://x.com/@1234567 agora", "rode `@12345678` no shell", "prazo @2024-10-21 fechado", "a@5551819932",
+])
+def test_urls_code_dates_and_emails_are_not_mentions(db, post, text):  # MENT-09
+    main.send_message(GROUP, text)
+
+    assert sent(post)["message"] == text and "mentions" not in sent(post)
+
+
+@pytest.mark.parametrize("digits, converted, jid_server", [
+    ("123456", False, None), ("1234567", True, "s.whatsapp.net"),
+    ("5551981993271", True, "s.whatsapp.net"), ("55518199327100", True, "lid"),
+    ("12345678901234567890", True, "lid"), ("123456789012345678901", False, None),
+])
+def test_mention_digit_boundaries(db, post, digits, converted, jid_server):  # MENT-01
+    main.send_message(GROUP, f"oi @{digits} fim")
+
+    if converted:
+        assert sent(post)["mentions"] == [f"{digits}@{jid_server}"]
+    else:
+        assert "mentions" not in sent(post) and sent(post)["message"] == f"oi @{digits} fim"
+
+
+def test_an_explicit_group_jid_is_not_a_person(db, post):  # MENT-02
+    out = main.send_message(GROUP, "oi", mentions=[CLIENT])
+
+    assert out["success"] is False and out["error_code"] == "INVALID_MENTION"
+    post.assert_not_called()

@@ -821,18 +821,21 @@ def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional
                   send: "Callable[[send_policy.Target], SendResult]",
                   preview: "Optional[Callable[[send_policy.Target], SendResult]]" = None) -> SendResult:
     """Resolve the destination, apply the send policy, then send (or only preview) and audit the attempt."""
+    dry_run = preview is not None  # a dry run sends nothing, so nothing of it is audited
     target = send_policy.resolve_target(recipient, SEND_DIRECTORY)
     if not target.ok:
-        send_policy.audit(kind, recipient, None, size, "failed", rule=target.error_code)
+        if not dry_run:
+            send_policy.audit(kind, recipient, None, size, "failed", rule=target.error_code)
         return SendResult(False, target.message, error_code=target.error_code)
 
     decision = send_policy.evaluate(target, override_token, SEND_DIRECTORY)
     if not decision.allowed:
-        send_policy.audit(kind, recipient, target, size, "blocked", rule=decision.rule)
+        if not dry_run:
+            send_policy.audit(kind, recipient, target, size, "blocked", rule=decision.rule)
         return SendResult(False, decision.message, error_code=send_policy.BLOCKED)
 
     if preview is not None:
-        return preview(target)  # a dry run sends nothing and is not audited
+        return preview(target)
 
     result = send(target)
     send_policy.audit(kind, recipient, target, size, "sent" if result.success else "failed",
@@ -846,8 +849,11 @@ class Mention:
     jid: str
 
 
-# @+55518175-1110, @555181751110 or @<lid>: digits with optional + . - ( ); no spaces
-_MENTION_TOKEN = re.compile(r"(?<![\w@])@\+?(\d[\d().\-]*\d)")
+# @+55518175-1110 (digits with . - ( ) after the +), @555181751110 or @<lid> (plain digits); no spaces.
+# Not after a word character, @, / or ` so e-mails, URLs and inline code are left alone, and a plain
+# @2024-10-21 is not a mention either.
+_MENTION_TOKEN = re.compile(r"(?<![\w@/`])@(?:\+(\d[\d().\-]*\d)|(\d+))(?!\d)")
+_MAX_MENTIONS = 50
 _MIN_MENTION_DIGITS, _MAX_MENTION_DIGITS = 7, 20
 _MAX_PHONE_DIGITS = 13  # longer ids are LIDs, the same rule as the bridge
 
@@ -869,7 +875,7 @@ def convert_mentions(text: str, explicit: Optional[List[str]] = None) -> Tuple[s
             mentions.append(Mention(digits, jid))
 
     def replace(match: "re.Match[str]") -> str:
-        digits = re.sub(r"\D", "", match.group(1), flags=re.ASCII)
+        digits = re.sub(r"\D", "", match.group(1) or match.group(2), flags=re.ASCII)
         if not _MIN_MENTION_DIGITS <= len(digits) <= _MAX_MENTION_DIGITS:
             return match.group(0)
         add(digits, _mention_jid(digits))
@@ -888,6 +894,8 @@ def convert_mentions(text: str, explicit: Optional[List[str]] = None) -> Tuple[s
         if not _MIN_MENTION_DIGITS <= len(digits) <= _MAX_MENTION_DIGITS:
             raise ValueError(f"Invalid mention: {entry!r}")
         add(digits, _mention_jid(digits))
+    if len(mentions) > _MAX_MENTIONS:
+        raise ValueError(f"Too many mentions: {len(mentions)} (at most {_MAX_MENTIONS} per message)")
     return text, mentions
 
 

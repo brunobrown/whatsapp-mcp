@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -197,5 +198,79 @@ func TestQuoteParticipant(t *testing.T) { // REPLY-01, REPLY-04
 	got := quoteParticipant(QuotedRef{Sender: "555100000000", IsFromMe: true}, own, resolve)
 	if got.String() != "555100000000@s.whatsapp.net" {
 		t.Errorf("own message participant = %v, want our own JID without device", got)
+	}
+}
+
+func fakeEnv(parts []types.GroupParticipant, err error) sendEnv {
+	return sendEnv{
+		groupParticipants: func(types.JID) ([]types.GroupParticipant, error) { return parts, err },
+		own:               types.JID{User: "555100000000", Server: "s.whatsapp.net", Device: 3},
+		resolveSender:     func(user string) types.JID { return types.JID{User: user, Server: "lid"} },
+	}
+}
+
+var errTest = errors.New("falha")
+
+var testGroup = types.JID{User: "120363222", Server: "g.us"}
+
+func TestBuildTextSendInAGroupAlignsMentions(t *testing.T) { // MENT-05
+	env := fakeEnv([]types.GroupParticipant{participant(mLID, mPhone, mLID)}, nil)
+
+	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "oi @555181993271", []string{"555181993271@s.whatsapp.net"}, "")
+
+	ext := msg.GetExtendedTextMessage()
+	if errMsg != "" || ext.GetText() != "oi @160889625940144" ||
+		!reflect.DeepEqual(ext.GetContextInfo().GetMentionedJID(), []string{"160889625940144@lid"}) {
+		t.Errorf("got %q %+v", errMsg, msg)
+	}
+}
+
+func TestBuildTextSendKeepsMentionsWhenTheGroupLookupFails(t *testing.T) { // MENT-06
+	env := fakeEnv(nil, errTest)
+
+	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "oi @555181993271", []string{"555181993271@s.whatsapp.net"}, "")
+
+	ext := msg.GetExtendedTextMessage()
+	if errMsg != "" || ext.GetText() != "oi @555181993271" ||
+		!reflect.DeepEqual(ext.GetContextInfo().GetMentionedJID(), []string{"555181993271@s.whatsapp.net"}) {
+		t.Errorf("got %q %+v", errMsg, msg)
+	}
+}
+
+func TestBuildTextSendDoesNotLookUpGroupsForDirectChats(t *testing.T) { // MENT-05
+	env := fakeEnv(nil, nil)
+	env.groupParticipants = func(types.JID) ([]types.GroupParticipant, error) {
+		t.Error("a direct chat must not fetch group info")
+		return nil, nil
+	}
+
+	buildTextSend(env, newTestStore(t), mPhone, "@555181993271", []string{"555181993271@s.whatsapp.net"}, "")
+}
+
+func TestBuildTextSendReply(t *testing.T) { // REPLY-01, REPLY-02, REPLY-04
+	store := newTestStore(t)
+	seedQuotable(t, store)
+	env := fakeEnv(nil, nil)
+
+	msg, errMsg := buildTextSend(env, store, types.JID{User: "g", Server: "g.us"}, "ok", nil, "THEIRS")
+	ctx := msg.GetExtendedTextMessage().GetContextInfo()
+	if errMsg != "" || ctx.GetStanzaID() != "THEIRS" || ctx.GetParticipant() != "160889625940144@lid" ||
+		ctx.GetQuotedMessage().GetConversation() != "pergunta" {
+		t.Errorf("reply to someone else: %q %+v", errMsg, ctx)
+	}
+
+	msg, _ = buildTextSend(env, store, types.JID{User: "g", Server: "g.us"}, "ok", nil, "MINE")
+	if got := msg.GetExtendedTextMessage().GetContextInfo().GetParticipant(); got != "555100000000@s.whatsapp.net" {
+		t.Errorf("reply to own message: participant = %q, want our JID without device", got)
+	}
+
+	if msg, errMsg := buildTextSend(env, store, types.JID{User: "g", Server: "g.us"}, "ok", nil, "NOPE"); msg != nil || errMsg == "" {
+		t.Errorf("unknown reply target must refuse the send: %v %q", msg, errMsg)
+	}
+}
+
+func TestBuildTextSendRejectsMalformedMentions(t *testing.T) { // MENT-04
+	if msg, errMsg := buildTextSend(fakeEnv(nil, nil), newTestStore(t), testGroup, "x", []string{"lixo"}, ""); msg != nil || errMsg == "" {
+		t.Errorf("a malformed mention must refuse the send: %v %q", msg, errMsg)
 	}
 }
