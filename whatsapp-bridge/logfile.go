@@ -16,6 +16,9 @@ const (
 	logStoreDir  = "store"
 )
 
+// chmodFile is a variable so that a test can make it fail, as it does for a file of another owner.
+var chmodFile = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
+
 // rotatingFile appends to path and, before a write that would pass maxBytes, moves it to
 // path.1 (path.1 to path.2, and so on up to keep files; the oldest is dropped).
 type rotatingFile struct {
@@ -25,6 +28,7 @@ type rotatingFile struct {
 	keep     int
 	file     *os.File
 	size     int64
+	modeErr  error
 }
 
 func newRotatingFile(path string, maxBytes int64, keep int) (*rotatingFile, error) {
@@ -48,11 +52,9 @@ func (r *rotatingFile) open() error {
 		f.Close()
 		return err
 	}
-	// the mode of OpenFile only applies to a file it creates
-	if err := f.Chmod(logFileMode); err != nil {
-		f.Close()
-		return err
-	}
+	// the mode of OpenFile only applies to a file it creates; a file of someone else cannot be
+	// changed, and logging anyway beats not logging
+	r.modeErr = chmodFile(f, logFileMode)
 	r.file, r.size = f, info.Size()
 	return nil
 }
@@ -86,6 +88,13 @@ func (r *rotatingFile) Write(p []byte) (int, error) {
 	n, err := r.file.Write(p)
 	r.size += int64(n)
 	return n, err
+}
+
+// ModeErr is why the log file could not be restricted to its owner, or nil.
+func (r *rotatingFile) ModeErr() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.modeErr
 }
 
 func (r *rotatingFile) Close() error {

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/mdp/qrterminal"
 
 	"bytes"
 
@@ -1482,12 +1481,15 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, logger waLog.Logger) {
+// newRESTMux registers the REST routes of the bridge.
+func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status connectionSource, state *bridgeState, logger waLog.Logger) *http.ServeMux {
+	mux := http.NewServeMux()
+
 	// Handler for the bridge status
-	http.HandleFunc("/api/status", handleStatus(clientSource{client}, state, bridgeVersion()))
+	mux.HandleFunc("/api/status", handleStatus(status, state, bridgeVersion()))
 
 	// Handler for sending messages
-	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1530,10 +1532,10 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state
 	})
 
 	// Handler for listing the participants of a group
-	http.HandleFunc("/api/group_participants", handleGroupParticipants(client, messageStore))
+	mux.HandleFunc("/api/group_participants", handleGroupParticipants(client, messageStore))
 
 	// Handler for downloading media
-	http.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1583,13 +1585,19 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state
 		})
 	})
 
+	return mux
+}
+
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, logger waLog.Logger) {
+	mux := newRESTMux(client, messageStore, clientSource{client}, state, logger)
+
 	// Start the server (bound to localhost only, to avoid exposing the API on the network)
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, nil); err != nil {
+		if err := http.ListenAndServe(serverAddr, mux); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
@@ -1605,6 +1613,9 @@ func main() {
 		fmt.Printf("Could not capture the log: %v\n", err)
 	} else {
 		terminal = tee
+		if err := logFile.ModeErr(); err != nil {
+			fmt.Printf("Could not restrict %s to its owner (%v); logging anyway\n", logFileName, err)
+		}
 		defer logFile.Close()
 		defer stop()
 	}
@@ -1664,8 +1675,7 @@ func main() {
 	}
 
 	// Setup event handling for messages and history sync
-	client.AddEventHandler(func(evt interface{}) {
-		state.record(evt)
+	client.AddEventHandler(recordingHandler(state, func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
 			// Learn who the sender is (LID, phone, push name) before storing the message
@@ -1708,7 +1718,7 @@ func main() {
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
 		}
-	})
+	}))
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)
@@ -1726,8 +1736,7 @@ func main() {
 		// Print QR code for pairing with phone
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				fmt.Fprintln(terminal, "\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, terminal)
+				showPairingQR(terminal, evt.Code)
 			} else if evt.Event == "success" {
 				connected <- true
 				break

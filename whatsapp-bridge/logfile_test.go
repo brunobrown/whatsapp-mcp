@@ -206,3 +206,23 @@ func TestLogKeepsWorkingWhenARenameFails(t *testing.T) { // LOG-02
 		t.Error("lines were lost")
 	}
 }
+
+func TestLogStillWorksWhenTheModeCannotBeSet(t *testing.T) { // LOG-03
+	chmodFile = func(*os.File, os.FileMode) error { return errors.New("operation not permitted") }
+	defer func() { chmodFile = func(f *os.File, m os.FileMode) error { return f.Chmod(m) } }()
+	path := filepath.Join(t.TempDir(), "bridge.log")
+
+	log, err := newRotatingFile(path, 1<<20, 3)
+	if err != nil {
+		t.Fatalf("the log must open anyway: %v", err)
+	}
+	log.Write([]byte("linha\n"))
+	log.Close()
+
+	if log.ModeErr() == nil || !strings.Contains(log.ModeErr().Error(), "not permitted") {
+		t.Errorf("ModeErr = %v, want the chmod error", log.ModeErr())
+	}
+	if readFile(t, path) != "linha\n" {
+		t.Error("nothing was logged")
+	}
+}

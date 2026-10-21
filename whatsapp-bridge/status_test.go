@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,5 +146,68 @@ func TestStatusWhenDisconnectedKeepsTheTimes(t *testing.T) { // STAT-05
 	if out["last_message_at"] != "2026-10-21T10:01:00Z" || out["last_disconnected_at"] != "2026-10-21T10:02:00Z" ||
 		out["last_event_at"] != "2026-10-21T10:02:00Z" {
 		t.Errorf("times lost: %v", out)
+	}
+}
+
+func TestStatusTimesAreUTC(t *testing.T) { // STAT-01
+	zone := time.FixedZone("BRT", -3*3600)
+	c := &clock{time.Date(2026, 10, 21, 10, 0, 0, 0, zone)}
+	state := newBridgeState(c.now)
+	c.advance(time.Minute)
+	state.record(&events.Message{})
+
+	out := getStatus(t, fakeConn{}, state)
+
+	if out["started_at"] != "2026-10-21T13:00:00Z" || out["last_message_at"] != "2026-10-21T13:01:00Z" {
+		t.Errorf("times must be UTC: %v %v", out["started_at"], out["last_message_at"])
+	}
+}
+
+func TestRecordingHandlerNotesTheEventBeforeHandlingIt(t *testing.T) { // STAT-02
+	c := &clock{time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)}
+	state := newBridgeState(c.now)
+	var seenByHandler any
+	handler := recordingHandler(state, func(evt interface{}) {
+		seenByHandler = getStatus(t, fakeConn{}, state)["last_event_at"]
+	})
+	c.advance(time.Minute)
+
+	handler(&events.Message{})
+
+	if seenByHandler != "2026-10-21T10:01:00Z" {
+		t.Errorf("the handler ran before the event was recorded: %v", seenByHandler)
+	}
+}
+
+func TestRESTMuxServesStatusAndTheOtherRoutes(t *testing.T) { // STAT-01
+	state := newBridgeState(time.Now)
+	mux := newRESTMux(nil, nil, fakeConn{connected: true, loggedIn: true, phone: "55"}, state, nil)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"phone":"55"`) {
+		t.Errorf("/api/status -> %d %s", rec.Code, rec.Body.String())
+	}
+	for _, route := range []string{"/api/send", "/api/download", "/api/group_participants"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, route, nil))
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("%s is not registered", route)
+		}
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/unknown", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown route -> %d", rec.Code)
+	}
+}
+
+func TestPairingQRGoesOnlyToTheWriterGiven(t *testing.T) { // LOG-04
+	var terminal strings.Builder
+
+	showPairingQR(&terminal, "2@ABCDEF")
+
+	if !strings.Contains(terminal.String(), "Scan this QR code") || len(terminal.String()) < 200 {
+		t.Errorf("QR code not drawn on the writer given: %q", terminal.String())
 	}
 }
