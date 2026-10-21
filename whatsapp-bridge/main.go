@@ -110,6 +110,17 @@ func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time
 	return err
 }
 
+// TouchChat records activity in a chat, creating it (named after its JID) if unknown and
+// keeping the name of a known chat, which StoreChat would overwrite.
+func (store *MessageStore) TouchChat(jid string, lastMessageTime time.Time) error {
+	_, err := store.db.Exec(
+		`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+		ON CONFLICT(jid) DO UPDATE SET last_message_time = excluded.last_message_time`,
+		jid, jid, lastMessageTime,
+	)
+	return err
+}
+
 // Store a message in the database
 func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, timestamp time.Time, isFromMe bool,
 	mediaType, filename, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) error {
@@ -256,8 +267,55 @@ func extractTextContent(msg *waProto.Message) string {
 
 // SendMessageResponse represents the response for the send message API
 type SendMessageResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
+	Success   bool   `json:"success"`
+	Message   string `json:"message"`
+	MessageID string `json:"message_id,omitempty"`
+	Timestamp string `json:"timestamp,omitempty"`
+	ChatJID   string `json:"chat_jid,omitempty"`
+}
+
+// SendResult is the outcome of sending a message.
+type SendResult struct {
+	Success   bool
+	Message   string
+	MessageID string
+	Timestamp time.Time
+	ChatJID   string
+}
+
+func newSendResponse(res SendResult) SendMessageResponse {
+	resp := SendMessageResponse{Success: res.Success, Message: res.Message, MessageID: res.MessageID, ChatJID: res.ChatJID}
+	if !res.Timestamp.IsZero() {
+		resp.Timestamp = res.Timestamp.Format(time.RFC3339)
+	}
+	return resp
+}
+
+// completeSend turns the outcome of client.SendMessage into a SendResult and, when the
+// send succeeded, stores the message as sent by us. WhatsApp does not echo it back to
+// this device, so without this the message would never show up in the database. A failure
+// to store is only logged: the message is already out, and reporting an error would
+// invite a duplicate send.
+func completeSend(store *MessageStore, chatJID, sender string, msg *waProto.Message, resp whatsmeow.SendResponse, sendErr error, logger waLog.Logger) SendResult {
+	if sendErr != nil {
+		return SendResult{Message: fmt.Sprintf("Error sending message: %v", sendErr)}
+	}
+	if err := recordSentMessage(store, chatJID, sender, resp.ID, resp.Timestamp, msg); err != nil && logger != nil {
+		logger.Warnf("Message %s was sent but could not be stored: %v", resp.ID, err)
+	}
+	return SendResult{Success: true, MessageID: resp.ID, Timestamp: resp.Timestamp, ChatJID: chatJID}
+}
+
+// recordSentMessage stores a message we sent. INSERT OR REPLACE on (id, chat_jid) keeps a
+// single row if the echo of the same message is stored later.
+func recordSentMessage(store *MessageStore, chatJID, sender, messageID string, ts time.Time, msg *waProto.Message) error {
+	if err := store.TouchChat(chatJID, ts); err != nil {
+		return err
+	}
+	content := extractTextContent(msg)
+	mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength := extractMediaInfo(msg, messageID)
+	return store.StoreMessage(messageID, chatJID, sender, content, ts, true,
+		mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength)
 }
 
 // SendMessageRequest represents the request body for the send message API
@@ -268,9 +326,9 @@ type SendMessageRequest struct {
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string) (bool, string) {
+func sendWhatsAppMessage(client *whatsmeow.Client, store *MessageStore, recipient string, message string, mediaPath string, logger waLog.Logger) SendResult {
 	if !client.IsConnected() {
-		return false, "Not connected to WhatsApp"
+		return SendResult{Message: "Not connected to WhatsApp"}
 	}
 
 	// Create JID for recipient
@@ -284,7 +342,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		// Parse the JID string
 		recipientJID, err = types.ParseJID(recipient)
 		if err != nil {
-			return false, fmt.Sprintf("Error parsing JID: %v", err)
+			return SendResult{Message: fmt.Sprintf("Error parsing JID: %v", err)}
 		}
 	} else {
 		// Create JID from phone number
@@ -301,7 +359,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		// Read media file
 		mediaData, err := os.ReadFile(mediaPath)
 		if err != nil {
-			return false, fmt.Sprintf("Error reading media file: %v", err)
+			return SendResult{Message: fmt.Sprintf("Error reading media file: %v", err)}
 		}
 
 		// Determine media type and mime type based on file extension
@@ -350,7 +408,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		// Upload media to WhatsApp servers
 		resp, err := client.Upload(context.Background(), mediaData, mediaType)
 		if err != nil {
-			return false, fmt.Sprintf("Error uploading media: %v", err)
+			return SendResult{Message: fmt.Sprintf("Error uploading media: %v", err)}
 		}
 
 		fmt.Println("Media uploaded", resp)
@@ -380,7 +438,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 					seconds = analyzedSeconds
 					waveform = analyzedWaveform
 				} else {
-					return false, fmt.Sprintf("Failed to analyze Ogg Opus file: %v", err)
+					return SendResult{Message: fmt.Sprintf("Failed to analyze Ogg Opus file: %v", err)}
 				}
 			} else {
 				fmt.Printf("Not an Ogg Opus file: %s\n", mimeType)
@@ -427,13 +485,17 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	// Send message
-	_, err = client.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
 
-	if err != nil {
-		return false, fmt.Sprintf("Error sending message: %v", err)
+	sender := ""
+	if client.Store.ID != nil {
+		sender = client.Store.ID.User
 	}
-
-	return true, fmt.Sprintf("Message sent to %s", recipient)
+	res := completeSend(store, recipientJID.String(), sender, msg, resp, err, logger)
+	if res.Success {
+		res.Message = fmt.Sprintf("Message sent to %s", recipient)
+	}
+	return res
 }
 
 // filenameUnsafeChars matches anything but a conservative filename character set, so path
@@ -912,7 +974,7 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, logger waLog.Logger) {
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -942,21 +1004,18 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
-		fmt.Println("Message sent", success, message)
+		result := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, logger)
+		fmt.Println("Message sent", result.Success, result.Message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
 
 		// Set appropriate status code
-		if !success {
+		if !result.Success {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 
 		// Send response
-		json.NewEncoder(w).Encode(SendMessageResponse{
-			Success: success,
-			Message: message,
-		})
+		json.NewEncoder(w).Encode(newSendResponse(result))
 	})
 
 	// Handler for downloading media
@@ -1146,7 +1205,7 @@ func main() {
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	startRESTServer(client, messageStore, 8080, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
