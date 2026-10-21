@@ -127,6 +127,17 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 	return err
 }
 
+// UpdateMessageContent replaces the content of a stored message and reports
+// whether the message existed.
+func (store *MessageStore) UpdateMessageContent(id, chatJID, content string) (bool, error) {
+	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?", content, id, chatJID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // Get messages from a chat
 func (store *MessageStore) GetMessages(chatJID string, limit int) ([]Message, error) {
 	rows, err := store.db.Query(
@@ -175,20 +186,53 @@ func (store *MessageStore) GetChats() (map[string]time.Time, error) {
 	return chats, nil
 }
 
-// Extract text content from a message
+// unwrapDocumentWithCaption returns the inner message of a DocumentWithCaptionMessage.
+// whatsmeow unwraps it for live events, but history sync delivers it still wrapped.
+func unwrapDocumentWithCaption(msg *waProto.Message) *waProto.Message {
+	if inner := msg.GetDocumentWithCaptionMessage().GetMessage(); inner != nil {
+		return inner
+	}
+	return msg
+}
+
+// editTarget returns the ID of the message being edited when msg is an edit.
+func editTarget(msg *waProto.Message) (string, bool) {
+	pm := msg.GetProtocolMessage()
+	if pm == nil || pm.GetType() != waProto.ProtocolMessage_MESSAGE_EDIT || pm.GetKey().GetID() == "" {
+		return "", false
+	}
+	return pm.GetKey().GetID(), true
+}
+
+// Extract text content from a message: the text of plain and extended text
+// messages, the caption of image, video and document messages, or the new
+// text of an edit.
 func extractTextContent(msg *waProto.Message) string {
 	if msg == nil {
 		return ""
 	}
+	msg = unwrapDocumentWithCaption(msg)
 
-	// Try to get text content
-	if text := msg.GetConversation(); text != "" {
-		return text
-	} else if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
-		return extendedText.GetText()
+	if _, ok := editTarget(msg); ok {
+		return extractTextContent(msg.GetProtocolMessage().GetEditedMessage())
 	}
 
-	// For now, we're ignoring non-text messages
+	if text := msg.GetConversation(); text != "" {
+		return text
+	}
+	if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
+		return extendedText.GetText()
+	}
+	if img := msg.GetImageMessage(); img != nil {
+		return img.GetCaption()
+	}
+	if vid := msg.GetVideoMessage(); vid != nil {
+		return vid.GetCaption()
+	}
+	if doc := msg.GetDocumentMessage(); doc != nil {
+		return doc.GetCaption()
+	}
+
 	return ""
 }
 
@@ -398,6 +442,7 @@ func extractMediaInfo(msg *waProto.Message, messageID string) (mediaType string,
 		return "", "", "", nil, nil, nil, 0
 	}
 	safeID := sanitizeFilename(messageID)
+	msg = unwrapDocumentWithCaption(msg)
 
 	// Check for image message
 	if img := msg.GetImageMessage(); img != nil {
@@ -445,6 +490,16 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
 	if err != nil {
 		logger.Warnf("Failed to store chat: %v", err)
+	}
+
+	// An edit updates the original message instead of creating a new one
+	if targetID, ok := editTarget(msg.Message); ok {
+		if updated, err := messageStore.UpdateMessageContent(targetID, chatJID, extractTextContent(msg.Message)); err != nil {
+			logger.Warnf("Failed to apply edit to message %s: %v", targetID, err)
+		} else if !updated {
+			logger.Infof("Ignoring edit of unknown message %s", targetID)
+		}
+		return
 	}
 
 	// Extract text content
@@ -1230,15 +1285,8 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					continue
 				}
 
-				// Extract text content
-				var content string
-				if msg.Message.Message != nil {
-					if conv := msg.Message.Message.GetConversation(); conv != "" {
-						content = conv
-					} else if ext := msg.Message.Message.GetExtendedTextMessage(); ext != nil {
-						content = ext.GetText()
-					}
-				}
+				// Extract text content (including media captions)
+				content := extractTextContent(msg.Message.Message)
 
 				// Message ID (needed up front so extractMediaInfo can build a unique filename)
 				msgID := ""
