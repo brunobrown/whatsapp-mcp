@@ -13,6 +13,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, List, Optional, Tuple
@@ -26,7 +27,34 @@ AUDIT_PATH = os.environ.get("WHATSAPP_SEND_AUDIT_LOG") or os.path.join(_HERE, "s
 BLOCKED = "SEND_BLOCKED_BY_POLICY"
 NOT_FOUND = "RECIPIENT_NOT_FOUND"
 AMBIGUOUS = "RECIPIENT_AMBIGUOUS"
+INVALID = "RECIPIENT_INVALID"
+UNAVAILABLE = "DIRECTORY_UNAVAILABLE"
+_MAX_LOGGED = 200
 _MODES = ("allowlist", "denylist")
+
+
+class DirectoryError(Exception):
+    """The chat directory (bridge database) could not be read, so the policy cannot be checked."""
+
+
+# user[.agent][:device]@server; a legacy group id is two numbers joined by a hyphen
+_JID = re.compile(r"(?P<user>[0-9]+(?:-[0-9]+)?)(?:\.[0-9]+)?(?::[0-9]+)?@(?P<server>[^@\s]+)")
+_SERVERS = ("s.whatsapp.net", "lid", "g.us")
+
+
+def canonical_jid(text: str) -> Optional[str]:
+    """The plain `user@server` the bridge will address, or None when text is not a destination we accept.
+
+    Agent and device parts are dropped and the server is lower-cased, so the policy sees the same JID the
+    bridge does. Anything else after the first `@` (extra `@`, spaces, other servers) is refused.
+    """
+    match = _JID.fullmatch(text.strip())
+    if not match:
+        return None
+    user, server = match.group("user"), match.group("server").lower()
+    if server not in _SERVERS or ("-" in user and server != "g.us"):
+        return None
+    return f"{user}@{server}"
 
 
 @dataclass
@@ -36,6 +64,7 @@ class Directory:
     name_of: Callable[[str], Optional[str]]    # JID (or the same person under another id) -> chat name
     ids_of: Callable[[str], List[str]]         # every id a person is stored under (phone, LID)
     is_phone: Callable[[str], bool]            # whether text is a phone number rather than a chat name
+    ready: Callable[[], None]                  # raises DirectoryError when the chat directory is unreadable
 
 
 @dataclass
@@ -55,18 +84,27 @@ class Decision:
     rule: str = ""
     override: bool = False
     message: str = ""
+    releasable: bool = True
 
 
 def resolve_target(recipient: str, directory: Directory) -> Target:
     """Turn a JID, phone number or chat name into the recipient the bridge understands."""
     recipient = recipient.strip()
     if "@" in recipient:
-        return Target(True, recipient, recipient, directory.name_of(recipient))
+        jid = canonical_jid(recipient)
+        if jid is None:
+            return Target(False, error_code=INVALID,
+                          message=f"Not a valid destination: {recipient[:_MAX_LOGGED]!r}. Use a phone number, "
+                                  "a JID such as 123@g.us or 123@s.whatsapp.net, or a chat name. Nothing was sent.")
+        return Target(True, jid, jid, directory.name_of(jid))
     if directory.is_phone(recipient):
         digits = "".join(c for c in recipient if c.isdigit())
         jid = f"{digits}@s.whatsapp.net"
         return Target(True, digits, jid, directory.name_of(jid))
-    jids = directory.jids_by_name(recipient)
+    try:
+        jids = directory.jids_by_name(recipient)
+    except DirectoryError as e:
+        return Target(False, error_code=UNAVAILABLE, message=f"Could not look up the chat name: {e}. Nothing was sent.")
     if not jids:
         return Target(False, error_code=NOT_FOUND, message=f'No chat is named "{recipient}". Nothing was sent.')
     if len(jids) > 1:
@@ -92,6 +130,10 @@ def _load() -> Tuple[Optional[dict], Optional[str]]:
         value = policy.get(key, [])
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             return None, f'"{key}" must be a list of texts'
+    for key in ("allow", "deny"):
+        for entry in policy.get(key, []):
+            if "@" in entry and canonical_jid(entry) is None:
+                return None, f'"{key}" entry {entry!r} is not a valid JID'
     token = policy.get("override_token")
     if token is not None and not isinstance(token, str):
         return None, '"override_token" must be a text'
@@ -106,9 +148,13 @@ def _same_chat(a: str, b: str, directory: Directory) -> bool:
     return bool(set(directory.ids_of(a)) & set(directory.ids_of(b)))
 
 
+def _is_name(entry: str, directory: Directory) -> bool:
+    return "@" not in entry and not directory.is_phone(entry)
+
+
 def _entry_jids(entry: str, directory: Directory) -> List[str]:
     if "@" in entry:
-        return [entry]
+        return [canonical_jid(entry)]
     if directory.is_phone(entry):
         return [f"{''.join(c for c in entry if c.isdigit())}@s.whatsapp.net"]
     return directory.jids_by_name(entry)
@@ -121,6 +167,9 @@ def _matching_entry(entries: List[str], target: Target, directory: Directory, is
             continue  # an ambiguous name never releases anything
         if any(_same_chat(j, target.jid, directory) for j in jids):
             return entry
+        if not is_allow and _is_name(entry, directory) and target.chat_name and \
+                target.chat_name.strip().casefold() == entry.strip().casefold():
+            return entry  # the target's own name, even if the name lookup found nothing else
     return None
 
 
@@ -129,19 +178,34 @@ def _blocked(target: Target, reason: str) -> Decision:
     return Decision(False, reason, message=f"Send blocked by policy: chat {label} - {reason}. Nothing was sent.")
 
 
+def _unverifiable(target: Target, why: str) -> Decision:
+    """A block that no token releases: the policy could not be checked at all."""
+    decision = _blocked(target, why)
+    decision.releasable = False
+    return decision
+
+
 def evaluate(target: Target, override_token: Optional[str], directory: Directory) -> Decision:
     policy, problem = _load()
     if problem:
-        return _blocked(target, f"policy file is invalid ({problem})")  # never released by the token
+        return _unverifiable(target, f"policy file is invalid ({problem})")
     if policy is None:
         return Decision(True)
 
-    deny = _matching_entry(policy.get("deny", []), target, directory, is_allow=False)
+    try:
+        directory.ready()
+        deny = _matching_entry(policy.get("deny", []), target, directory, is_allow=False)
+        allowed = _matching_entry(policy.get("allow", []), target, directory, is_allow=True)
+        name_rules = any(_is_name(e, directory) for e in policy.get("deny", []))
+    except DirectoryError as e:
+        return _unverifiable(target, f"the chat directory could not be read ({e})")
+
     if deny is not None:
         decision = _blocked(target, f'deny rule "{deny}"')
-    elif policy.get("mode", "denylist") == "allowlist" and \
-            _matching_entry(policy.get("allow", []), target, directory, is_allow=True) is None:
+    elif policy.get("mode", "denylist") == "allowlist" and allowed is None:
         decision = _blocked(target, "not in the allowlist")
+    elif name_rules and target.jid.endswith("@g.us") and not target.chat_name:
+        decision = _blocked(target, "this group is not in the chat list, so deny rules by name cannot be checked")
     else:
         return Decision(True)
 
@@ -157,9 +221,9 @@ def audit(kind: str, recipient: str, target: Optional[Target], size: int, result
     line = {
         "ts": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
         "kind": kind,
-        "recipient": recipient,
+        "recipient": recipient[:_MAX_LOGGED],
         "chat_jid": target.jid if target else None,
-        "chat_name": target.chat_name if target else None,
+        "chat_name": target.chat_name[:_MAX_LOGGED] if target and target.chat_name else None,
         "size": size,
         "result": result,
         "rule": rule,
