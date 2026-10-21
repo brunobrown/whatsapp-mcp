@@ -97,6 +97,11 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	if _, err := db.Exec(identitySchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create contacts_identity: %v", err)
+	}
+
 	if err := ensureLocalPathColumn(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
