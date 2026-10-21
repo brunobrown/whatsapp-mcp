@@ -1482,7 +1482,10 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int, logger waLog.Logger) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, logger waLog.Logger) {
+	// Handler for the bridge status
+	http.HandleFunc("/api/status", handleStatus(clientSource{client}, state, bridgeVersion()))
+
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -1593,6 +1596,20 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 }
 
 func main() {
+	// Everything printed to stdout also goes to store/bridge.log (rotating); the pairing QR code is
+	// printed to the terminal only.
+	terminal := os.Stdout
+	if logFile, err := newRotatingFile(filepath.Join(logStoreDir, logFileName), logMaxBytes, logKeepOlder); err != nil {
+		fmt.Printf("Could not open %s, logging to the terminal only: %v\n", logFileName, err)
+	} else if tee, stop, err := teeStdout(logFile); err != nil {
+		fmt.Printf("Could not capture the log: %v\n", err)
+	} else {
+		terminal = tee
+		defer logFile.Close()
+		defer stop()
+	}
+	state := newBridgeState(time.Now)
+
 	// Set up logger
 	logger := waLog.Stdout("Client", "INFO", true)
 	logger.Infof("Starting WhatsApp client...")
@@ -1648,6 +1665,7 @@ func main() {
 
 	// Setup event handling for messages and history sync
 	client.AddEventHandler(func(evt interface{}) {
+		state.record(evt)
 		switch v := evt.(type) {
 		case *events.Message:
 			// Learn who the sender is (LID, phone, push name) before storing the message
@@ -1708,8 +1726,8 @@ func main() {
 		// Print QR code for pairing with phone
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
-				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				fmt.Fprintln(terminal, "\nScan this QR code with your WhatsApp app:")
+				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, terminal)
 			} else if evt.Event == "success" {
 				connected <- true
 				break
@@ -1746,7 +1764,7 @@ func main() {
 
 	// Start REST API server
 	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
-	startRESTServer(client, messageStore, 8080, logger)
+	startRESTServer(client, messageStore, state, 8080, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
