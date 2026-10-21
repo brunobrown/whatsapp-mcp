@@ -14,7 +14,8 @@ from whatsapp import (
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media,
     get_group_participants as whatsapp_get_group_participants,
-    get_connection_status as whatsapp_get_connection_status
+    get_connection_status as whatsapp_get_connection_status,
+    download_media_batch as whatsapp_download_media_batch
 )
 
 # Initialize FastMCP server
@@ -290,6 +291,38 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
     if result.hint:
         response["hint"] = result.hint
     return response
+
+@mcp.tool()
+def download_media_batch(
+    chat_jid: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    types: Optional[List[str]] = None,
+    max_size_mb: float = 25,
+    max_items: int = 50,
+    timeout_seconds: float = 120
+) -> Dict[str, Any]:
+    """Download all the media of a chat inside a time window, one at a time, and report each item.
+
+    Args:
+        chat_jid: The JID of the chat
+        after: Optional ISO-8601 date or datetime; only media after this instant. Without an offset it is read in
+               WHATSAPP_TIMEZONE or the system zone (same rule as list_messages)
+        before: Optional ISO-8601 date or datetime; only media before this instant
+        types: Optional list of media types: image, video, audio, document (default: all four)
+        max_size_mb: Media bigger than this (by the size WhatsApp declared) is skipped, not downloaded (default 25)
+        max_items: At most this many media, the oldest of the window first, 1 to 200 (default 50); truncated=true when more were left out
+        timeout_seconds: How long to wait for each item, 1 to 600 (default 120; an expired link can take up to 90 s while the phone answers)
+
+    Returns:
+        success, total, downloaded, already_downloaded, failed, skipped, truncated, aborted and items. Each item has
+        message_id, timestamp, media_type, filename, status (downloaded, already_downloaded, failed, skipped), path and,
+        when it did not download, error_code (LINK_EXPIRED_PHONE_OFFLINE, MEDIA_NOT_FOUND, DOWNLOAD_TIMEOUT,
+        SKIPPED_TOO_LARGE, BRIDGE_UNREACHABLE, NOT_ATTEMPTED, UNKNOWN), message and, when actionable, hint.
+        A failed item does not stop the batch; a bridge that does not answer does (aborted=BRIDGE_UNREACHABLE).
+        Bad arguments: success=false, error_code=INVALID_ARGUMENT
+    """
+    return whatsapp_download_media_batch(chat_jid, after, before, types, max_size_mb, max_items, timeout_seconds)
 
 @mcp.tool()
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
