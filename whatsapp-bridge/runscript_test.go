@@ -65,3 +65,31 @@ func TestBuildOutputsAreIgnoredByGit(t *testing.T) { // RUN-03
 		}
 	}
 }
+
+func TestInstallServiceRefusesAPathThatWouldBreakTheUnit(t *testing.T) { // RUN-02
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not installed")
+	}
+	for _, name := range []string{"with space", "a&b", "a|b", "100%"} {
+		t.Run(name, func(t *testing.T) {
+			work := filepath.Join(t.TempDir(), name)
+			os.MkdirAll(work, 0o755)
+			for _, f := range []string{"Makefile", "whatsapp-bridge.service.in"} {
+				data, _ := os.ReadFile(f)
+				os.WriteFile(filepath.Join(work, f), data, 0o644)
+			}
+			dest := t.TempDir()
+
+			cmd := exec.Command("make", "-o", "build", "install-service", "SERVICE_DIR="+dest)
+			cmd.Dir = work
+			out, err := cmd.CombinedOutput()
+
+			if err == nil {
+				t.Errorf("must refuse the path, got success:\n%s", out)
+			}
+			if _, statErr := os.Stat(filepath.Join(dest, "whatsapp-bridge.service")); statErr == nil {
+				t.Error("no unit may be written for a path that breaks it")
+			}
+		})
+	}
+}

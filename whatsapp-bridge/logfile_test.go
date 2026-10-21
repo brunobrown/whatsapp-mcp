@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readFile(t *testing.T, path string) string {
@@ -130,5 +132,77 @@ func TestTeeStdoutWritesToTerminalAndFileButNotWhatGoesStraightToTerminal(t *tes
 	}
 	if strings.Contains(logged, "QR-SECRETO") {
 		t.Error("what goes straight to the terminal must not reach the log")
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestTeeStdoutKeepsDrainingWhenTheLogFails(t *testing.T) { // LOG-01 (um destino que falha não trava quem imprime)
+	dir := t.TempDir()
+	fakeTerminal, _ := os.Create(filepath.Join(dir, "terminal.txt"))
+	real := os.Stdout
+	os.Stdout = fakeTerminal
+	defer func() { os.Stdout = real }()
+
+	_, stop, err := teeStdout(failingWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 4000; i++ { // bem mais que o buffer do pipe
+			fmt.Println(strings.Repeat("x", 100))
+		}
+		fmt.Println("ultima linha")
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("printing blocked after the log writer failed")
+	}
+	stop()
+	fakeTerminal.Close()
+
+	if !strings.Contains(readFile(t, filepath.Join(dir, "terminal.txt")), "ultima linha") {
+		t.Error("the terminal must keep receiving output when the log fails")
+	}
+}
+
+func TestExistingLogFilesBecomePrivate(t *testing.T) { // LOG-03
+	path := filepath.Join(t.TempDir(), "bridge.log")
+	os.WriteFile(path, []byte("antigo"), 0o644)
+	os.Chmod(path, 0o644)
+
+	log, err := newRotatingFile(path, 1<<20, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Close()
+
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestLogKeepsWorkingWhenARenameFails(t *testing.T) { // LOG-02
+	path := filepath.Join(t.TempDir(), "bridge.log")
+	log, err := newRotatingFile(path, 20, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	// path.1 as a non-empty directory: moving the log onto it fails
+	os.MkdirAll(filepath.Join(path+".1", "x"), 0o755)
+
+	for i := 0; i < 5; i++ {
+		if _, err := log.Write([]byte("0123456789ABCDEF\n")); err != nil {
+			t.Fatalf("write %d failed after a rename error: %v", i, err)
+		}
+	}
+	if got := strings.Count(readFile(t, path), "ABCDEF"); got == 0 {
+		t.Error("lines were lost")
 	}
 }
