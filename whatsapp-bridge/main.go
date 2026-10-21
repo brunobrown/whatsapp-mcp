@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
@@ -905,7 +906,7 @@ func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFrom
 // confirmed to land inside the chat directory.
 func mediaFilePath(chatJID, messageID, filename string) (localPath, absPath string, err error) {
 	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
-	msgDir := fmt.Sprintf("%s/%s", chatDir, sanitizeFilename(messageID))
+	msgDir := fmt.Sprintf("%s/%s", chatDir, mediaDirName(messageID))
 	if err := os.MkdirAll(msgDir, 0755); err != nil {
 		return "", "", fmt.Errorf("failed to create media directory: %v", err)
 	}
@@ -922,6 +923,36 @@ func mediaFilePath(chatJID, messageID, filename string) (localPath, absPath stri
 		return "", "", fmt.Errorf("refusing to use media path outside chat directory: %s", absPath)
 	}
 	return localPath, absPath, nil
+}
+
+// mediaDirName names the directory of a message. WhatsApp IDs are already safe and used as is;
+// any other ID gets a hash suffix so that two different IDs never sanitize to the same name.
+func mediaDirName(messageID string) string {
+	safe := sanitizeFilename(messageID)
+	if safe == messageID {
+		return safe
+	}
+	sum := sha256.Sum256([]byte(messageID))
+	return fmt.Sprintf("%s-%x", safe, sum[:4])
+}
+
+// legacyFileMatches reports whether a file saved by an older version is the media of a message,
+// by comparing its SHA-256 with the one in the message. Older versions named files by filename
+// alone, so a file of the same name may belong to another message.
+func legacyFileMatches(path string, fileSHA256 []byte) bool {
+	if len(fileSHA256) != sha256.Size {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return false
+	}
+	return bytes.Equal(h.Sum(nil), fileSHA256)
 }
 
 // legacyMediaFilePath is where versions before the per-message directory saved media. It is only
@@ -979,6 +1010,12 @@ func (c *cappedFile) Write(p []byte) (int, error) {
 		return 0, errMediaTooLarge
 	}
 	return c.File.Write(p)
+}
+
+// ReadFrom must go through the capped Write: otherwise io.Copy would use the ReadFrom promoted
+// from *os.File, which writes straight to the file and ignores the limit.
+func (c *cappedFile) ReadFrom(r io.Reader) (int64, error) {
+	return io.Copy(struct{ io.Writer }{c}, r)
 }
 
 func (c *cappedFile) WriteAt(p []byte, off int64) (int, error) {
@@ -1042,15 +1079,20 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Already downloaded (automatically or before): return the file without contacting WhatsApp.
-	// A file saved by an older version sits at the legacy path.
-	for _, existing := range []string{localPath, legacyMediaFilePath(chatJID, filename)} {
-		if _, err := os.Stat(existing); err == nil {
-			existingAbs, _ := filepath.Abs(existing)
-			if err := messageStore.SetLocalPath(messageID, chatJID, existingAbs); err != nil {
-				fmt.Printf("Failed to record local_path for %s: %v\n", messageID, err)
-			}
-			return true, mediaType, filename, existingAbs, nil
+	// A file saved by an older version sits at the legacy path, named by filename alone, so it
+	// is only trusted when its content matches this message.
+	existing := ""
+	if _, err := os.Stat(localPath); err == nil {
+		existing = localPath
+	} else if legacy := legacyMediaFilePath(chatJID, filename); legacyFileMatches(legacy, fileSHA256) {
+		existing = legacy
+	}
+	if existing != "" {
+		existingAbs, _ := filepath.Abs(existing)
+		if err := messageStore.SetLocalPath(messageID, chatJID, existingAbs); err != nil {
+			fmt.Printf("Failed to record local_path for %s: %v\n", messageID, err)
 		}
+		return true, mediaType, filename, existingAbs, nil
 	}
 
 	// If we don't have all the media info we need, we can't download
