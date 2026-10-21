@@ -13,7 +13,8 @@ from whatsapp import (
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media,
-    get_group_participants as whatsapp_get_group_participants
+    get_group_participants as whatsapp_get_group_participants,
+    get_connection_status as whatsapp_get_connection_status
 )
 
 # Initialize FastMCP server
@@ -306,6 +307,19 @@ def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     if result.success:
         return {"success": True, "participants": result.participants}
     return {"success": False, "message": result.message}
+
+@mcp.tool()
+def get_connection_status() -> Dict[str, Any]:
+    """Check whether the WhatsApp bridge is running and connected.
+
+    Returns:
+        connected (is the bridge connected to WhatsApp), bridge_reachable, logged_in, phone, version, started_at,
+        uptime_seconds, last_event_at, last_message_at, last_connected_at, last_disconnected_at (null when it
+        has not happened since the bridge started) and pending_media_retries (media waiting for the phone to re-upload).
+        When the bridge does not answer: connected=false, bridge_reachable=false, error_code=BRIDGE_UNREACHABLE,
+        last_message_at (newest stored message) and last_log_at (last write to the bridge log)
+    """
+    return whatsapp_get_connection_status()
 
 if __name__ == "__main__":
     # Initialize and run the server

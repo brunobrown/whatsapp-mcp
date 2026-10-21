@@ -1184,3 +1184,57 @@ def download_media(message_id: str, chat_jid: str) -> DownloadResult:
     if response.status_code == 200 and result.get("success", False):
         return DownloadResult(True, "Media downloaded successfully", path=result.get("path"))
     return _download_failure(result.get("message") or f"HTTP {response.status_code}")
+
+
+BRIDGE_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'bridge.log')
+_STATUS_TIMEOUT_SECONDS = 5
+
+
+def _last_message_at() -> Optional[str]:
+    """The newest stored message time, or None when there is none or no database."""
+    try:
+        conn = _open_chats()
+    except (sqlite3.Error, send_policy.DirectoryError):
+        return None
+    try:
+        row = conn.execute("SELECT timestamp FROM messages ORDER BY strftime('%Y-%m-%d %H:%M:%f', timestamp) DESC LIMIT 1").fetchone()
+        return datetime.fromisoformat(row[0]).isoformat() if row and row[0] else None
+    except (sqlite3.Error, ValueError):
+        return None
+    finally:
+        conn.close()
+
+
+def _last_log_at() -> Optional[str]:
+    """When the bridge log was last written (the bridge's last sign of life), or None."""
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(BRIDGE_LOG_PATH)).astimezone().isoformat()
+    except OSError:
+        return None
+
+
+def get_connection_status() -> dict:
+    """The bridge's status; a bridge that does not answer is reported as not connected."""
+    try:
+        response = requests.get(f"{WHATSAPP_API_BASE_URL}/status", timeout=_STATUS_TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        return {
+            "connected": False,
+            "bridge_reachable": False,
+            "error_code": "BRIDGE_UNREACHABLE",
+            "message": f"Could not reach the WhatsApp bridge: {e}",
+            "last_message_at": _last_message_at(),
+            "last_log_at": _last_log_at(),
+        }
+    try:
+        status = response.json()
+        if response.status_code != 200 or not isinstance(status, dict):
+            raise ValueError
+    except ValueError:
+        return {
+            "connected": False,
+            "bridge_reachable": True,
+            "error_code": "UNKNOWN",
+            "message": f"The bridge answered HTTP {response.status_code} with an unexpected body",
+        }
+    return {**status, "bridge_reachable": True}
