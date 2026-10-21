@@ -88,6 +88,9 @@ func NewMessageStore() (*MessageStore, error) {
 			file_enc_sha256 BLOB,
 			file_length INTEGER,
 			local_path TEXT,
+			mimetype TEXT,
+			forwarded BOOLEAN,
+			quoted_id TEXT,
 			PRIMARY KEY (id, chat_jid),
 			FOREIGN KEY (chat_jid) REFERENCES chats(jid)
 		);
@@ -107,7 +110,7 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create messages index: %v", err)
 	}
 
-	if err := ensureLocalPathColumn(db); err != nil {
+	if err := ensureMessageColumns(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
 	}
@@ -215,14 +218,22 @@ func (store *MessageStore) SetLocalPath(id, chatJID, path string) error {
 	return err
 }
 
-// ensureLocalPathColumn adds messages.local_path to databases created before it existed.
-// It never recreates or drops anything, and is a no-op when the column is already there.
-func ensureLocalPathColumn(db *sql.DB) error {
+// messageColumns are the columns added to messages after its first version.
+var messageColumns = []struct{ name, ddl string }{
+	{"local_path", "TEXT"},
+	{"mimetype", "TEXT"},
+	{"forwarded", "BOOLEAN"},
+	{"quoted_id", "TEXT"},
+}
+
+// ensureMessageColumns adds the columns of messageColumns that a database created by an older
+// version lacks. It never recreates or drops anything, and is a no-op when they are all there.
+func ensureMessageColumns(db *sql.DB) error {
 	rows, err := db.Query("PRAGMA table_info(messages)")
 	if err != nil {
 		return err
 	}
-	found := false
+	have := map[string]bool{}
 	for rows.Next() {
 		var cid, notnull, pk int
 		var name, ctype string
@@ -231,18 +242,71 @@ func ensureLocalPathColumn(db *sql.DB) error {
 			rows.Close()
 			return err
 		}
-		if name == "local_path" {
-			found = true
-		}
+		have[name] = true
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if found {
-		return nil
+	for _, col := range messageColumns {
+		if have[col.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE messages ADD COLUMN " + col.name + " " + col.ddl); err != nil {
+			return err
+		}
 	}
-	_, err = db.Exec("ALTER TABLE messages ADD COLUMN local_path TEXT")
+	return nil
+}
+
+// MessageMeta is what a message says about itself beyond its text and media bytes.
+type MessageMeta struct {
+	Mimetype  string
+	Forwarded bool
+	QuotedID  string // ID of the message this one replies to
+}
+
+// extractMessageMeta reads the MIME type, the forwarded flag and the quoted message ID of msg.
+func extractMessageMeta(msg *waProto.Message) MessageMeta {
+	if msg == nil {
+		return MessageMeta{}
+	}
+	msg = unwrapDocumentWithCaption(msg)
+
+	var meta MessageMeta
+	var ctx *waProto.ContextInfo
+	switch {
+	case msg.GetExtendedTextMessage() != nil:
+		ctx = msg.GetExtendedTextMessage().GetContextInfo()
+	case msg.GetImageMessage() != nil:
+		meta.Mimetype = msg.GetImageMessage().GetMimetype()
+		ctx = msg.GetImageMessage().GetContextInfo()
+	case msg.GetVideoMessage() != nil:
+		meta.Mimetype = msg.GetVideoMessage().GetMimetype()
+		ctx = msg.GetVideoMessage().GetContextInfo()
+	case msg.GetAudioMessage() != nil:
+		meta.Mimetype = msg.GetAudioMessage().GetMimetype()
+		ctx = msg.GetAudioMessage().GetContextInfo()
+	case msg.GetDocumentMessage() != nil:
+		meta.Mimetype = msg.GetDocumentMessage().GetMimetype()
+		ctx = msg.GetDocumentMessage().GetContextInfo()
+	}
+	meta.Forwarded = ctx.GetIsForwarded()
+	meta.QuotedID = ctx.GetStanzaID()
+	return meta
+}
+
+// SetMessageMeta records the metadata of a stored message. Empty values never replace stored
+// ones, so a message that arrives again without metadata keeps what it had.
+func (store *MessageStore) SetMessageMeta(id, chatJID string, meta MessageMeta) error {
+	_, err := store.db.Exec(
+		`UPDATE messages SET
+			mimetype = COALESCE(NULLIF(?, ''), mimetype),
+			quoted_id = COALESCE(NULLIF(?, ''), quoted_id),
+			forwarded = CASE WHEN ? THEN 1 ELSE forwarded END
+		WHERE id = ? AND chat_jid = ?`,
+		meta.Mimetype, meta.QuotedID, meta.Forwarded, id, chatJID,
+	)
 	return err
 }
 
@@ -410,8 +474,11 @@ func recordSentMessage(store *MessageStore, chatJID, sender, messageID string, t
 	}
 	content := extractTextContent(msg)
 	mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength := extractMediaInfo(msg, messageID)
-	return store.StoreMessage(messageID, chatJID, sender, content, ts, true,
-		mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength)
+	if err := store.StoreMessage(messageID, chatJID, sender, content, ts, true,
+		mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength); err != nil {
+		return err
+	}
+	return store.SetMessageMeta(messageID, chatJID, extractMessageMeta(msg))
 }
 
 // SendMessageRequest represents the request body for the send message API
@@ -705,6 +772,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		fileEncSHA256,
 		fileLength,
 	)
+	if err == nil {
+		if metaErr := messageStore.SetMessageMeta(msg.Info.ID, chatJID, extractMessageMeta(msg.Message)); metaErr != nil {
+			logger.Warnf("Failed to store metadata of %s: %v", msg.Info.ID, metaErr)
+		}
+	}
 
 	if err == nil && autoDownloadCfg.allows(mediaType, fileLength) {
 		waType, _ := waMediaTypeFor(mediaType)
@@ -1897,6 +1969,9 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				if err != nil {
 					logger.Warnf("Failed to store history message: %v", err)
 				} else {
+					if metaErr := messageStore.SetMessageMeta(msgID, chatJID, extractMessageMeta(msg.Message.Message)); metaErr != nil {
+						logger.Warnf("Failed to store metadata of %s: %v", msgID, metaErr)
+					}
 					syncedCount++
 					// Log successful message storage
 					if mediaType != "" {
