@@ -415,6 +415,44 @@ def get_message_context(
             conn.close()
 
 
+# The latest message of a chat comes from `messages`, never from matching chats.last_message_time:
+# that time also moves for events that were not stored as messages, and used to move backwards,
+# so an equality join left last_message empty. Instants are compared with datetime() because the
+# stored times can carry different UTC offsets.
+_LAST_MESSAGE_JOIN = """
+    LEFT JOIN messages lm ON lm.rowid = (
+        SELECT m.rowid FROM messages m WHERE m.chat_jid = chats.jid
+        ORDER BY datetime(m.timestamp) DESC, m.rowid DESC LIMIT 1
+    )
+"""
+_CHAT_COLUMNS = """
+    chats.jid, chats.name, COALESCE(lm.timestamp, chats.last_message_time),
+    lm.content, lm.sender, lm.is_from_me, lm.media_type
+"""
+_LAST_ACTIVE = "datetime(COALESCE(lm.timestamp, chats.last_message_time))"
+
+
+def _last_message_text(content: Optional[str], media_type: Optional[str]) -> Optional[str]:
+    """The text of a chat's last message; media shows as '[type] caption', or '[type]' without one."""
+    if media_type:
+        return f"[{media_type}] {content}".strip() if content else f"[{media_type}]"
+    return content
+
+
+def _chat_from_row(row, include_last_message: bool = True) -> Chat:
+    jid, name, last_time, content, sender, is_from_me, media_type = row
+    chat = Chat(
+        jid=jid,
+        name=name,
+        last_message_time=datetime.fromisoformat(last_time) if last_time else None,
+    )
+    if include_last_message:
+        chat.last_message = _last_message_text(content, media_type)
+        chat.last_sender = sender
+        chat.last_is_from_me = is_from_me
+    return chat
+
+
 def list_chats(
     query: Optional[str] = None,
     limit: int = 20,
@@ -426,63 +464,21 @@ def list_chats(
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        # Build base query
-        query_parts = ["""
-            SELECT 
-                chats.jid,
-                chats.name,
-                chats.last_message_time,
-                messages.content as last_message,
-                messages.sender as last_sender,
-                messages.is_from_me as last_is_from_me
-            FROM chats
-        """]
-        
-        if include_last_message:
-            query_parts.append("""
-                LEFT JOIN messages ON chats.jid = messages.chat_jid 
-                AND chats.last_message_time = messages.timestamp
-            """)
-            
-        where_clauses = []
-        params = []
-        
+
+        where, params = "", []
         if query:
-            where_clauses.append("(LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)")
+            where = "WHERE (LOWER(chats.name) LIKE LOWER(?) OR chats.jid LIKE ?)"
             params.extend([f"%{query}%", f"%{query}%"])
-            
-        if where_clauses:
-            query_parts.append("WHERE " + " AND ".join(where_clauses))
-            
-        # Add sorting
-        order_by = "chats.last_message_time DESC" if sort_by == "last_active" else "chats.name"
-        query_parts.append(f"ORDER BY {order_by}")
-        
-        # Add pagination
-        offset = (page ) * limit
-        query_parts.append("LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
-        
-        cursor.execute(" ".join(query_parts), tuple(params))
-        chats = cursor.fetchall()
-        
-        result = []
-        for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
-            result.append(chat)
-            
-        return result
-        
+        order_by = f"{_LAST_ACTIVE} DESC" if sort_by == "last_active" else "chats.name"
+
+        cursor.execute(
+            f"SELECT {_CHAT_COLUMNS} FROM chats {_LAST_MESSAGE_JOIN} {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
+            (*params, limit, page * limit),
+        )
+        return [_chat_from_row(row, include_last_message) for row in cursor.fetchall()]
+
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error("Database error: %s", e)
         return []
     finally:
         if 'conn' in locals():
@@ -555,7 +551,7 @@ def search_contacts(query: str) -> List[Contact]:
 
 
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
-    """Get all chats involving the contact.
+    """Get all chats involving the contact, each once.
     
     Args:
         jid: The contact's JID to search for
@@ -566,41 +562,25 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         ids, jids = _person_ids_and_jids(jid)
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT DISTINCT
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-            JOIN messages m ON c.jid = m.chat_jid
-            WHERE m.sender IN ({sender_marks}) OR c.jid IN ({jid_marks})
-            ORDER BY c.last_message_time DESC
+
+        cursor.execute(
+            f"""
+            SELECT {_CHAT_COLUMNS}
+            FROM chats {_LAST_MESSAGE_JOIN}
+            WHERE chats.jid IN ({",".join("?" * len(jids))})
+                OR EXISTS (
+                    SELECT 1 FROM messages x
+                    WHERE x.chat_jid = chats.jid AND x.sender IN ({",".join("?" * len(ids))})
+                )
+            ORDER BY {_LAST_ACTIVE} DESC
             LIMIT ? OFFSET ?
-        """.format(sender_marks=",".join("?" * len(ids)), jid_marks=",".join("?" * len(jids))),
-            (*ids, *jids, limit, page * limit))
-        
-        chats = cursor.fetchall()
-        
-        result = []
-        for chat_data in chats:
-            chat = Chat(
-                jid=chat_data[0],
-                name=chat_data[1],
-                last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-                last_message=chat_data[3],
-                last_sender=chat_data[4],
-                last_is_from_me=chat_data[5]
-            )
-            result.append(chat)
-            
-        return result
-        
+            """,
+            (*jids, *ids, limit, page * limit),
+        )
+        return [_chat_from_row(row) for row in cursor.fetchall()]
+
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error("Database error: %s", e)
         return []
     finally:
         if 'conn' in locals():
@@ -663,43 +643,16 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        query = """
-            SELECT 
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-        """
-        
-        if include_last_message:
-            query += """
-                LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            """
-            
-        query += " WHERE c.jid = ?"
-        
-        cursor.execute(query, (chat_jid,))
-        chat_data = cursor.fetchone()
-        
-        if not chat_data:
-            return None
-            
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
+
+        cursor.execute(
+            f"SELECT {_CHAT_COLUMNS} FROM chats {_LAST_MESSAGE_JOIN} WHERE chats.jid = ?",
+            (chat_jid,),
         )
-        
+        row = cursor.fetchone()
+        return _chat_from_row(row, include_last_message) if row else None
+
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error("Database error: %s", e)
         return None
     finally:
         if 'conn' in locals():
@@ -711,38 +664,21 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT 
-                c.jid,
-                c.name,
-                c.last_message_time,
-                m.content as last_message,
-                m.sender as last_sender,
-                m.is_from_me as last_is_from_me
-            FROM chats c
-            LEFT JOIN messages m ON c.jid = m.chat_jid 
-                AND c.last_message_time = m.timestamp
-            WHERE c.jid LIKE ? AND c.jid NOT LIKE '%@g.us'
+
+        cursor.execute(
+            f"""
+            SELECT {_CHAT_COLUMNS}
+            FROM chats {_LAST_MESSAGE_JOIN}
+            WHERE chats.jid LIKE ? AND chats.jid NOT LIKE '%@g.us'
             LIMIT 1
-        """, (f"%{sender_phone_number}%",))
-        
-        chat_data = cursor.fetchone()
-        
-        if not chat_data:
-            return None
-            
-        return Chat(
-            jid=chat_data[0],
-            name=chat_data[1],
-            last_message_time=datetime.fromisoformat(chat_data[2]) if chat_data[2] else None,
-            last_message=chat_data[3],
-            last_sender=chat_data[4],
-            last_is_from_me=chat_data[5]
+            """,
+            (f"%{sender_phone_number}%",),
         )
-        
+        row = cursor.fetchone()
+        return _chat_from_row(row) if row else None
+
     except sqlite3.Error as e:
-        print(f"Database error: {e}")
+        logger.error("Database error: %s", e)
         return None
     finally:
         if 'conn' in locals():
