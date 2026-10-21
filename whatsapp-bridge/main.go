@@ -102,6 +102,11 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create contacts_identity: %v", err)
 	}
 
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_chat_ts ON messages(chat_jid, timestamp)"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create messages index: %v", err)
+	}
+
 	if err := ensureLocalPathColumn(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
@@ -117,19 +122,52 @@ func (store *MessageStore) Close() error {
 
 // Store a chat in the database
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
+	// An upsert that only moves last_message_time forward: INSERT OR REPLACE let a history sync
+	// with an older time overwrite a newer one. Instants are compared with datetime() because
+	// the stored times can carry different UTC offsets, and as text they would not order right.
 	_, err := store.db.Exec(
-		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
+		`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
+		ON CONFLICT(jid) DO UPDATE SET
+			name = excluded.name,
+			last_message_time = CASE
+				WHEN chats.last_message_time IS NULL
+					OR datetime(excluded.last_message_time) > datetime(chats.last_message_time)
+				THEN excluded.last_message_time ELSE chats.last_message_time END`,
 		jid, name, lastMessageTime,
 	)
 	return err
 }
+
+// RepairChatTimes moves chats.last_message_time forward to the latest stored message of chats
+// whose time is missing or older than it, and returns how many chats it changed. It never moves
+// a time back (a later time is only activity) and leaves chats without messages alone.
+func (store *MessageStore) RepairChatTimes() (int, error) {
+	res, err := store.db.Exec(`
+		UPDATE chats SET last_message_time = (
+			SELECT m.timestamp FROM messages m WHERE m.chat_jid = chats.jid
+			ORDER BY datetime(m.timestamp) DESC, m.rowid DESC LIMIT 1
+		)
+		WHERE EXISTS (
+			SELECT 1 FROM messages m WHERE m.chat_jid = chats.jid
+			AND (chats.last_message_time IS NULL OR datetime(m.timestamp) > datetime(chats.last_message_time))
+		)`)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 
 // TouchChat records activity in a chat, creating it (named after its JID) if unknown and
 // keeping the name of a known chat, which StoreChat would overwrite.
 func (store *MessageStore) TouchChat(jid string, lastMessageTime time.Time) error {
 	_, err := store.db.Exec(
 		`INSERT INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)
-		ON CONFLICT(jid) DO UPDATE SET last_message_time = excluded.last_message_time`,
+		ON CONFLICT(jid) DO UPDATE SET last_message_time = CASE
+			WHEN chats.last_message_time IS NULL
+				OR datetime(excluded.last_message_time) > datetime(chats.last_message_time)
+			THEN excluded.last_message_time ELSE chats.last_message_time END`,
 		jid, jid, lastMessageTime,
 	)
 	return err
@@ -1522,6 +1560,12 @@ func main() {
 		return
 	}
 	defer messageStore.Close()
+
+	if n, err := messageStore.RepairChatTimes(); err != nil {
+		logger.Warnf("Failed to repair chat times: %v", err)
+	} else if n > 0 {
+		logger.Infof("Repaired last_message_time of %d chats", n)
+	}
 
 	// Setup event handling for messages and history sync
 	client.AddEventHandler(func(evt interface{}) {
