@@ -30,7 +30,7 @@ def conn(tmp_path, monkeypatch):
 
 
 def add(conn, chat, id, ts, content="x", sender="alice", **cols):
-    cols.update(id=id, chat_jid=chat, sender=sender, content=content, timestamp=ts, is_from_me=0)
+    cols = {"is_from_me": 0, **cols, "id": id, "chat_jid": chat, "sender": sender, "content": content, "timestamp": ts}
     conn.execute(f"INSERT INTO messages ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", list(cols.values()))
     conn.commit()
 
@@ -269,3 +269,77 @@ def test_tool_description_documents_dates_and_options():  # FILT-05
 
     for expected in ("ISO-8601", "WHATSAPP_TIMEZONE", "structured", "has_more", "next_page", "chat_name", "order"):
         assert expected in doc
+
+
+def test_context_neighbours_never_come_from_another_chat(conn):  # CTX-01
+    add(conn, A, "A1", "2026-10-21 10:00:00+00:00", content="antes em A")
+    add(conn, A, "SAME", "2026-10-21 10:10:00+00:00", content="alvo A")
+    add(conn, A, "A3", "2026-10-21 10:20:00+00:00", content="depois em A")
+    add(conn, B, "B1", "2026-10-21 10:05:00+00:00", content="intruso antes")
+    add(conn, B, "B2", "2026-10-21 10:15:00+00:00", content="intruso depois")
+
+    out = structured(chat_jid=A, query="alvo A", include_context=True, context_before=1, context_after=1)
+
+    assert [(m["chat_jid"], m["id"]) for m in out["messages"]] == [(A, "A1"), (A, "SAME"), (A, "A3")]
+    ctx = whatsapp.get_message_context("SAME", before=1, after=1, chat_jid=A)
+    assert (ctx.before[0].id, ctx.after[0].id) == ("A1", "A3")
+
+
+def test_pagination_with_equal_instants_neither_repeats_nor_skips(conn):  # QUERY-04
+    for n in range(5):
+        add(conn, A, f"T{n}", "2026-10-21 10:00:00+00:00")  # mesmo instante: desempata a ordem de gravação
+
+    seen = []
+    for p in range(3):
+        seen += ids(structured(chat_jid=A, limit=2, page=p, order="asc"))
+
+    assert seen == ["T0", "T1", "T2", "T3", "T4"]
+
+
+@pytest.mark.parametrize("name, wanted", [("100%", "P"), ("a_b", "U"), ("a\\b", "S"), ("ÁLFA", "C")])
+def test_chat_name_treats_wildcards_literally_and_ignores_case(conn, name, wanted):  # FILT-01
+    for jid, chat in (("p@g.us", "Meta 100% batida"), ("u@g.us", "Grupo a_b"), ("s@g.us", "Pasta a\\b"),
+                      ("c@g.us", "Álfa"), ("x@g.us", "Meta 1000 batida"), ("y@g.us", "Grupo axb")):
+        conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", (jid, chat))
+        add(conn, jid, jid[0].upper(), "2026-10-21 10:00:00+00:00")
+
+    assert ids(structured(chat_name=name)) == [wanted]
+
+
+def test_date_boundaries_are_exclusive_and_keep_milliseconds(conn):  # FILT-02
+    add(conn, A, "EXACT", "2026-10-21 10:00:00+00:00")
+    add(conn, A, "MS", "2026-10-21 10:00:00.250000+00:00")
+
+    assert ids(structured(chat_jid=A, after="2026-10-21T10:00:00+00:00")) == ["MS"]
+    assert ids(structured(chat_jid=A, before="2026-10-21T10:00:00.250+00:00")) == ["EXACT"]
+    assert ids(structured(chat_jid=A, after="2026-10-21T10:00:00.250+00:00")) == []
+
+
+def test_get_message_context_is_chronological_on_both_sides(conn):
+    for n in range(5):
+        add(conn, A, f"M{n}", f"2026-10-21 10:0{n}:00+00:00")
+
+    ctx = whatsapp.get_message_context("M2", before=2, after=2, chat_jid=A)
+
+    assert [m.id for m in ctx.before] == ["M0", "M1"] and [m.id for m in ctx.after] == ["M3", "M4"]
+    with pytest.raises(ValueError):
+        whatsapp.get_message_context("M2", chat_jid=B)
+
+
+def test_sender_name_is_the_known_name_or_me(conn):  # QUERY-01
+    conn.executescript("""
+        CREATE TABLE contacts_identity (id INTEGER PRIMARY KEY, lid TEXT UNIQUE, phone TEXT UNIQUE,
+            full_name TEXT, push_name TEXT);
+        INSERT INTO contacts_identity (phone, full_name) VALUES ('5511999990000', 'Ana Souza');""")
+    add(conn, A, "M1", "2026-10-21 10:00:00+00:00", sender="5511999990000")
+    add(conn, A, "M2", "2026-10-21 10:01:00+00:00", sender="me", is_from_me=1)
+
+    by_id = {m["id"]: m["sender_name"] for m in structured(chat_jid=A)["messages"]}
+
+    assert "Ana Souza" in by_id["M1"] and by_id["M2"] == "Me"
+
+
+@pytest.mark.parametrize("kwargs", [{"limit": 0}, {"limit": -1}, {"page": -1}])
+def test_limit_below_one_or_negative_page_raises(conn, kwargs):  # QUERY-08
+    with pytest.raises(ValueError):
+        whatsapp.list_messages(include_context=False, **kwargs)

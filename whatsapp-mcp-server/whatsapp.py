@@ -423,6 +423,8 @@ def list_messages(
         raise ValueError(f"Invalid format: {format}. Use one of: {', '.join(_FORMATS)}.")
     if order not in _ORDERS:
         raise ValueError(f"Invalid order: {order}. Use one of: {', '.join(_ORDERS)}.")
+    if limit < 1 or page < 0:
+        raise ValueError("limit must be at least 1 and page at least 0.")
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         conn.create_function("casefold", 1, lambda v: v.casefold() if isinstance(v, str) else v)
