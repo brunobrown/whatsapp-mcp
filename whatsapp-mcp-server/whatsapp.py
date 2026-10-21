@@ -1157,23 +1157,29 @@ def _download_failure(message: str, error_code: Optional[str] = None) -> Downloa
     return DownloadResult(False, message, error_code=code, hint=hint)
 
 
-def download_media(message_id: str, chat_jid: str) -> DownloadResult:
+def download_media(message_id: str, chat_jid: str, timeout: Optional[float] = None) -> DownloadResult:
     """Download media from a message through the bridge.
 
     Args:
         message_id: The ID of the message containing the media
         chat_jid: The JID of the chat containing the message
+        timeout: Seconds to wait for the bridge; no limit when omitted
 
     Returns:
         A DownloadResult with the local path on success, or the bridge's real
         error message and a stable error_code on failure.
     """
+    extra = {} if timeout is None else {"timeout": timeout}
     try:
         response = requests.post(
             f"{WHATSAPP_API_BASE_URL}/download",
             json={"message_id": message_id, "chat_jid": chat_jid},
+            **extra,
         )
     except requests.RequestException as e:
+        # a wait that ran out (not a refused or unreachable connection) is told apart only when a limit was set
+        if timeout is not None and isinstance(e, requests.Timeout) and not isinstance(e, requests.ConnectTimeout):
+            return _download_failure(f"The bridge did not answer within {timeout:g} seconds: {e}", "DOWNLOAD_TIMEOUT")
         return _download_failure(f"Could not reach the WhatsApp bridge: {e}", "BRIDGE_UNREACHABLE")
 
     try:
@@ -1238,3 +1244,116 @@ def get_connection_status() -> dict:
             "message": f"The bridge answered HTTP {response.status_code} with an unexpected body",
         }
     return {**status, "bridge_reachable": True}
+
+
+_BATCH_TYPES = ("image", "video", "audio", "document")  # what the bridge can download
+_BATCH_MAX_ITEMS = 200
+
+
+def _batch_error(message: str) -> dict:
+    return {"success": False, "error_code": "INVALID_ARGUMENT", "message": message}
+
+
+def _batch_item(message: Message, status: str, path: Optional[str] = None, error_code: Optional[str] = None,
+                detail: Optional[str] = None, hint: Optional[str] = None) -> dict:
+    item = {
+        "message_id": message.id,
+        "timestamp": _aware(message.timestamp).isoformat(),
+        "media_type": message.media_type,
+        "filename": message.filename,
+        "status": status,
+        "path": path,
+    }
+    if error_code:
+        item["error_code"] = error_code
+        item["message"] = detail
+    if hint:
+        item["hint"] = hint
+    return item
+
+
+def download_media_batch(
+    chat_jid: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    types: Optional[List[str]] = None,
+    max_size_mb: float = 25,
+    max_items: int = 50,
+    timeout_seconds: float = 120,
+) -> dict:
+    """Download the media of a chat inside a window, one at a time, and report each item."""
+    if not chat_jid:
+        return _batch_error("chat_jid is required")
+    wanted = list(types) if types else list(_BATCH_TYPES)
+    unknown = [t for t in wanted if t not in _BATCH_TYPES]
+    if unknown:
+        return _batch_error(f"Unknown types: {', '.join(map(str, unknown))}. Use: {', '.join(_BATCH_TYPES)}.")
+    if not 1 <= max_items <= _BATCH_MAX_ITEMS:
+        return _batch_error(f"max_items must be between 1 and {_BATCH_MAX_ITEMS}")
+    if max_size_mb <= 0:
+        return _batch_error("max_size_mb must be greater than 0")
+    if not 1 <= timeout_seconds <= 600:
+        return _batch_error("timeout_seconds must be between 1 and 600")
+    try:
+        conditions, params = ["messages.chat_jid = ?"], [chat_jid]
+        if after:
+            conditions.append(f"{_INSTANT} > ?")
+            params.append(_instant_param(after, "after"))
+        if before:
+            conditions.append(f"{_INSTANT} < ?")
+            params.append(_instant_param(before, "before"))
+    except ValueError as e:
+        return _batch_error(str(e))
+
+    try:
+        conn = _open_chats()
+    except (sqlite3.Error, send_policy.DirectoryError) as e:
+        return {"success": False, "error_code": "DIRECTORY_UNAVAILABLE", "message": f"Could not read the message database: {e}"}
+    try:
+        columns = _message_select(conn.cursor())
+        conditions.append(f"messages.media_type IN ({','.join('?' * len(wanted))})")
+        found = conn.execute(
+            f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+            f"WHERE {' AND '.join(conditions)} ORDER BY {_INSTANT}, messages.rowid LIMIT ?",
+            (*params, *wanted, max_items + 1)).fetchall()
+    finally:
+        conn.close()
+    messages = [_message_from_row(row) for row in found]
+    truncated = len(messages) > max_items
+    messages = messages[:max_items]
+
+    limit_bytes = max_size_mb * 1024 * 1024
+    items, aborted = [], None
+    for message in messages:
+        if aborted:
+            items.append(_batch_item(message, "skipped", error_code="NOT_ATTEMPTED",
+                                     detail=f"Not attempted: the batch stopped ({aborted})"))
+        elif message.local_path and os.path.isfile(message.local_path):
+            items.append(_batch_item(message, "already_downloaded", path=message.local_path))
+        elif message.file_length and message.file_length > limit_bytes:
+            items.append(_batch_item(
+                message, "skipped", error_code="SKIPPED_TOO_LARGE",
+                detail=f"{format_size(message.file_length)} is over the limit of {max_size_mb:g} MB"))
+        else:
+            result = download_media(message.id, message.chat_jid, timeout=timeout_seconds)
+            if result.success:
+                items.append(_batch_item(message, "downloaded", path=result.path))
+            else:
+                items.append(_batch_item(message, "failed", error_code=result.error_code, detail=result.message,
+                                         hint=result.hint))
+                if result.error_code == "BRIDGE_UNREACHABLE":
+                    aborted = "BRIDGE_UNREACHABLE"
+
+    count = lambda status: sum(1 for item in items if item["status"] == status)
+    return {
+        "success": True,
+        "chat_jid": chat_jid,
+        "total": len(items),
+        "downloaded": count("downloaded"),
+        "already_downloaded": count("already_downloaded"),
+        "failed": count("failed"),
+        "skipped": count("skipped"),
+        "truncated": truncated,
+        "aborted": aborted,
+        "items": items,
+    }
