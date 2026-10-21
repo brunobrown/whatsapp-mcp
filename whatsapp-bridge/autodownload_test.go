@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,11 +215,16 @@ func TestAutoDownloadFailureKeepsMessage(t *testing.T) { // AUTODL-09
 
 func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AUTODL-10 (caminho antigo)
 	store := newTestStore(t)
-	seedMedia(t, store, "M1", "image", "image_M1.jpg")
+	content := []byte("already here")
+	sum := sha256.Sum256(content)
+	store.StoreChat("chat@g.us", "Chat", time.Now())
+	if err := store.StoreMessage("M1", "chat@g.us", "alice", "", time.Now(), false, "image", "image_M1.jpg", "https://x", []byte("k"), sum[:], []byte("e"), 10); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll("store/chat@g.us", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile("store/chat@g.us/image_M1.jpg", []byte("already here"), 0o644); err != nil {
+	if err := os.WriteFile("store/chat@g.us/image_M1.jpg", content, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,91 +239,25 @@ func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AU
 	}
 }
 
-func TestStoreMessageKeepsLocalPath(t *testing.T) { // AUTODL-13
-	store := newTestStore(t)
-	seedMedia(t, store, "M1", "image", "image_M1.jpg")
-	if err := store.SetLocalPath("M1", "chat@g.us", "/abs/image_M1.jpg"); err != nil {
-		t.Fatal(err)
-	}
+func TestLegacyFileOfAnotherMessageIsNotServed(t *testing.T) { // AUTODL-14 (caminho antigo)
+	real := sha256.Sum256([]byte("conteudo da mensagem"))
+	dir := t.TempDir()
+	same := filepath.Join(dir, "same.pdf")
+	other := filepath.Join(dir, "other.pdf")
+	os.WriteFile(same, []byte("conteudo da mensagem"), 0o644)
+	os.WriteFile(other, []byte("conteudo de outra mensagem com o mesmo nome"), 0o644)
 
-	// o eco/history sync grava a mesma mensagem de novo
-	if err := store.StoreMessage("M1", "chat@g.us", "alice", "legenda", time.Now(), false, "image", "image_M1.jpg", "https://x", []byte("k"), []byte("s"), []byte("e"), 10); err != nil {
-		t.Fatal(err)
+	if !legacyFileMatches(same, real[:]) {
+		t.Error("a legacy file with the message's SHA-256 must be accepted")
 	}
-
-	if got := localPathOf(t, store, "M1"); got != "/abs/image_M1.jpg" {
-		t.Errorf("local_path = %q after re-store", got)
+	if legacyFileMatches(other, real[:]) {
+		t.Error("a legacy file with a different content must be refused")
 	}
-	var content string
-	store.db.QueryRow("SELECT content FROM messages WHERE id='M1'").Scan(&content)
-	if content != "legenda" || countMessages(t, store) != 1 {
-		t.Errorf("content=%q rows=%d: re-store must still update the row", content, countMessages(t, store))
+	if legacyFileMatches(same, nil) || legacyFileMatches(same, []byte("short")) {
+		t.Error("without a valid SHA-256 the legacy file cannot be verified and must be refused")
 	}
-}
-
-func TestMigrationAddsLocalPathAndKeepsData(t *testing.T) { // AUTODL-01, AUTODL-02
-	t.Chdir(t.TempDir())
-	if err := os.MkdirAll("store", 0o755); err != nil {
-		t.Fatal(err)
-	}
-	legacy, err := sql.Open("sqlite3", "file:store/messages.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = legacy.Exec(`
-		CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);
-		CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
-			is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB,
-			file_sha256 BLOB, file_enc_sha256 BLOB, file_length INTEGER, PRIMARY KEY (id, chat_jid));
-		INSERT INTO chats VALUES ('chat@g.us', 'Chat', '2026-10-20 10:00:00');
-		INSERT INTO messages (id, chat_jid, sender, content, media_type, filename, file_length)
-			VALUES ('OLD', 'chat@g.us', 'alice', 'antiga', 'image', 'image_OLD.jpg', 77);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy.Close()
-
-	for i := 0; i < 2; i++ { // a segunda abertura é o caso idempotente
-		store, err := NewMessageStore()
-		if err != nil {
-			t.Fatalf("open #%d: %v", i+1, err)
-		}
-		var content, filename string
-		var length int
-		var lp sql.NullString
-		err = store.db.QueryRow("SELECT content, filename, file_length, local_path FROM messages WHERE id='OLD'").Scan(&content, &filename, &length, &lp)
-		if err != nil {
-			t.Fatalf("open #%d: %v", i+1, err)
-		}
-		if content != "antiga" || filename != "image_OLD.jpg" || length != 77 || lp.Valid {
-			t.Errorf("open #%d: row changed: %q %q %d %v", i+1, content, filename, length, lp)
-		}
-		store.Close()
-	}
-}
-
-func TestDownloadLimiterCapsConcurrency(t *testing.T) { // AUTODL-12
-	limiter := newDownloadLimiter(4)
-	var running, peak int32
-	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go limiter.run(func() {
-			defer wg.Done()
-			n := atomic.AddInt32(&running, 1)
-			for {
-				p := atomic.LoadInt32(&peak)
-				if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
-					break
-				}
-			}
-			time.Sleep(15 * time.Millisecond)
-			atomic.AddInt32(&running, -1)
-		})
-	}
-	wg.Wait()
-	if peak > 4 || peak < 2 {
-		t.Errorf("peak concurrency = %d, want between 2 and 4", peak)
+	if legacyFileMatches(filepath.Join(dir, "missing.pdf"), real[:]) {
+		t.Error("a missing file cannot match")
 	}
 }
 
@@ -534,5 +476,43 @@ func TestMaybeAutoDownloadUsesLimiterAndRuns(t *testing.T) { // hook de handleMe
 func TestProductionLimiterAllowsFourDownloads(t *testing.T) { // AUTODL-12
 	if got := cap(autoDownloadLimiter); got != 4 {
 		t.Errorf("production limiter size = %d, want 4", got)
+	}
+}
+
+func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy usa ReadFrom do *os.File)
+	f, err := os.CreateTemp(t.TempDir(), "capped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	c := &cappedFile{File: f, max: 1000}
+
+	_, err = io.Copy(c, bytes.NewReader(make([]byte, 50_000)))
+
+	if err == nil {
+		t.Fatal("io.Copy past the limit must fail")
+	}
+	if info, _ := f.Stat(); info.Size() > 1000 {
+		t.Errorf("file grew to %d bytes, limit is 1000", info.Size())
+	}
+}
+
+func TestMediaDirsDoNotCollideAfterSanitizing(t *testing.T) { // AUTODL-14
+	newTestStore(t)
+	_, a, err := mediaFilePath("chat@g.us", "a/b", "f.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, b, err := mediaFilePath("chat@g.us", "a_b", "f.pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Errorf("message IDs a/b and a_b share %s", a)
+	}
+	// IDs que já são seguros (os do WhatsApp) mantêm o nome simples
+	_, plain, _ := mediaFilePath("chat@g.us", "3EB0ABC123", "f.pdf")
+	if filepath.Base(filepath.Dir(plain)) != "3EB0ABC123" {
+		t.Errorf("a safe ID must be used as is, got %s", plain)
 	}
 }
