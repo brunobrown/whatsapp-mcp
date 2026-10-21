@@ -23,6 +23,8 @@ mcp = FastMCP("whatsapp")
 def send_response(result) -> Dict[str, Any]:
     """Build a send tool's answer; message_id, timestamp and chat_jid appear only when the bridge reported them."""
     response: Dict[str, Any] = {"success": result.success, "message": result.message}
+    if result.error_code:
+        response["error_code"] = result.error_code
     if result.success:
         for field in ("message_id", "timestamp", "chat_jid"):
             value = getattr(result, field)
@@ -169,7 +171,8 @@ def get_message_context(
 @mcp.tool()
 def send_message(
     recipient: str,
-    message: str
+    message: str,
+    override_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """Send a WhatsApp message to a person or group. For group chats use the JID.
 
@@ -177,9 +180,12 @@ def send_message(
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         message: The message text to send
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
     
     Returns:
-        A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
+        A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid.
+        A send the policy blocks returns success=false with error_code=SEND_BLOCKED_BY_POLICY and nothing is sent;
+        a recipient name that matches no chat or several returns RECIPIENT_NOT_FOUND or RECIPIENT_AMBIGUOUS
     """
     # Validate input
     if not recipient:
@@ -189,37 +195,39 @@ def send_message(
         }
     
     # Call the whatsapp_send_message function with the unified recipient parameter
-    return send_response(whatsapp_send_message(recipient, message))
+    return send_response(whatsapp_send_message(recipient, message, override_token))
 
 @mcp.tool()
-def send_file(recipient: str, media_path: str) -> Dict[str, Any]:
+def send_file(recipient: str, media_path: str, override_token: Optional[str] = None) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
     
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         media_path: The absolute path to the media file to send (image, video, document)
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
     
     Returns:
         A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
     """
     
     # Call the whatsapp_send_file function
-    return send_response(whatsapp_send_file(recipient, media_path))
+    return send_response(whatsapp_send_file(recipient, media_path, override_token))
 
 @mcp.tool()
-def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
+def send_audio_message(recipient: str, media_path: str, override_token: Optional[str] = None) -> Dict[str, Any]:
     """Send any audio file as a WhatsApp audio message to the specified recipient. For group messages use the JID. If it errors due to ffmpeg not being installed, use send_file instead.
     
     Args:
         recipient: The recipient - either a phone number with country code but no + or other symbols,
                  or a JID (e.g., "123456789@s.whatsapp.net" or a group JID like "123456789@g.us")
         media_path: The absolute path to the audio file to send (will be converted to Opus .ogg if it's not a .ogg file)
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
     
     Returns:
         A dictionary containing success status and a status message and, when sent, the message_id, timestamp and chat_jid
     """
-    return send_response(whatsapp_audio_voice_message(recipient, media_path))
+    return send_response(whatsapp_audio_voice_message(recipient, media_path, override_token))
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
