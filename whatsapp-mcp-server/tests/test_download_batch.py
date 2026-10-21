@@ -226,3 +226,92 @@ def test_download_media_timeout_is_its_own_error_code():  # LIM-03
     with mock.patch("whatsapp.requests.post", side_effect=requests.Timeout("slow")):
         result = whatsapp.download_media("M", CHAT, timeout=3)
     assert result.success is False and result.error_code == "DOWNLOAD_TIMEOUT"
+
+
+def test_window_limits_are_exclusive_at_the_exact_instant(conn):  # BATCH-01
+    add(conn, "EDGE", 0, hour=10)
+    add(conn, "NEXT", 1, hour=10)
+
+    out, _ = run(conn, after="2026-10-21T10:00:00+00:00")
+    assert [i["message_id"] for i in out["items"]] == ["NEXT"]
+    out, _ = run(conn, before="2026-10-21T10:01:00+00:00")
+    assert [i["message_id"] for i in out["items"]] == ["EDGE"]
+
+
+def test_order_is_by_instant_with_mixed_offsets_and_write_order_on_ties(conn):  # BATCH-01
+    def raw(id, ts):
+        conn.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, file_length) "
+                     "VALUES (?, ?, 's', '', ?, 0, 'image', 'f', 10)", (id, CHAT, ts))
+    raw("B", "2026-10-21 10:00:00-03:00")   # 13:00 UTC
+    raw("A", "2026-10-21 12:00:00+00:00")   # 12:00 UTC: antes de B no tempo, embora o texto "12" venha depois de "10"
+    raw("T1", "2026-10-21 13:00:00+00:00")  # mesmo instante de B, gravada depois
+    conn.commit()
+
+    out, _ = run(conn)
+
+    assert [i["message_id"] for i in out["items"]] == ["A", "B", "T1"]
+
+
+def test_every_count_is_reported(conn, tmp_path):  # BATCH-03
+    present = tmp_path / "p.jpg"
+    present.write_bytes(b"x")
+    add(conn, "HAVE", 1, local_path=str(present))
+    add(conn, "BIG", 2, size=99 * 1024 * 1024)
+    add(conn, "FAIL", 3)
+    add(conn, "OK", 4)
+
+    out, _ = run(conn, {"FAIL": reply(500, {"success": False, "message": "boom"})})
+
+    assert (out["total"], out["downloaded"], out["already_downloaded"], out["failed"], out["skipped"]) == (4, 1, 1, 1, 1)
+
+
+def test_connect_timeout_means_the_bridge_is_unreachable(conn):  # LIM-04
+    add(conn, "A", 1)
+    add(conn, "B", 2)
+
+    out, bridge = run(conn, {"A": requests.ConnectTimeout("no route")})
+
+    assert out["items"][0]["error_code"] == "BRIDGE_UNREACHABLE" and out["aborted"] == "BRIDGE_UNREACHABLE"
+    assert out["items"][1]["status"] == "skipped" and [c[0] for c in bridge.calls] == ["A"]
+
+
+def test_empty_types_list_means_every_type(conn):  # BATCH-01
+    add(conn, "I", 1, media_type="image")
+    add(conn, "D", 2, media_type="document")
+
+    out, _ = run(conn, types=[])
+
+    assert [i["message_id"] for i in out["items"]] == ["I", "D"]
+
+
+def test_old_database_without_optional_columns_still_downloads(tmp_path, monkeypatch):  # BATCH-02
+    path = str(tmp_path / "old.db")
+    c = sqlite3.connect(path)
+    c.executescript("""
+        CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);
+        CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
+            is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
+            file_enc_sha256 BLOB, file_length INTEGER, PRIMARY KEY (id, chat_jid));
+        INSERT INTO chats VALUES ('g@g.us', 'Grupo', NULL);
+        INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, file_length)
+            VALUES ('OLD', 'g@g.us', 's', '', '2026-10-21 10:00:00+00:00', 0, 'image', 'a.jpg', 10);""")
+    c.commit()
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
+
+    bridge = Bridge({})
+    with mock.patch("whatsapp.requests.post", bridge):
+        out = main.download_media_batch(CHAT)
+
+    assert out["success"] is True and statuses(out) == {"OLD": "downloaded"}
+
+
+def test_missing_database_is_reported_and_never_created(tmp_path, monkeypatch):  # BATCH-02
+    missing = tmp_path / "none.db"
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(missing))
+
+    with mock.patch("whatsapp.requests.post") as post:
+        out = main.download_media_batch(CHAT)
+
+    assert out["success"] is False and out["error_code"] == "DIRECTORY_UNAVAILABLE"
+    assert not missing.exists()
+    post.assert_not_called()
