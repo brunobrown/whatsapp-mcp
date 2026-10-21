@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net/http"
@@ -662,7 +663,6 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	)
 
 	if err == nil && autoDownloadCfg.allows(mediaType, fileLength) {
-		// In the background: the download must not hold up message handling.
 		waType, _ := waMediaTypeFor(mediaType)
 		downloader := &MediaDownloader{
 			URL:           url,
@@ -673,13 +673,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			FileEncSHA256: fileEncSHA256,
 			MediaType:     waType,
 		}
-		id := msg.Info.ID
-		go autoDownloadLimiter.run(func() {
-			download := func() ([]byte, error) { return client.Download(context.Background(), downloader) }
-			if _, err := autoDownload(messageStore, autoDownloadCfg, download, id, chatJID, mediaType, filename, fileLength); err != nil {
-				logger.Warnf("Auto download of %s in %s failed (use download_media to retry): %v", id, chatJID, err)
-			}
-		})
+		download := func(f whatsmeow.File) error { return client.DownloadToFile(context.Background(), downloader, f) }
+		maybeAutoDownload(messageStore, autoDownloadCfg, autoDownloadLimiter, download, err,
+			msg.Info.ID, chatJID, mediaType, filename, fileLength, logger)
 	}
 
 	if err != nil {
@@ -901,16 +897,19 @@ func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFrom
 }
 
 // Function to download media from a message
-// mediaFilePath returns where the media of a chat is stored, creating the chat directory.
-// filename ultimately comes from message content sent by the other party, so it's sanitized
-// again here (defense in depth on top of extractMediaInfo) and the result is confirmed to
-// land inside the chat directory.
-func mediaFilePath(chatJID, filename string) (localPath, absPath string, err error) {
+// mediaFilePath returns where the media of a message is stored: store/<chat>/<message id>/<filename>,
+// creating the directory. The message ID keeps two messages with the same filename apart; the
+// filename is chosen by the sender, so without it one sender could plant a file that a later
+// message of someone else would be served. Both components ultimately come from other parties
+// and are sanitized here (defense in depth on top of extractMediaInfo), and the result is
+// confirmed to land inside the chat directory.
+func mediaFilePath(chatJID, messageID, filename string) (localPath, absPath string, err error) {
 	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
-	if err := os.MkdirAll(chatDir, 0755); err != nil {
-		return "", "", fmt.Errorf("failed to create chat directory: %v", err)
+	msgDir := fmt.Sprintf("%s/%s", chatDir, sanitizeFilename(messageID))
+	if err := os.MkdirAll(msgDir, 0755); err != nil {
+		return "", "", fmt.Errorf("failed to create media directory: %v", err)
 	}
-	localPath = fmt.Sprintf("%s/%s", chatDir, sanitizeFilename(filename))
+	localPath = fmt.Sprintf("%s/%s", msgDir, sanitizeFilename(filename))
 	absPath, err = filepath.Abs(localPath)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get absolute path: %v", err)
@@ -919,10 +918,81 @@ func mediaFilePath(chatJID, filename string) (localPath, absPath string, err err
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get absolute chat directory path: %v", err)
 	}
-	if absPath != absChatDir && !strings.HasPrefix(absPath, absChatDir+string(os.PathSeparator)) {
+	if !strings.HasPrefix(absPath, absChatDir+string(os.PathSeparator)) {
 		return "", "", fmt.Errorf("refusing to use media path outside chat directory: %s", absPath)
 	}
 	return localPath, absPath, nil
+}
+
+// legacyMediaFilePath is where versions before the per-message directory saved media. It is only
+// read, for files the user already downloaded; nothing new is ever written there.
+func legacyMediaFilePath(chatJID, filename string) string {
+	return fmt.Sprintf("store/%s/%s", strings.ReplaceAll(chatJID, ":", "_"), sanitizeFilename(filename))
+}
+
+// saveAtomic writes a file through a unique temporary file in the same directory and renames
+// it into place, so the final path never holds a truncated file (a crash would otherwise leave
+// one that later existence checks take for a finished download).
+func saveAtomic(localPath string, fill func(f *os.File) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(localPath), ".part-*")
+	if err != nil {
+		return fmt.Errorf("failed to save media file: %v", err)
+	}
+	tmpName := tmp.Name()
+	err = fill(tmp)
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, localPath)
+	}
+	if err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("failed to save media file: %v", err)
+	}
+	return nil
+}
+
+// storeDownloadedMedia saves downloaded media and records its path.
+func storeDownloadedMedia(store *MessageStore, messageID, chatJID, absPath string, data []byte) error {
+	if err := saveAtomic(absPath, func(f *os.File) error { _, err := f.Write(data); return err }); err != nil {
+		return err
+	}
+	return store.SetLocalPath(messageID, chatJID, absPath)
+}
+
+// cappedFile refuses to grow past max bytes, so a download whose real size is larger than
+// the size the sender declared is aborted instead of filling the disk.
+type cappedFile struct {
+	*os.File
+	max int64
+}
+
+var errMediaTooLarge = fmt.Errorf("media is larger than the auto download limit")
+
+func (c *cappedFile) Write(p []byte) (int, error) {
+	pos, err := c.File.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	if pos+int64(len(p)) > c.max {
+		return 0, errMediaTooLarge
+	}
+	return c.File.Write(p)
+}
+
+func (c *cappedFile) WriteAt(p []byte, off int64) (int, error) {
+	if off+int64(len(p)) > c.max {
+		return 0, errMediaTooLarge
+	}
+	return c.File.WriteAt(p, off)
+}
+
+func (c *cappedFile) Truncate(size int64) error {
+	if size > c.max {
+		return errMediaTooLarge
+	}
+	return c.File.Truncate(size)
 }
 
 func waMediaTypeFor(mediaType string) (whatsmeow.MediaType, bool) {
@@ -966,18 +1036,21 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 		return false, "", "", "", fmt.Errorf("not a media message")
 	}
 
-	localPath, absPath, err := mediaFilePath(chatJID, filename)
+	localPath, absPath, err := mediaFilePath(chatJID, messageID, filename)
 	if err != nil {
 		return false, "", "", "", err
 	}
 
-	// Check if file already exists
-	if _, err := os.Stat(localPath); err == nil {
-		// File exists, return it without contacting WhatsApp
-		if err := messageStore.SetLocalPath(messageID, chatJID, absPath); err != nil {
-			fmt.Printf("Failed to record local_path for %s: %v\n", messageID, err)
+	// Already downloaded (automatically or before): return the file without contacting WhatsApp.
+	// A file saved by an older version sits at the legacy path.
+	for _, existing := range []string{localPath, legacyMediaFilePath(chatJID, filename)} {
+		if _, err := os.Stat(existing); err == nil {
+			existingAbs, _ := filepath.Abs(existing)
+			if err := messageStore.SetLocalPath(messageID, chatJID, existingAbs); err != nil {
+				fmt.Printf("Failed to record local_path for %s: %v\n", messageID, err)
+			}
+			return true, mediaType, filename, existingAbs, nil
 		}
-		return true, mediaType, filename, absPath, nil
 	}
 
 	// If we don't have all the media info we need, we can't download
@@ -1026,12 +1099,8 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	}
 
 	// Save the downloaded media to file
-	if err := os.WriteFile(localPath, mediaData, 0644); err != nil {
-		return false, "", "", "", fmt.Errorf("failed to save media file: %v", err)
-	}
-
-	if err := messageStore.SetLocalPath(messageID, chatJID, absPath); err != nil {
-		fmt.Printf("Failed to record local_path for %s: %v\n", messageID, err)
+	if err := storeDownloadedMedia(messageStore, messageID, chatJID, absPath, mediaData); err != nil {
+		return false, "", "", "", err
 	}
 	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, absPath, len(mediaData))
 	return true, mediaType, filename, absPath, nil
@@ -1077,37 +1146,58 @@ func (cfg AutoDownloadConfig) allows(mediaType string, fileLength uint64) bool {
 	return cfg.Enabled && cfg.Types[mediaType] && fileLength > 0 && fileLength <= cfg.MaxBytes
 }
 
+// mediaCryptoOverhead is the slack allowed over the size limit for the padding and MAC of the
+// encrypted file, which is a little larger than its plaintext.
+const mediaCryptoOverhead = 64
+
 // autoDownload saves the media of a message when the config allows it and records its path.
-// It returns an empty path and no error when the media is skipped.
-func autoDownload(store *MessageStore, cfg AutoDownloadConfig, download func() ([]byte, error), messageID, chatJID, mediaType, filename string, fileLength uint64) (string, error) {
+// It returns an empty path and no error when the media is skipped. download writes into the
+// file it is given; the file refuses to grow past the size limit whatever the sender declared.
+func autoDownload(store *MessageStore, cfg AutoDownloadConfig, download func(whatsmeow.File) error, messageID, chatJID, mediaType, filename string, fileLength uint64) (string, error) {
 	if !cfg.allows(mediaType, fileLength) {
 		return "", nil
 	}
-	localPath, absPath, err := mediaFilePath(chatJID, filename)
+	localPath, absPath, err := mediaFilePath(chatJID, messageID, filename)
 	if err != nil {
 		return "", err
 	}
 	if _, err := os.Stat(localPath); err != nil {
-		data, err := download()
+		err := saveAtomic(localPath, func(f *os.File) error {
+			if err := download(&cappedFile{File: f, max: int64(cfg.MaxBytes) + mediaCryptoOverhead}); err != nil {
+				return err
+			}
+			info, err := f.Stat()
+			if err != nil {
+				return err
+			}
+			if info.Size() > int64(cfg.MaxBytes) {
+				return errMediaTooLarge
+			}
+			return nil
+		})
 		if err != nil {
 			return "", err
-		}
-		// Write beside the target and rename, so a crash never leaves a truncated file
-		// that downloadMedia would later mistake for a finished download.
-		tmp := localPath + ".part"
-		if err := os.WriteFile(tmp, data, 0644); err != nil {
-			os.Remove(tmp)
-			return "", fmt.Errorf("failed to save media file: %v", err)
-		}
-		if err := os.Rename(tmp, localPath); err != nil {
-			os.Remove(tmp)
-			return "", fmt.Errorf("failed to save media file: %v", err)
 		}
 	}
 	if err := store.SetLocalPath(messageID, chatJID, absPath); err != nil {
 		return absPath, fmt.Errorf("saved media but failed to record local_path: %v", err)
 	}
 	return absPath, nil
+}
+
+// maybeAutoDownload starts the background download of a message that was just stored. It does
+// nothing when the message could not be stored or the config skips the media. The download
+// must not hold up message handling, and the limiter bounds how many run at once.
+func maybeAutoDownload(store *MessageStore, cfg AutoDownloadConfig, limiter downloadLimiter, download func(whatsmeow.File) error, storeErr error,
+	messageID, chatJID, mediaType, filename string, fileLength uint64, logger waLog.Logger) {
+	if storeErr != nil || !cfg.allows(mediaType, fileLength) {
+		return
+	}
+	go limiter.run(func() {
+		if _, err := autoDownload(store, cfg, download, messageID, chatJID, mediaType, filename, fileLength); err != nil && logger != nil {
+			logger.Warnf("Auto download of %s in %s failed (use download_media to retry): %v", messageID, chatJID, err)
+		}
+	})
 }
 
 // downloadLimiter bounds how many automatic downloads run at once.
@@ -1121,9 +1211,11 @@ func (l downloadLimiter) run(fn func()) {
 	fn()
 }
 
+const autoDownloadConcurrency = 4
+
 var (
 	autoDownloadCfg     = loadAutoDownloadConfig(os.Getenv)
-	autoDownloadLimiter = newDownloadLimiter(4)
+	autoDownloadLimiter = newDownloadLimiter(autoDownloadConcurrency)
 )
 
 // Extract direct path from a WhatsApp media URL
