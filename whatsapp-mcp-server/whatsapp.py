@@ -64,9 +64,15 @@ class Identity:
         return self.full_name or self.push_name or None
 
 
+_PHONE_LIKE = re.compile(r"[+\d\s().-]+")
+
+
 def _digits(value: str) -> str:
     """Keep the id part of a JID and only its digits: '+55 (51) 8199-3271' and '5551819932 71@s.whatsapp.net' both work."""
-    return re.sub(r"\D", "", value.split("@")[0])
+    ident = value.split("@")[0]
+    if not _PHONE_LIKE.fullmatch(ident):
+        return ""  # text such as "Teilor2024" is not a phone number
+    return re.sub(r"\D", "", ident)
 
 
 def lookup_identity(value: str) -> Optional[Identity]:
@@ -103,6 +109,17 @@ def sender_ids(value: str) -> List[str]:
             if extra and extra not in ids:
                 ids.append(extra)
     return ids
+
+
+def _person_ids_and_jids(value: str) -> Tuple[List[str], List[str]]:
+    """The sender ids of a person and the JIDs their direct chats can have (phone or LID)."""
+    ids = sender_ids(value)
+    jids = [value]
+    for ident in ids:
+        for jid in (f"{ident}@s.whatsapp.net", f"{ident}@lid"):
+            if jid not in jids:
+                jids.append(jid)
+    return ids, jids
 
 
 def get_sender_name(sender_jid: str) -> str:
@@ -478,7 +495,8 @@ def _search_identities(conn: sqlite3.Connection, query: str) -> Tuple[List[Conta
     Both are empty when the bridge has not created contacts_identity yet."""
     pattern = f"%{query.lower()}%"
     digits = _digits(query)
-    digit_pattern = f"%{digits}%" if len(digits) >= 3 else pattern
+    # a query of fewer than 3 digits is matched against names only, never against ids
+    digit_pattern = f"%{digits}%" if len(digits) >= 3 else None
     try:
         rows = conn.execute("""
             SELECT lid, phone, full_name, push_name
@@ -545,6 +563,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         page: Page number for pagination (default 0)
     """
     try:
+        ids, jids = _person_ids_and_jids(jid)
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
@@ -558,10 +577,11 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
                 m.is_from_me as last_is_from_me
             FROM chats c
             JOIN messages m ON c.jid = m.chat_jid
-            WHERE m.sender = ? OR c.jid = ?
+            WHERE m.sender IN ({sender_marks}) OR c.jid IN ({jid_marks})
             ORDER BY c.last_message_time DESC
             LIMIT ? OFFSET ?
-        """, (jid, jid, limit, page * limit))
+        """.format(sender_marks=",".join("?" * len(ids)), jid_marks=",".join("?" * len(jids))),
+            (*ids, *jids, limit, page * limit))
         
         chats = cursor.fetchall()
         
@@ -590,6 +610,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
 def get_last_interaction(jid: str) -> str:
     """Get most recent message involving the contact."""
     try:
+        ids, jids = _person_ids_and_jids(jid)
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
         
@@ -605,10 +626,11 @@ def get_last_interaction(jid: str) -> str:
                 m.media_type
             FROM messages m
             JOIN chats c ON m.chat_jid = c.jid
-            WHERE m.sender = ? OR c.jid = ?
+            WHERE m.sender IN ({sender_marks}) OR c.jid IN ({jid_marks})
             ORDER BY m.timestamp DESC
             LIMIT 1
-        """, (jid, jid))
+        """.format(sender_marks=",".join("?" * len(ids)), jid_marks=",".join("?" * len(jids))),
+            (*ids, *jids))
         
         msg_data = cursor.fetchone()
         

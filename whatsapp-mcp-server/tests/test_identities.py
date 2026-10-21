@@ -213,3 +213,46 @@ def test_sender_name_falls_back_to_chat_name(db):  # NAME-01 (sem identidade, o 
     conn.commit()
     conn.close()
     assert "From: Cliente X (558100000000): oi" in whatsapp.format_message(message("558100000000", "oi"))
+
+
+@pytest.mark.parametrize("text", ["user@160889625940144", "@@160889625940144", "a@160889625940144"])
+def test_mention_ignores_ids_glued_to_other_text(db, text):  # NAME-06 (e-mail ou arroba colada não é menção)
+    assert whatsapp.resolve_mentions(text) == text
+
+
+def test_legacy_db_still_finds_chat_contacts(tmp_path, monkeypatch):  # NAME-07
+    path = str(tmp_path / "old.db")
+    build_db(path, with_identity=False)
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", ("558100000000@s.whatsapp.net", "Cliente X"))
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
+
+    found = whatsapp.search_contacts("Cliente")
+    assert [(c.name, c.jid) for c in found] == [("Cliente X", "558100000000@s.whatsapp.net")]
+
+
+def test_short_digit_query_does_not_match_ids(db):  # NAME-05 (consulta curta não vira ruído)
+    assert whatsapp.search_contacts("5") == []
+    assert whatsapp.search_contacts("55") == []
+
+
+def test_non_numeric_text_is_not_treated_as_a_phone(db):  # NAME-04
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO contacts_identity (phone, full_name) VALUES ('2024', 'Número Curto')")
+    conn.commit()
+    conn.close()
+    assert whatsapp.lookup_identity("Teilor2024") is None
+    assert whatsapp.lookup_identity("2024").full_name == "Número Curto"
+
+
+def test_last_interaction_and_contact_chats_resolve_both_ids(db):  # consistência com NAME-04
+    # a pessoa é consultada pelo telefone, mas a última mensagem dela veio pela LID
+    out = whatsapp.get_last_interaction(TEILOR_PHONE)
+    assert "oi pelo telefone" in out  # m2 é a mais recente entre m1 (LID) e m2 (telefone)
+    out = whatsapp.get_last_interaction(TEILOR_LID)
+    assert "oi pelo telefone" in out
+    assert {c.jid for c in whatsapp.get_contact_chats(TEILOR_PHONE)} == {GROUP}
+    assert {c.jid for c in whatsapp.get_contact_chats(TEILOR_LID)} == {GROUP}
+    assert whatsapp.get_contact_chats("999111000") == []  # desconhecido continua sem resultado
