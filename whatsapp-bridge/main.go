@@ -1409,6 +1409,9 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		json.NewEncoder(w).Encode(newSendResponse(result))
 	})
 
+	// Handler for listing the participants of a group
+	http.HandleFunc("/api/group_participants", handleGroupParticipants(client, messageStore))
+
 	// Handler for downloading media
 	http.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -1524,8 +1527,22 @@ func main() {
 	client.AddEventHandler(func(evt interface{}) {
 		switch v := evt.(type) {
 		case *events.Message:
+			// Learn who the sender is (LID, phone, push name) before storing the message
+			if err := recordMessageIdentity(messageStore, v.Info); err != nil {
+				logger.Warnf("Failed to record sender identity: %v", err)
+			}
 			// Process regular messages
 			handleMessage(client, messageStore, v, logger)
+
+		case *events.PushName:
+			if err := recordPushNameEvent(messageStore, v); err != nil {
+				logger.Warnf("Failed to record push name: %v", err)
+			}
+
+		case *events.Contact:
+			if err := recordContactEvent(messageStore, v); err != nil {
+				logger.Warnf("Failed to record contact: %v", err)
+			}
 
 		case *events.HistorySync:
 			// Process history sync events
@@ -1537,6 +1554,15 @@ func main() {
 
 		case *events.Connected:
 			logger.Infof("Connected to WhatsApp")
+			// In the background: it reads every contact and can take a while
+			go func() {
+				n, err := syncIdentities(context.Background(), messageStore, whatsmeowIdentitySource{client}, logger)
+				if err != nil {
+					logger.Warnf("Identity sync failed: %v", err)
+					return
+				}
+				logger.Infof("Identity sync recorded %d identities", n)
+			}()
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
