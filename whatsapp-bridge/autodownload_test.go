@@ -487,7 +487,9 @@ func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy usa ReadFr
 	defer f.Close()
 	c := &cappedFile{File: f, max: 1000}
 
-	_, err = io.Copy(c, bytes.NewReader(make([]byte, 50_000)))
+	// como o corpo de uma resposta HTTP: sem WriteTo, então io.Copy cai no ReadFrom do destino
+	body := struct{ io.Reader }{bytes.NewReader(make([]byte, 50_000))}
+	_, err = io.Copy(c, body)
 
 	if err == nil {
 		t.Fatal("io.Copy past the limit must fail")
@@ -499,7 +501,7 @@ func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy usa ReadFr
 
 func TestMediaDirsDoNotCollideAfterSanitizing(t *testing.T) { // AUTODL-14
 	newTestStore(t)
-	_, a, err := mediaFilePath("chat@g.us", "a/b", "f.pdf")
+	_, a, err := mediaFilePath("chat@g.us", "a b", "f.pdf")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,11 +510,32 @@ func TestMediaDirsDoNotCollideAfterSanitizing(t *testing.T) { // AUTODL-14
 		t.Fatal(err)
 	}
 	if a == b {
-		t.Errorf("message IDs a/b and a_b share %s", a)
+		t.Errorf("message IDs 'a b' and 'a_b' share %s", a)
 	}
 	// IDs que já são seguros (os do WhatsApp) mantêm o nome simples
 	_, plain, _ := mediaFilePath("chat@g.us", "3EB0ABC123", "f.pdf")
 	if filepath.Base(filepath.Dir(plain)) != "3EB0ABC123" {
 		t.Errorf("a safe ID must be used as is, got %s", plain)
+	}
+}
+
+func TestDownloadMediaIgnoresLegacyFileOfAnotherMessage(t *testing.T) { // AUTODL-14 (caminho antigo, via downloadMedia)
+	store := newTestStore(t)
+	real := sha256.Sum256([]byte("conteudo real"))
+	store.StoreChat("chat@g.us", "Chat", time.Now())
+	// sem URL: se o arquivo antigo for recusado, downloadMedia para antes de falar com o cliente
+	if err := store.StoreMessage("M1", "chat@g.us", "alice", "", time.Now(), false, "document", "proposta.pdf", "", nil, real[:], nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll("store/chat@g.us", 0o755)
+	os.WriteFile("store/chat@g.us/proposta.pdf", []byte("arquivo de outra mensagem"), 0o644)
+
+	ok, _, _, path, err := downloadMedia(nil, store, "M1", "chat@g.us")
+
+	if ok || path != "" || err == nil {
+		t.Fatalf("downloadMedia = (%v, %q, %v): served a legacy file that is not this message's", ok, path, err)
+	}
+	if localPathOf(t, store, "M1") != "" {
+		t.Error("local_path must stay empty")
 	}
 }
