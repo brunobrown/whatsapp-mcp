@@ -137,6 +137,17 @@ def test_context_messages_show_the_same_details(conn):  # MEDIA-10
     assert ctx.message.filename is None and ctx.message.forwarded is False
 
 
+def test_context_target_media_shows_details(conn):  # MEDIA-10
+    add(conn, "TARGET", 1, media_type="document", filename="alvo.pdf", mimetype="application/pdf",
+        file_length=3072, forwarded=1, quoted_id="Q9")
+
+    ctx = whatsapp.get_message_context("TARGET", before=0, after=0)
+    out = whatsapp.format_message(ctx.message)
+
+    assert "File: alvo.pdf (application/pdf, 3.0 KB)" in out
+    assert "Forwarded" in out and "Reply to: Q9" in out
+
+
 def test_database_without_new_columns_still_lists(tmp_path, monkeypatch):  # MEDIA-09
     path = str(tmp_path / "old.db")
     c = make_db(path, with_meta=False)
