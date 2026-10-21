@@ -60,6 +60,14 @@ func (s *bridgeState) record(evt interface{}) {
 	}
 }
 
+// recordingHandler wraps an event handler so that the state notes every event before it is handled.
+func recordingHandler(state *bridgeState, handle func(interface{})) func(interface{}) {
+	return func(evt interface{}) {
+		state.record(evt)
+		handle(evt)
+	}
+}
+
 // pendingMediaRetries is how many media retry requests wait for an answer from WhatsApp.
 func pendingMediaRetries() int {
 	mediaRetryMu.Lock()
@@ -99,6 +107,7 @@ func orNil(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
 	}
+	t = t.UTC()
 	return &t
 }
 
@@ -110,7 +119,7 @@ func (s *bridgeState) snapshot(src connectionSource, pending int, version string
 		LoggedIn:            src.IsLoggedIn(),
 		Phone:               src.Phone(),
 		Version:             version,
-		StartedAt:           s.startedAt,
+		StartedAt:           s.startedAt.UTC(),
 		UptimeSeconds:       int64(s.now().Sub(s.startedAt).Seconds()),
 		LastEventAt:         orNil(s.lastEvent),
 		LastMessageAt:       orNil(s.lastMessage),
