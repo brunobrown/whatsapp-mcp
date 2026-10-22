@@ -362,8 +362,8 @@ def get_monitor_profiles() -> Dict[str, Any]:
     """List the monitoring profiles of monitor_profiles.json: targets, triggers, filters, mode (draft or auto), limits and instructions.
 
     Returns success=true and profiles (each with name, enabled, targets, triggers, chats, senders, topics, mode, auto_senders,
-    limits, max_event_age_minutes, instructions and has_approval_token, never the token itself). The file is read on every
-    call. An invalid file blocks every profile: success=false, error_code=MONITOR_CONFIG_INVALID.
+    limits, max_event_age_minutes, instructions and has_approval_token, never the token itself) and, when monitor_profiles.json or send_policy.json can be read by other
+    users of the machine, warnings (with the chmod to run). The file is read on every call. An invalid file blocks every profile: success=false, error_code=MONITOR_CONFIG_INVALID.
     """
     return monitor.list_profiles()
 

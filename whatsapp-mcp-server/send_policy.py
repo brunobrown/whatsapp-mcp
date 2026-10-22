@@ -9,6 +9,7 @@ send. A missing file allows everything; a broken one blocks everything. The over
 deliberate speed bump for one-off releases, not a security boundary: whoever can read the file can
 read the token.
 """
+import filemode
 import hmac
 import json
 import logging
@@ -115,6 +116,7 @@ def resolve_target(recipient: str, directory: Directory) -> Target:
 
 def _load() -> Tuple[Optional[dict], Optional[str]]:
     """The policy, or (None, None) when there is no file, or (None, problem) when it is unusable."""
+    filemode.warn_if_open(POLICY_PATH)   # the override token must not be readable by other users
     try:
         with open(POLICY_PATH, encoding="utf-8") as f:
             policy = json.load(f)
