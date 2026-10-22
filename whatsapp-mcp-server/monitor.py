@@ -321,11 +321,37 @@ def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], 
     return found
 
 
+def _kind(number: str) -> str:
+    return "lid" if len(number) > 13 else "phone"      # the same rule the bridge uses
+
+
+def sender_is_denied(sender: str, deny: List[str]) -> bool:
+    """True when sender is on the block list, or cannot be told apart from someone on it (fail closed).
+
+    A block entry given as a phone number reaches a LID sender only through contacts_identity. When the sender is a
+    LID the directory has no person for, and a block entry has no counterpart of the sender's kind, the sender could be
+    that person, so the message is not delivered.
+    """
+    if not deny:
+        return False
+    if sender in _ids_of(deny):
+        return True
+    if len(whatsapp.sender_ids(sender)) > 1:           # a known person: compared by every id they have
+        return False
+    return any(_kind(i) != _kind(sender) for d in deny for i in [_single_kind(d)] if i)
+
+
+def _single_kind(entry: str) -> Optional[str]:
+    """entry when the directory knows it under one addressing only (so it has no counterpart), else None."""
+    ids = _ids_of([entry])
+    return entry if len({_kind(i) for i in ids}) == 1 else None
+
+
 def passes_filters(message: whatsapp.Message, profile: Profile) -> bool:
     if profile.chats and message.chat_jid not in profile.chats:
         return False
     sender = message.sender
-    if profile.senders_deny and sender in _ids_of(profile.senders_deny):
+    if sender_is_denied(sender, profile.senders_deny):
         return False
     if profile.senders_allow and sender not in _ids_of(profile.senders_allow):
         return False
