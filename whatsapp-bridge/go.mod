@@ -3,8 +3,8 @@ module whatsapp-client
 go 1.26.0
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.49
 	github.com/mdp/qrterminal v1.0.1
+	github.com/mutecomm/go-sqlcipher/v4 v4.4.2
 	go.mau.fi/whatsmeow v0.0.0-20260909164725-b25a56d63729
 	google.golang.org/protobuf v1.36.12
 )

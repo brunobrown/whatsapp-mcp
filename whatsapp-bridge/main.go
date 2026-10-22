@@ -22,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 
 	"bytes"
 
@@ -53,13 +52,21 @@ type MessageStore struct {
 
 // Initialize message store
 func NewMessageStore() (*MessageStore, error) {
+	cfg, err := loadDBConfig()
+	if err != nil {
+		return nil, err
+	}
+	return newMessageStore(cfg)
+}
+
+func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	// Create directory for database if it doesn't exist
 	if err := os.MkdirAll("store", privateDirMode); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %v", err)
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on&_busy_timeout=5000&_txlock=immediate")
+	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -1651,9 +1658,28 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	dbCfg, err := loadDBConfig()
+	if err != nil {
+		logger.Errorf("Cannot set up the database encryption: %v", err)
+		return
+	}
+	if dbCfg.Encrypted {
+		logger.Infof("The databases are encrypted; the key comes from %s", dbCfg.Source)
+	} else {
+		logger.Warnf("%s=off: the databases are NOT encrypted", dbEncryptionEnv)
+	}
+	for _, warning := range dbCfg.Warnings {
+		logger.Warnf("%s", warning)
+	}
+
+	sessionDB, err := openDatabase("store/"+sessionDBName, sessionDBName, "_foreign_keys=on", dbCfg)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
+		return
+	}
+	container := sqlstore.NewWithDB(sessionDB, "sqlite3", dbLog)
+	if err := container.Upgrade(context.Background()); err != nil {
+		logger.Errorf("Failed to connect to database: failed to upgrade database: %v", err)
 		return
 	}
 	reportHardening(hardenStore("store")) // whatsapp.db holds the keys of the linked device
@@ -1679,7 +1705,7 @@ func main() {
 	}
 
 	// Initialize message store
-	messageStore, err := NewMessageStore()
+	messageStore, err := newMessageStore(dbCfg)
 	if err != nil {
 		logger.Errorf("Failed to initialize message store: %v", err)
 		return
