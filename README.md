@@ -19,7 +19,7 @@ Here's an example of what you can do when it's connected to Claude.
 ### Prerequisites
 
 - Go
-- Python 3.11+ (the MCP server reads ISO-8601 dates in all their forms and uses `zoneinfo`; `uv` picks a matching Python for you)
+- Python 3.11+ (the MCP server reads ISO-8601 dates in all their forms and uses `zoneinfo`; `uv` picks a matching Python for you and installs `sqlcipher3-binary`, which reads the encrypted databases)
 - Anthropic Claude Desktop app (or Cursor)
 - UV (Python package manager), install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - FFmpeg (_optional_) - Only needed for audio messages. If you want to send audio files as playable WhatsApp voice messages, they must be in `.ogg` Opus format. With FFmpeg installed, the MCP server will automatically convert non-Opus audio files. Without FFmpeg, you can still send raw audio files using the `send_file` tool.
@@ -410,7 +410,7 @@ Everything the bridge stores is yours and stays on your machine. These are the p
 ### The database key
 
 - The bridge creates a random 256-bit master key in `db.key` the first time it starts (`~/.config/whatsapp-mcp/db.key` on Linux; `WHATSAPP_CONFIG_DIR` changes the directory). Each database gets its own key derived from it (HKDF-SHA256), and the MCP server derives the same ones.
-- Other sources, in this order: `WHATSAPP_DB_KEY` (64 hexadecimal characters, for a secret manager or a container) and `WHATSAPP_DB_KEY_FILE`. A source that is set and wrong is an error; the bridge never falls back to another key.
+- Other sources, in this order: `WHATSAPP_DB_KEY` (64 hexadecimal characters, for a secret manager or a container) and `WHATSAPP_DB_KEY_FILE`. A source that is set and wrong (even a key made only of blanks, or a missing key file) is an error; the bridge never falls back to another key, and a damaged `db.key` is never replaced, because the encrypted databases need exactly that key. Two bridges starting at once cannot create two different keys.
 - **Back up `db.key` somewhere safe and separate from the databases (a password manager).** If you lose it, the encrypted databases cannot be recovered. (Losing `whatsapp.db` only means scanning the QR code again; losing `messages.db` loses the history.)
 - A wrong key stops the start with a clear error and does not touch the file. The MCP server reports `DATABASE_KEY_UNAVAILABLE` (no key) or `DATABASE_UNREADABLE` (the key does not open the file) instead of showing an empty chat list.
 
@@ -418,7 +418,7 @@ Everything the bridge stores is yours and stays on your machine. These are the p
 
 Nothing to do: the next time the bridge starts it migrates `messages.db` and `whatsapp.db` by itself (`WHATSAPP_DB_ENCRYPTION=on` is the default).
 
-1. It exports each database into a temporary encrypted file, **verifies** it (tables, row counts, indexes, triggers, `user_version`, integrity) and only then swaps it in. If anything fails, the original is left as it was. If the bridge is interrupted, the next start finishes the job.
+1. It exports each database into a temporary encrypted file, **verifies** it (tables, row counts, indexes, triggers, `user_version`, integrity) and only then swaps it in. If anything fails, the original is left as it was. If the bridge is interrupted, the next start finishes the job. A database the bridge left with a journal or WAL (it was killed mid-write) is recovered on a private copy, so the original stays untouched, and its journal goes with the plaintext backup.
 2. The original plaintext is kept as `store/<name>.plain-<UTC time>.bak` (`0600`). **It is still readable by anyone who gets it**, so once you have checked that everything works, run:
 
 ```bash
@@ -426,7 +426,7 @@ cd whatsapp-bridge
 make purge-plaintext      # or: ./bin/whatsapp-bridge purge-plaintext
 ```
 
-It overwrites with zeros and deletes the plaintext copies (the `.plain-*.bak` files and the `.bak*` files in `store/` that are plain SQLite), and never touches the databases in use. On an SSD or a journaling file system an overwrite is a best effort: the old blocks may survive, which is one more reason to use disk encryption. Also delete any copy of the database you made yourself, such as `messages.db.bak-...`.
+It overwrites with zeros and deletes the plaintext copies: the `.plain-*.bak` files, the `.bak*` files in `store/` that are plain SQLite, the leftovers of an interrupted recovery (`*.enc-tmp-src`) and the `-journal`/`-wal`/`-shm` files that go with them. It never touches the databases in use, nor any file that is another name for one of them, nor files that are not plaintext SQLite. On an SSD or a journaling file system an overwrite is a best effort: the old blocks may survive, which is one more reason to use disk encryption. Also delete any copy of the database you made yourself, such as `messages.db.bak-...`.
 
 Set `WHATSAPP_DB_ENCRYPTION=off` to keep plaintext databases (the bridge warns on every start). An encrypted database with `off` is an error, not a silent downgrade.
 
@@ -465,6 +465,9 @@ Permissions and `umask` do not apply (they rely on your user profile's access ru
 - **WhatsApp Already Logged In**: If your session is already active, the Go bridge will automatically reconnect without showing a QR code.
 - **Device Limit Reached**: WhatsApp limits the number of linked devices. If you reach this limit, you'll need to remove an existing device from WhatsApp on your phone (Settings > Linked Devices).
 - **No Messages Loading**: After initial authentication, it can take several minutes for your message history to load, especially if you have many chats.
-- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate.
+- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate. The message history is lost; `db.key` can stay, and new databases are encrypted with it.
+- **"cannot open ... with the configured key" / `DATABASE_UNREADABLE`**: the key does not open the database. Check that `db.key` (or `WHATSAPP_DB_KEY`/`WHATSAPP_DB_KEY_FILE`) is the one the databases were encrypted with, and that the bridge and the MCP server see the same `WHATSAPP_CONFIG_DIR`. The bridge never touches the file when this happens.
+- **`DATABASE_KEY_UNAVAILABLE`**: the MCP server found no key. Start the bridge once (it creates `db.key`) or set `WHATSAPP_DB_KEY`/`WHATSAPP_DB_KEY_FILE`.
+- **`BRIDGE_UNAUTHORIZED`**: restart the bridge and the MCP server so that both use the same `api_token`.
 
 For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues). The documentation includes helpful tips for checking logs and resolving common issues.
