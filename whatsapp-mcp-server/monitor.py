@@ -382,35 +382,40 @@ class AgentMessages:
     """The replies the monitor sent (their ids are in the audit log), to recognise answers to the agent and its own messages."""
 
     def __init__(self):
-        self._known: Optional[Dict[str, str]] = None
+        self._known = None
+        self._read = False
 
-    def sent(self) -> Dict[str, str]:
-        if self._known is None:
-            self._known = sent_reply_ids()
+    def sent(self) -> Optional[set]:
+        """{(chat, id)} of the replies sent, or None when the audit log cannot be read."""
+        if not self._read:
+            self._known, self._read = sent_reply_ids(), True
         return self._known
 
-    def settled(self) -> Dict[str, str]:
+    def settled(self) -> Optional[set]:
         """Like sent(), after any reply being sent right now has been recorded."""
         with _reply_lock, _ProcessLock():
             return sent_reply_ids()
 
 
-def sent_reply_ids() -> Dict[str, str]:
-    """{id of a reply the monitor sent: its chat}, from the audit log. An unreadable log knows none."""
+def sent_reply_ids() -> Optional[set]:
+    """{(chat, id)} of the replies the monitor sent, from the audit log; None when the log cannot be read.
+
+    A caller that cannot know which messages are the monitor's own must not treat any of them as someone's call.
+    """
     try:
         with open(AUDIT_PATH, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        return {}
+        return set()
     except OSError as e:
         logger.warning("Could not read the monitor audit log %s: %s", AUDIT_PATH, e)
-        return {}
-    ids = {}
+        return None
+    ids = set()
     for line in lines:
         try:
             entry = json.loads(line)
             if entry.get("result") == "sent" and isinstance(entry.get("reply_id"), str):
-                ids[entry["reply_id"]] = entry.get("chat_jid")
+                ids.add((entry.get("chat_jid"), entry["reply_id"]))
         except (ValueError, AttributeError):
             continue
     return ids
@@ -425,8 +430,10 @@ def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], 
         # the account's own messages fire nothing, except a call by name when allowed, and never a reply the monitor sent
         if profile.allow_own_alias and "alias" in profile.triggers:
             hit = _alias_hits(text, profile)
-            if hit and agent.settled().get(message.id) != message.chat_jid:
-                return hit
+            if hit:
+                replies = agent.settled()
+                if replies is not None and (message.chat_jid, message.id) not in replies:
+                    return hit
         return []
     found = []
     is_group = message.chat_jid.endswith("@g.us")
@@ -444,9 +451,10 @@ def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], 
             found.append({"trigger": "from", "target": target.label})
     if "alias" in profile.triggers:
         found.extend(_alias_hits(text, profile))
-    if "agent_reply" in profile.triggers and message.quoted_message_id and \
-            agent.sent().get(message.quoted_message_id) == message.chat_jid:
-        found.append({"trigger": "agent_reply", "target": "agent"})
+    if "agent_reply" in profile.triggers and message.quoted_message_id:
+        replies = agent.sent()
+        if replies is not None and (message.chat_jid, message.quoted_message_id) in replies:
+            found.append({"trigger": "agent_reply", "target": "agent"})
     return found
 
 

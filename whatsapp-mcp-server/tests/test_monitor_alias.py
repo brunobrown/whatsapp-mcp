@@ -421,3 +421,48 @@ def test_the_tool_documents_the_name_and_the_new_triggers():  # ALIAS-11, ALIAS-
 
     for expected in ("aliases", "alias", "agent_reply", "command"):
         assert expected in doc
+
+
+def test_unreadable_audit_log_fails_closed_for_own_messages_and_agent_replies(conn, tmp_path, monkeypatch):  # ALIAS-08
+    add(conn, "AGENT1", "Sou o @wall-e", from_me=1, minute=50)
+    add(conn, "R", "e agora?", quoted="AGENT1", sender=BOB)
+    monkeypatch.setattr(monitor, "AUDIT_PATH", str(tmp_path))      # um diretório: não dá para ler como log
+
+    own = hits(run(profile(allow_own_alias=True)))
+    follow = hits(run(profile(triggers=["agent_reply"])))
+
+    assert own == [] and follow == []
+
+
+def test_own_message_with_the_id_of_a_reply_sent_in_another_chat_still_fires(conn):  # ALIAS-08
+    agent_message(conn, id="SAMEID", chat=GROUP2)
+    add(conn, "SAMEID", "@wall-e fui eu", chat=GROUP, from_me=1, minute=56)
+
+    assert hits(run(profile(allow_own_alias=True))) == [("SAMEID", [("alias", BOT)])]
+
+
+def test_a_reply_id_sent_in_two_chats_is_remembered_for_both(conn):  # ALIAS-06
+    add(conn, "DUP", "agente 1", chat=GROUP, from_me=1, minute=50)
+    add(conn, "DUP", "agente 2", chat=GROUP2, from_me=1, minute=51)
+    put_audit(reply_id="DUP", chat_jid=GROUP)
+    put_audit(reply_id="DUP", chat_jid=GROUP2)
+    add(conn, "R1", "r", quoted="DUP", chat=GROUP, sender=BOB, minute=56)
+    add(conn, "R2", "r", quoted="DUP", chat=GROUP2, sender=BOB, minute=57)
+
+    assert [h[0] for h in hits(run(profile(triggers=["agent_reply"])))] == ["R1", "R2"]
+
+
+def test_alias_and_agent_reply_need_to_be_listed_triggers(conn):  # ALIAS-05
+    agent_message(conn)
+    add(conn, "CALL", "@wall-e oi", sender=BOB)
+    add(conn, "FOLLOW", "e a segunda?", quoted="AGENT1", sender=BOB, minute=56)
+    only_mention = monitor.Profile(name="p", targets=["me"], aliases=[BOT], triggers=["mention"])
+
+    assert hits(run(only_mention)) == []
+
+
+def test_the_example_profile_for_the_agent_is_the_cautious_one():  # ALIAS-04
+    path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.example.json")
+    example = json.load(open(path))["profiles"]["wall-e"]
+
+    assert example["mode"] == "draft" and example["allow_own_alias"] is False and "auto_chats" not in example

@@ -48,14 +48,11 @@
       "aliases": [
         "@wall-e"
       ],
-      "allow_own_alias": true,
+      "allow_own_alias": false,
       "chats": [
         "120363000000000000@g.us"
       ],
-      "mode": "auto",
-      "auto_chats": [
-        "120363000000000000@g.us"
-      ],
+      "mode": "draft",
       "approval_token": "troque-por-um-valor-so-seu",
       "limits": {
         "replies_per_chat_per_hour": 10,
@@ -63,7 +60,7 @@
         "cooldown_seconds": 15,
         "max_reply_chars": 1200
       },
-      "instructions": "Você é o Wall-E. Quem digitar @wall-e no grupo está falando com você; a pergunta está em `command`. Responda curto, consultando a documentação e o código do projeto. Quem responder a uma mensagem sua também fala com você. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem outras conversas."
+      "instructions": "Você é o Wall-E. Quem digitar @wall-e no grupo está falando com você; a pergunta está em `command`. Responda curto, consultando a documentação e o código do projeto. Quem responder a uma mensagem sua também fala com você. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem outras conversas. (Para responder sem aprovação num grupo, use mode auto com auto_chats; para chamar o agente do seu celular, allow_own_alias true. Veja o README.)"
     }
   }
 }
