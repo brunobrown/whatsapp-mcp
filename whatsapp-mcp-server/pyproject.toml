@@ -8,6 +8,7 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp[cli]>=1.6.0",
     "requests>=2.32.3",
+    "sqlcipher3-binary>=0.5.4",
 ]
 
 [dependency-groups]

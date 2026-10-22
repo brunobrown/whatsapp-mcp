@@ -22,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 
 	"bytes"
 
@@ -53,13 +52,21 @@ type MessageStore struct {
 
 // Initialize message store
 func NewMessageStore() (*MessageStore, error) {
+	cfg, err := loadDBConfig()
+	if err != nil {
+		return nil, err
+	}
+	return newMessageStore(cfg)
+}
+
+func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	if err := os.MkdirAll("store", privateDirMode); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %v", err)
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite3", "file:store/messages.db?_foreign_keys=on&_busy_timeout=5000&_txlock=immediate")
+	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -114,7 +121,23 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
 	}
 
+	// The database file now exists: keep it, and everything else in the store, private to the owner.
+	reportHardening(hardenStore("store"))
+
 	return &MessageStore{db: db}, nil
+}
+
+// reportHardening prints what hardenStore could not do. Tightening what it can is enough to carry on.
+func reportHardening(result hardenResult, err error) {
+	if err != nil {
+		fmt.Printf("Could not restrict the permissions of store/: %v\n", err)
+	}
+	for _, path := range result.Failed {
+		fmt.Printf("Could not restrict the permissions of %s\n", path)
+	}
+	if result.Changed > 0 {
+		fmt.Printf("Restricted the permissions of %d path(s) in store/ to the owner\n", result.Changed)
+	}
 }
 
 // Close the database connection
@@ -810,11 +833,8 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			direction = "→"
 		}
 
-		// Log based on message type
-		if mediaType != "" {
-			fmt.Printf("[%s] %s %s: [%s: %s] %s\n", timestamp, direction, sender, mediaType, filename, content)
-		} else if content != "" {
-			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
+		if line := messageLogLine(timestamp, direction, sender, mediaType, filename, content, includeTextInLog); line != "" {
+			fmt.Println(line)
 		}
 	}
 }
@@ -1028,7 +1048,7 @@ func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFrom
 func mediaFilePath(chatJID, messageID, filename string) (localPath, absPath string, err error) {
 	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
 	msgDir := fmt.Sprintf("%s/%s", chatDir, mediaDirName(messageID))
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, privateDirMode); err != nil {
 		return "", "", fmt.Errorf("failed to create media directory: %v", err)
 	}
 	localPath = fmt.Sprintf("%s/%s", msgDir, sanitizeFilename(filename))
@@ -1265,7 +1285,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	if err := storeDownloadedMedia(messageStore, messageID, chatJID, absPath, mediaData); err != nil {
 		return false, "", "", "", err
 	}
-	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, absPath, len(mediaData))
+	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, loggedText(absPath, includeTextInLog), len(mediaData))
 	return true, mediaType, filename, absPath, nil
 }
 
@@ -1514,7 +1534,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 			return
 		}
 
-		fmt.Println("Received request to send message", req.Message, req.MediaPath)
+		fmt.Println("Received request to send a message", loggedText(req.Message, includeTextInLog), loggedText(req.MediaPath, includeTextInLog))
 
 		// Send the message
 		result := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, req.Mentions, req.ReplyTo, logger)
@@ -1588,8 +1608,9 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 	return mux
 }
 
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, logger waLog.Logger) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, token string, logger waLog.Logger) {
 	mux := newRESTMux(client, messageStore, clientSource{client}, state, logger)
+	handler := newAPIGuard(token, port).wrap(mux)
 
 	// Start the server (bound to localhost only, to avoid exposing the API on the network)
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -1597,13 +1618,20 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, mux); err != nil {
+		if err := http.ListenAndServe(serverAddr, handler); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
 }
 
 func main() {
+	// Nothing the bridge creates (databases, media, logs, backups) may be readable by other users.
+	restrictUmask()
+
+	if handled, code := runCommand(os.Args[1:], os.Stdout); handled {
+		os.Exit(code)
+	}
+
 	// Everything printed to stdout also goes to store/bridge.log (rotating); the pairing QR code is
 	// printed to the terminal only.
 	terminal := os.Stdout
@@ -1629,16 +1657,36 @@ func main() {
 	dbLog := waLog.Stdout("Database", "INFO", true)
 
 	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	if err := os.MkdirAll("store", privateDirMode); err != nil {
 		logger.Errorf("Failed to create store directory: %v", err)
 		return
 	}
 
-	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	dbCfg, err := loadDBConfig()
+	if err != nil {
+		logger.Errorf("Cannot set up the database encryption: %v", err)
+		return
+	}
+	if dbCfg.Encrypted {
+		logger.Infof("The databases are encrypted; the key comes from %s", dbCfg.Source)
+	} else {
+		logger.Warnf("%s=off: the databases are NOT encrypted", dbEncryptionEnv)
+	}
+	for _, warning := range dbCfg.Warnings {
+		logger.Warnf("%s", warning)
+	}
+
+	sessionDB, err := openDatabase("store/"+sessionDBName, sessionDBName, "_foreign_keys=on", dbCfg)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
+	container := sqlstore.NewWithDB(sessionDB, "sqlite3", dbLog)
+	if err := container.Upgrade(context.Background()); err != nil {
+		logger.Errorf("Failed to connect to database: failed to upgrade database: %v", err)
+		return
+	}
+	reportHardening(hardenStore("store")) // whatsapp.db holds the keys of the linked device
 
 	// Get device store - This contains session information
 	deviceStore, err := container.GetFirstDevice(context.Background())
@@ -1661,7 +1709,7 @@ func main() {
 	}
 
 	// Initialize message store
-	messageStore, err := NewMessageStore()
+	messageStore, err := newMessageStore(dbCfg)
 	if err != nil {
 		logger.Errorf("Failed to initialize message store: %v", err)
 		return
@@ -1773,7 +1821,19 @@ func main() {
 
 	// Start REST API server
 	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
-	startRESTServer(client, messageStore, state, 8080, logger)
+	// The API is never started without its token: it can send messages as the account.
+	apiConfigDir, err := configDir()
+	if err != nil {
+		logger.Errorf("Cannot start the REST API: %v", err)
+		return
+	}
+	apiToken, err := loadOrCreateToken(apiConfigDir)
+	if err != nil {
+		logger.Errorf("Cannot start the REST API: %v", err)
+		return
+	}
+	logger.Infof("The REST API token is in %s", filepath.Join(apiConfigDir, apiTokenFile))
+	startRESTServer(client, messageStore, state, 8080, apiToken, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -1949,7 +2009,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				}
 
 				// Log the message content for debugging
-				logger.Infof("Message content: %v, Media Type: %v", content, mediaType)
+				logger.Infof("Message content: %v, Media Type: %v", loggedText(content, includeTextInLog), mediaType)
 
 				// Skip messages with no content and no media
 				if content == "" && mediaType == "" {
@@ -2008,13 +2068,8 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					}
 					syncedCount++
 					// Log successful message storage
-					if mediaType != "" {
-						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
-					} else {
-						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
-					}
+					logger.Infof("Stored message: %s -> %s", messageLogLine(
+						timestamp.Format("2006-01-02 15:04:05"), "", sender, mediaType, filename, content, includeTextInLog), chatJID)
 				}
 			}
 		}

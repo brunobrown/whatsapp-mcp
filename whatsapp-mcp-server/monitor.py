@@ -16,6 +16,8 @@ from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import dbcrypto
+import filemode
 import send_policy
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -226,6 +228,7 @@ def _parse_profile(name: str, raw) -> Profile:
 
 def load_profiles() -> Tuple[Dict[str, Profile], Optional[str]]:
     """(profiles by name, problem). No file means no profiles; a file that does not validate means a problem."""
+    filemode.warn_if_open(CONFIG_PATH)   # the approval token must not be readable by other users
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             text = f.read()
@@ -287,11 +290,20 @@ def describe(profile: Profile) -> dict:
     }
 
 
+def file_warnings() -> List[str]:
+    """Warnings about the files that hold tokens (profiles and send policy) being open to other users."""
+    return [w for w in (filemode.warn_if_open(CONFIG_PATH), filemode.warn_if_open(send_policy.POLICY_PATH)) if w]
+
+
 def list_profiles() -> dict:
+    warnings = file_warnings()
     profiles, problem = load_profiles()
     if problem:
         return error(CONFIG_INVALID, f"{CONFIG_PATH} is not usable, so no profile works: {problem}")
-    return {"success": True, "profiles": [describe(p) for p in profiles.values()]}
+    answer = {"success": True, "profiles": [describe(p) for p in profiles.values()]}
+    if warnings:
+        answer["warnings"] = warnings
+    return answer
 
 
 # ---------------------------------------------------------------------------------------------------------
@@ -663,7 +675,7 @@ async def monitor_messages(profile: Optional[str] = None, targets: Optional[List
         return error("OWN_ACCOUNT_UNKNOWN", str(e))
     except send_policy.DirectoryError as e:
         return error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         return error("UNKNOWN", f"Database error: {e}")
 
     answer = {"success": True, "cursor": str(position), "events": events, "has_more": has_more, "timed_out": timed_out,
@@ -848,7 +860,7 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         return error("OWN_ACCOUNT_UNKNOWN", str(e))
     except send_policy.DirectoryError as e:
         return error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         return error("UNKNOWN", f"Database error: {e}")
     if not hit:
         return error(NOT_A_TRIGGER, f"Message {message_id} of {jid} does not fire profile {profile!r}: "
