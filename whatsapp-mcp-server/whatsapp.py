@@ -1026,7 +1026,7 @@ def _find_reply_target(message_id: str, chat_jid: str) -> Optional[dict]:
     under the other addressing of the same person."""
     candidates = [chat_jid] if chat_jid.endswith("@g.us") else _person_ids_and_jids(chat_jid)[1]
     try:
-        conn = sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+        conn = _connect()
     except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return None

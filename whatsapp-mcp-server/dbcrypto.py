@@ -51,7 +51,7 @@ def _parse_key(text: str, source: str) -> bytes:
 def master_key() -> bytes:
     """The master key from the first source that is set. A source that is set and unusable is an error, never a fallback."""
     value = os.environ.get("WHATSAPP_DB_KEY", "")
-    if value.strip():
+    if value:      # only blanks is a mistake to report, not "unset"
         return _parse_key(value, "WHATSAPP_DB_KEY")
     path = os.environ.get("WHATSAPP_DB_KEY_FILE", "")
     default = False
