@@ -15,6 +15,11 @@ import re
 MESSAGES_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'whatsapp-bridge', 'store', 'messages.db')
 logger = logging.getLogger(__name__)
 
+
+def _connect() -> sqlite3.Connection:
+    """The bridge database, read-only. The server never writes it, and a missing file is an error, not a new empty database."""
+    return sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+
 WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
 
 @dataclass
@@ -92,7 +97,7 @@ def lookup_identity(value: str) -> Optional[Identity]:
     ident = value.split("@")[0]
     candidates = [ident] + ([_digits(value)] if _digits(value) != ident else [])
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         try:
             for candidate in candidates:
                 row = conn.execute(
@@ -137,7 +142,7 @@ def get_sender_name(sender_jid: str) -> str:
     if identity and identity.display_name:
         return identity.display_name
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         # First try matching by exact JID
@@ -427,7 +432,7 @@ def list_messages(
     if limit < 1 or page < 0:
         raise ValueError("limit must be at least 1 and page at least 0.")
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         conn.create_function("casefold", 1, lambda v: v.casefold() if isinstance(v, str) else v)
         cursor = conn.cursor()
         columns = _message_select(cursor)
@@ -517,7 +522,7 @@ def get_message_context(
     Both sides are in chronological order.
     """
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         columns = _message_select(cursor)
         
@@ -599,7 +604,7 @@ def list_chats(
 ) -> List[Chat]:
     """Get chats matching the specified criteria."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
 
         where, params = "", []
@@ -652,7 +657,7 @@ def _search_identities(conn: sqlite3.Connection, query: str) -> Tuple[List[Conta
 def search_contacts(query: str) -> List[Contact]:
     """Search contacts by name, phone number or LID."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
 
         result, known_ids = _search_identities(conn, query)
@@ -697,7 +702,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
     """
     try:
         ids, jids = _person_ids_and_jids(jid)
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -728,7 +733,7 @@ def get_last_interaction(jid: str) -> str:
     """Get most recent message involving the contact."""
     try:
         ids, jids = _person_ids_and_jids(jid)
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -778,7 +783,7 @@ def get_last_interaction(jid: str) -> str:
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]:
     """Get chat metadata by JID."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
 
         cursor.execute(
@@ -799,7 +804,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
 def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
     """Get chat metadata by sender phone number."""
     try:
-        conn = sqlite3.connect(MESSAGES_DB_PATH)
+        conn = _connect()
         cursor = conn.cursor()
 
         cursor.execute(

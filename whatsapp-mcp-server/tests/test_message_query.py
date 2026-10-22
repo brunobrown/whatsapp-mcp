@@ -343,3 +343,23 @@ def test_sender_name_is_the_known_name_or_me(conn):  # QUERY-01
 def test_limit_below_one_or_negative_page_raises(conn, kwargs):  # QUERY-08
     with pytest.raises(ValueError):
         whatsapp.list_messages(include_context=False, **kwargs)
+
+
+def test_reading_never_creates_a_missing_database(tmp_path, monkeypatch):
+    missing = tmp_path / "none.db"
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(missing))
+
+    whatsapp.list_messages(include_context=False)
+    whatsapp.list_messages(include_context=False, sender_phone_number="5511999990000")
+    whatsapp.list_chats()
+    whatsapp.search_contacts("ana")
+    whatsapp.get_last_interaction("5511999990000")
+    whatsapp.get_chat("x@g.us")
+    whatsapp.get_direct_chat_by_contact("5511999990000")
+    whatsapp.get_contact_chats("5511999990000")
+    whatsapp.lookup_identity("5511999990000")
+    whatsapp.get_sender_name("5511999990000")
+    with pytest.raises(sqlite3.Error):
+        whatsapp.get_message_context("M")
+
+    assert not missing.exists()
