@@ -15,7 +15,8 @@ from whatsapp import (
     download_media as whatsapp_download_media,
     get_group_participants as whatsapp_get_group_participants,
     get_connection_status as whatsapp_get_connection_status,
-    download_media_batch as whatsapp_download_media_batch
+    download_media_batch as whatsapp_download_media_batch,
+    get_message_thread as whatsapp_get_message_thread
 )
 
 # Initialize FastMCP server
@@ -323,6 +324,37 @@ def download_media_batch(
         Bad arguments: success=false, error_code=INVALID_ARGUMENT
     """
     return whatsapp_download_media_batch(chat_jid, after, before, types, max_size_mb, max_items, timeout_seconds)
+
+@mcp.tool()
+def get_message_thread(
+    message_id: Optional[str] = None,
+    chat_jid: Optional[str] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    limit: Optional[int] = None,
+    page: Optional[int] = None,
+    order: Optional[str] = None
+) -> Dict[str, Any]:
+    """Read messages with their replies linked (always structured). Two uses:
+
+    1. The chain around one message: give message_id (and chat_jid, needed when the same ID exists in several chats).
+       Returns the root of the chain, everything quoted above the message and every reply below it, oldest first
+       (at most 500 messages, the oldest; truncated=true when there were more). after, before, limit, page and order do not apply.
+    2. A window of a chat: give chat_jid, optionally after/before (ISO-8601 with offset; without one WHATSAPP_TIMEZONE or the
+       system zone, as in list_messages), limit (default 20), page (default 0) and order ("asc" default, or "desc").
+       Returns total, page, limit, has_more and next_page.
+
+    Every message has id, timestamp, chat_jid, chat_name, sender, sender_name, content, is_from_me, forwarded, thread_root_id,
+    is_target (the message asked for), replies (IDs of the messages that quote it, even outside the window) and
+    reply_to: null, {id, found: false} when the quoted message is not stored, or {id, found: true, sender, sender_name,
+    content, timestamp, is_from_me, media}. media is null for text, otherwise type, filename, mimetype, size, forwarded,
+    quoted_message_id and local_path (only while the file exists); in reply_to.media only type, filename, mimetype and size.
+    A quoted media has its caption as content (empty without one). Only metadata is read: images, audio and video are not
+    described or transcribed; use download_media with message_id and chat_jid to get the file.
+
+    Errors: success=false with error_code INVALID_ARGUMENT, MESSAGE_NOT_FOUND, AMBIGUOUS_MESSAGE or DIRECTORY_UNAVAILABLE
+    """
+    return whatsapp_get_message_thread(message_id, chat_jid, after, before, limit, page, order)
 
 @mcp.tool()
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
