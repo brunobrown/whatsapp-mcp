@@ -321,16 +321,12 @@ def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], 
     return found
 
 
-def _kind(number: str) -> str:
-    return "lid" if len(number) > 13 else "phone"      # the same rule the bridge uses
-
-
 def sender_is_denied(sender: str, deny: List[str]) -> bool:
     """True when sender is on the block list, or cannot be told apart from someone on it (fail closed).
 
-    A block entry given as a phone number reaches a LID sender only through contacts_identity. When the sender is a
-    LID the directory has no person for, and a block entry has no counterpart of the sender's kind, the sender could be
-    that person, so the message is not delivered.
+    A block entry reaches a sender addressed another way (phone or LID) only through contacts_identity. When the
+    sender is a person the directory does not know and some block entry has no other id to compare, the sender could
+    be that person, so the message is not delivered. The kind of an id is never guessed from its length.
     """
     if not deny:
         return False
@@ -338,13 +334,7 @@ def sender_is_denied(sender: str, deny: List[str]) -> bool:
         return True
     if len(whatsapp.sender_ids(sender)) > 1:           # a known person: compared by every id they have
         return False
-    return any(_kind(i) != _kind(sender) for d in deny for i in [_single_kind(d)] if i)
-
-
-def _single_kind(entry: str) -> Optional[str]:
-    """entry when the directory knows it under one addressing only (so it has no counterpart), else None."""
-    ids = _ids_of([entry])
-    return entry if len({_kind(i) for i in ids}) == 1 else None
+    return any(len(_ids_of([entry])) == 1 for entry in deny)   # an entry with no counterpart cannot rule the sender out
 
 
 def passes_filters(message: whatsapp.Message, profile: Profile) -> bool:
@@ -402,12 +392,7 @@ def scan(profile: Profile, cursor: int, limit: int, adhoc: bool = False, now: Op
         columns = whatsapp._message_select(cursor_obj)
         has_quoted = whatsapp._has_quoted_column(cursor_obj)
 
-        def quoted_sender(message):
-            if not has_quoted:
-                return None
-            row = conn.execute("SELECT sender, is_from_me FROM messages WHERE chat_jid = ? AND id = ?",
-                               (message.chat_jid, message.quoted_message_id)).fetchone()
-            return (row[0], bool(row[1])) if row else None
+        quoted_sender = _quoted_sender_lookup(conn, has_quoted)
 
         picked, position = [], cursor
         while True:
@@ -428,6 +413,16 @@ def scan(profile: Profile, cursor: int, limit: int, adhoc: bool = False, now: Op
                     return ScanResult(_build(cursor_obj, columns, picked, profile, adhoc), position, bool(more))
     finally:
         conn.close()
+
+
+def _quoted_sender_lookup(conn, has_quoted: bool):
+    def lookup(message):
+        if not has_quoted:
+            return None
+        row = conn.execute("SELECT sender, is_from_me FROM messages WHERE chat_jid = ? AND id = ?",
+                           (message.chat_jid, message.quoted_message_id)).fetchone()
+        return (row[0], bool(row[1])) if row else None
+    return lookup
 
 
 def _build(cursor_obj, columns, picked, profile: Profile, adhoc: bool) -> List[dict]:
@@ -530,4 +525,202 @@ async def monitor_messages(profile: Optional[str] = None, targets: Optional[List
               "untrusted_content": True, "notice": NOTICE}
     if profile:
         answer.update(profile=selected.name, instructions=selected.instructions)
+    return answer
+
+
+# ---------------------------------------------------------------------------------------------------------
+# monitor_reply: a reply to a message that fired a profile, under the profile's guardrails
+# ---------------------------------------------------------------------------------------------------------
+import hmac  # noqa: E402
+import threading  # noqa: E402
+
+NOT_A_TRIGGER = "NOT_A_TRIGGER"
+APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+RATE_LIMITED = "RATE_LIMITED"
+RATE_LIMIT_UNVERIFIABLE = "RATE_LIMIT_UNVERIFIABLE"
+_HOUR = 3600
+_reply_lock = threading.Lock()   # the limits are checked and the reply sent as one step
+
+
+def _read_sent(profile_name: str, now: datetime) -> List[dict]:
+    """The replies this profile sent in the last hour, from the audit log. Raises OSError when it cannot be read."""
+    try:
+        with open(AUDIT_PATH, encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return []
+    sent = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+            when = datetime.fromisoformat(entry["ts"])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if entry.get("profile") == profile_name and entry.get("result") == "sent" and \
+                0 <= (now - when).total_seconds() < _HOUR:
+            entry["_when"] = when
+            sent.append(entry)
+    return sent
+
+
+def _retry_after(times: List[datetime], limit: int, now: datetime) -> int:
+    """Seconds until fewer than limit of these replies are inside the hour."""
+    times = sorted(times)
+    freed = times[len(times) - limit]
+    return max(1, int(_HOUR - (now - freed).total_seconds()) + 1)
+
+
+def _rate_check(profile: Profile, chat_jid: str, sender: str, now: datetime) -> Optional[dict]:
+    sent = _read_sent(profile.name, now)
+    limits, waits, why = profile.limits, [], []
+    in_chat = [e["_when"] for e in sent if e.get("chat_jid") == chat_jid]
+    if in_chat:
+        cooldown = limits["cooldown_seconds"] - (now - max(in_chat)).total_seconds()
+        if cooldown > 0:
+            waits.append(int(cooldown) + 1)
+            why.append(f"{limits['cooldown_seconds']} s between replies in a chat")
+    if len(in_chat) >= limits["replies_per_chat_per_hour"]:
+        waits.append(_retry_after(in_chat, limits["replies_per_chat_per_hour"], now))
+        why.append(f"{limits['replies_per_chat_per_hour']} replies per chat per hour")
+    to_sender = [e["_when"] for e in sent if e.get("sender") == sender]
+    if len(to_sender) >= limits["replies_per_sender_per_hour"]:
+        waits.append(_retry_after(to_sender, limits["replies_per_sender_per_hour"], now))
+        why.append(f"{limits['replies_per_sender_per_hour']} replies per sender per hour")
+    if not waits:
+        return None
+    return error(RATE_LIMITED, "Reply limit reached: " + "; ".join(why) + ". Nothing was sent.",
+                 retry_after_seconds=max(waits))
+
+
+def _audit(profile: Profile, chat_jid: str, message: whatsapp.Message, hit: List[dict], mode: str, approved: bool,
+          result: str, size: int, error_code: Optional[str] = None, reply_id: Optional[str] = None) -> None:
+    """One JSON line per attempt (0600). Never the text, never a token."""
+    line = {
+        "ts": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+        "profile": profile.name,
+        "chat_jid": chat_jid,
+        "sender": message.sender,
+        "message_id": message.id,
+        "triggers": sorted({h["trigger"] for h in hit}),
+        "mode": mode,
+        "approval_used": approved,
+        "result": result,
+        "size": size,
+    }
+    if error_code:
+        line["error_code"] = error_code
+    if reply_id:
+        line["reply_id"] = reply_id
+    try:
+        fd = os.open(AUDIT_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("Could not write the monitor audit log %s: %s", AUDIT_PATH, e)
+
+
+def _audit_writable() -> bool:
+    try:
+        os.close(os.open(AUDIT_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
+        return True
+    except OSError:
+        return False
+
+
+def _trigger_message(profile: Profile, chat_jid: str, message_id: str):
+    """(message, matched triggers) when the stored message fires the profile (age aside), else (message or None, [])."""
+    conn = whatsapp._open_chats()
+    try:
+        cursor = conn.cursor()
+        columns = whatsapp._message_select(cursor)
+        row = cursor.execute(
+            f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+            f"WHERE messages.chat_jid = ? AND messages.id = ?", (chat_jid, message_id)).fetchone()
+        if row is None:
+            return None, []
+        message = whatsapp._message_from_row(row)
+        if not passes_filters(message, profile):
+            return message, []
+        lookup = _quoted_sender_lookup(conn, whatsapp._has_quoted_column(cursor))
+        return message, matches(message, profile, resolve_targets(profile), lookup)
+    finally:
+        conn.close()
+
+
+def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, approval_token: Optional[str] = None,
+                  dry_run: bool = False, now: Optional[datetime] = None) -> dict:
+    """Reply, in the chat of a message that fired the profile and quoting it, under the profile's guardrails."""
+    selected, problem = get_profile(profile)
+    if problem:
+        return problem
+    if not all(isinstance(v, str) and v.strip() for v in (chat_jid, message_id)):
+        return error(INVALID_ARGUMENT, "chat_jid and message_id are required")
+    if not isinstance(text, str) or not text.strip():
+        return error(INVALID_ARGUMENT, "text is required")
+    if len(text) > selected.limits["max_reply_chars"]:
+        return error(INVALID_ARGUMENT, f"The reply has {len(text)} characters; this profile allows "
+                                       f"{selected.limits['max_reply_chars']}")
+    jid = send_policy.canonical_jid(chat_jid)
+    if not jid:
+        return error(INVALID_ARGUMENT, f"{chat_jid!r} is not a chat JID")
+    now = now or datetime.now(timezone.utc)
+
+    try:
+        message, hit = _trigger_message(selected, jid, message_id.strip())
+    except OwnAccountUnknown as e:
+        return error("OWN_ACCOUNT_UNKNOWN", str(e))
+    except send_policy.DirectoryError as e:
+        return error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    except sqlite3.Error as e:
+        return error("UNKNOWN", f"Database error: {e}")
+    if not hit:
+        return error(NOT_A_TRIGGER, f"Message {message_id} of {jid} does not fire profile {profile!r}: "
+                                    "replies are only for messages the profile watches. Nothing was sent.")
+
+    mode = reply_mode(message, selected, adhoc=False)
+    needs_token = mode != "auto"
+    token_ok = bool(needs_token and selected.approval_token and approval_token and
+                    hmac.compare_digest(str(approval_token).encode(), selected.approval_token.encode()))
+    preview = whatsapp.send_message(jid, text, None, None, message.id, True)
+
+    if dry_run:
+        out = {"success": preview.success, "dry_run": True, "message": preview.message, "mode": mode,
+               "requires_approval_token": needs_token, "matched": hit}
+        if preview.error_code:
+            out["error_code"] = preview.error_code
+        if preview.preview is not None:
+            out["preview"] = preview.preview
+        return out
+
+    with _reply_lock:
+        def refuse(result: str, code: str, answer: dict) -> dict:
+            _audit(selected, jid, message, hit, mode, token_ok, result, len(text), error_code=code)
+            return answer
+
+        if needs_token and not token_ok:
+            why = ("this profile has no approval_token, so replies to this sender can never be sent"
+                   if not selected.approval_token else "give the approval_token to send it")
+            return refuse("blocked", APPROVAL_REQUIRED, error(
+                APPROVAL_REQUIRED, f"Draft only: {why}. Nothing was sent.", mode=mode,
+                preview=preview.preview if preview.success else None))
+        if not _audit_writable():
+            return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be used, so the reply limits "
+                                                  "cannot be checked. Nothing was sent.")
+        try:
+            limited = _rate_check(selected, jid, message.sender, now)
+        except OSError as e:
+            return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be read ({e}), so the reply "
+                                                  "limits cannot be checked. Nothing was sent.")
+        if limited:
+            return refuse("blocked", RATE_LIMITED, limited)
+
+        result = whatsapp.send_message(jid, text, None, None, message.id, False)
+        _audit(selected, jid, message, hit, mode, token_ok, "sent" if result.success else
+               ("blocked" if result.error_code == send_policy.BLOCKED else "failed"), len(text),
+               error_code=result.error_code, reply_id=result.message_id if result.success else None)
+    answer = {"success": result.success, "message": result.message, "mode": mode, "profile": selected.name}
+    if result.error_code:
+        answer["error_code"] = result.error_code
+    if result.success:
+        answer.update({k: getattr(result, k) for k in ("message_id", "timestamp", "chat_jid") if getattr(result, k)})
     return answer

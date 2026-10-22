@@ -383,3 +383,16 @@ def test_allow_list_never_lets_an_unknown_sender_in(conn):  # MON-10
     add(conn, "UNKNOWN", f"@{ME} oi", sender=UNKNOWN_LID)
 
     assert hits(run(profile(senders_allow=[ANA]))) == []
+
+
+def test_deny_list_does_not_guess_the_kind_of_an_id_from_its_length(conn):  # MON-10 (revisão de segurança)
+    odd_phone = "5511777770000999"            # 16 dígitos: um telefone "fora do padrão" que o tamanho chamaria de LID
+    short_lid = "123456789012"                # 12 dígitos: um LID que o tamanho chamaria de telefone
+    add(conn, "ODD", f"@{ME} oi", sender=odd_phone)
+    add(conn, "SHORT", f"@{ME} oi", sender=short_lid)
+
+    # nenhum dos dois é conhecido; a entrada BOB não tem contraparte: ninguém pode ser descartado como "outra pessoa"
+    assert hits(run(profile(senders_deny=[BOB]))) == []
+    # sem lista de bloqueio, ou com entradas que o diretório conhece nos dois endereçamentos, são entregues
+    assert [h[0] for h in hits(run(profile()))] == ["ODD", "SHORT"]
+    assert [h[0] for h in hits(run(profile(senders_deny=[ANA])))] == ["ODD", "SHORT"]
