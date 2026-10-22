@@ -1398,9 +1398,15 @@ func loadRetentionDays(getenv func(string) string) int {
 // its local_path, keeping the message itself. The age is the message's, not the file's, since
 // the download can happen long after the message. Only paths inside store/ are ever deleted.
 func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, error) {
+	if days <= 0 {
+		return 0, fmt.Errorf("retention days must be positive, got %d", days)
+	}
 	storeRoot, err := filepath.Abs("store")
 	if err != nil {
 		return 0, err
+	}
+	if resolved, err := filepath.EvalSymlinks(storeRoot); err == nil {
+		storeRoot = resolved
 	}
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
 
@@ -1412,12 +1418,13 @@ func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, er
 	var candidates []expired
 	for rows.Next() {
 		var e expired
-		var ts time.Time
+		var ts sql.NullTime
 		if err := rows.Scan(&e.id, &e.chatJID, &e.path, &ts); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		if ts.Before(cutoff) {
+		// A message without a real timestamp has no known age, so its file is kept.
+		if ts.Valid && !ts.Time.IsZero() && ts.Time.Before(cutoff) {
 			candidates = append(candidates, e)
 		}
 	}
@@ -1429,15 +1436,29 @@ func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, er
 	deleted := 0
 	for _, e := range candidates {
 		abs, err := filepath.Abs(e.path)
-		if err != nil || !strings.HasPrefix(abs, storeRoot+string(os.PathSeparator)) {
-			continue // never touch anything outside store/
-		}
-		if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		if err != nil {
 			continue
-		} else if err == nil {
-			deleted++
 		}
-		os.Remove(filepath.Dir(abs)) // only succeeds when the directory is empty
+		// Resolve the directory, not the file: a symlinked file is unlinked without touching its
+		// target, but a symlinked directory would redirect the delete outside store/.
+		dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+		if err != nil && !os.IsNotExist(err) {
+			continue
+		}
+		if err == nil {
+			if !strings.HasPrefix(dir, storeRoot+string(os.PathSeparator)) {
+				continue // never touch anything outside store/
+			}
+			target := filepath.Join(dir, filepath.Base(abs))
+			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+				continue
+			} else if err == nil {
+				deleted++
+			}
+			os.Remove(dir) // only succeeds when the directory is empty
+		} else if !strings.HasPrefix(abs, storeRoot+string(os.PathSeparator)) {
+			continue
+		}
 		if err := store.SetLocalPath(e.id, e.chatJID, ""); err != nil {
 			return deleted, err
 		}

@@ -95,6 +95,104 @@ func TestCleanupNeverDeletesOutsideStore(t *testing.T) { // RET-04
 	}
 }
 
+func TestCleanupNeverDeletesThroughSymlinkedDirectory(t *testing.T) { // RET-04
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "importante.txt")
+	if err := os.WriteFile(victim, []byte("não apague"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
+	link, err := filepath.Abs(filepath.Join("store", "link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	viaLink := filepath.Join(link, "importante.txt")
+	if err := store.SetLocalPath("OLD", "chat@g.us", viaLink); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.CleanupExpiredMedia(now, 30); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(victim) {
+		t.Fatal("file outside store/ was deleted through a symlinked directory")
+	}
+	if localPathOf(t, store, "OLD") != viaLink {
+		t.Error("local_path that escapes store/ must stay unchanged")
+	}
+}
+
+func TestCleanupNeverDeletesSiblingWithStorePrefix(t *testing.T) { // RET-04
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
+	if err := os.MkdirAll("store-evil", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim, err := filepath.Abs(filepath.Join("store-evil", "importante.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(victim, []byte("não apague"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetLocalPath("OLD", "chat@g.us", victim); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.CleanupExpiredMedia(now, 30); err != nil {
+		t.Fatal(err)
+	}
+	if !exists(victim) {
+		t.Fatal("file in a sibling directory sharing the store prefix was deleted")
+	}
+}
+
+func TestCleanupKeepsMessagesWithoutKnownAge(t *testing.T) { // RET-03 (idade desconhecida não é antiga)
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	zero := seedDownloaded(t, store, "ZERO", 0, now)
+	null := seedDownloaded(t, store, "NULL", 0, now)
+	old := seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
+	if _, err := store.db.Exec("UPDATE messages SET timestamp = ? WHERE id = 'ZERO'", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec("UPDATE messages SET timestamp = NULL WHERE id = 'NULL'"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := store.CleanupExpiredMedia(now, 30)
+	if err != nil || n != 1 {
+		t.Fatalf("CleanupExpiredMedia = (%d, %v), want (1, nil)", n, err)
+	}
+	if !exists(zero) || !exists(null) {
+		t.Error("files of messages without a known timestamp must be kept")
+	}
+	if exists(old) {
+		t.Error("a bad row must not stop the cleanup of expired files")
+	}
+}
+
+func TestCleanupRefusesNonPositiveDays(t *testing.T) { // RET-01
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	file := seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
+
+	for _, days := range []int{0, -3} {
+		if n, err := store.CleanupExpiredMedia(now, days); err == nil || n != 0 {
+			t.Errorf("CleanupExpiredMedia(days=%d) = (%d, %v), want (0, error)", days, n, err)
+		}
+		if !exists(file) || localPathOf(t, store, "OLD") != file {
+			t.Fatalf("days=%d must not delete anything", days)
+		}
+	}
+}
+
 func TestCleanupClearsLocalPathOfMissingFile(t *testing.T) { // RET-05
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
