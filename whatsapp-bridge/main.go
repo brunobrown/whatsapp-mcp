@@ -54,7 +54,7 @@ type MessageStore struct {
 // Initialize message store
 func NewMessageStore() (*MessageStore, error) {
 	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	if err := os.MkdirAll("store", privateDirMode); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %v", err)
 	}
 
@@ -114,7 +114,23 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
 	}
 
+	// The database file now exists: keep it, and everything else in the store, private to the owner.
+	reportHardening(hardenStore("store"))
+
 	return &MessageStore{db: db}, nil
+}
+
+// reportHardening prints what hardenStore could not do. Tightening what it can is enough to carry on.
+func reportHardening(result hardenResult, err error) {
+	if err != nil {
+		fmt.Printf("Could not restrict the permissions of store/: %v\n", err)
+	}
+	for _, path := range result.Failed {
+		fmt.Printf("Could not restrict the permissions of %s\n", path)
+	}
+	if result.Changed > 0 {
+		fmt.Printf("Restricted the permissions of %d path(s) in store/ to the owner\n", result.Changed)
+	}
 }
 
 // Close the database connection
@@ -1028,7 +1044,7 @@ func retryDownloadMedia(client *whatsmeow.Client, chatJID, sender string, isFrom
 func mediaFilePath(chatJID, messageID, filename string) (localPath, absPath string, err error) {
 	chatDir := fmt.Sprintf("store/%s", strings.ReplaceAll(chatJID, ":", "_"))
 	msgDir := fmt.Sprintf("%s/%s", chatDir, mediaDirName(messageID))
-	if err := os.MkdirAll(msgDir, 0755); err != nil {
+	if err := os.MkdirAll(msgDir, privateDirMode); err != nil {
 		return "", "", fmt.Errorf("failed to create media directory: %v", err)
 	}
 	localPath = fmt.Sprintf("%s/%s", msgDir, sanitizeFilename(filename))
@@ -1604,6 +1620,9 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state
 }
 
 func main() {
+	// Nothing the bridge creates (databases, media, logs, backups) may be readable by other users.
+	restrictUmask()
+
 	// Everything printed to stdout also goes to store/bridge.log (rotating); the pairing QR code is
 	// printed to the terminal only.
 	terminal := os.Stdout
@@ -1629,7 +1648,7 @@ func main() {
 	dbLog := waLog.Stdout("Database", "INFO", true)
 
 	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
+	if err := os.MkdirAll("store", privateDirMode); err != nil {
 		logger.Errorf("Failed to create store directory: %v", err)
 		return
 	}
@@ -1639,6 +1658,7 @@ func main() {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
 	}
+	reportHardening(hardenStore("store")) // whatsapp.db holds the keys of the linked device
 
 	// Get device store - This contains session information
 	deviceStore, err := container.GetFirstDevice(context.Background())
