@@ -1,11 +1,27 @@
 {
   "profiles": {
     "suporte-software": {
-      "targets": ["me"],
-      "triggers": ["mention", "reply", "direct"],
-      "chats": ["120363000000000000@g.us"],
-      "senders": { "deny": ["5511900001111"] },
-      "topics": ["deploy", "erro", "login"],
+      "targets": [
+        "me"
+      ],
+      "triggers": [
+        "mention",
+        "reply",
+        "direct"
+      ],
+      "chats": [
+        "120363000000000000@g.us"
+      ],
+      "senders": {
+        "deny": [
+          "5511900001111"
+        ]
+      },
+      "topics": [
+        "deploy",
+        "erro",
+        "login"
+      ],
       "mode": "draft",
       "approval_token": "troque-por-um-valor-so-seu",
       "auto_senders": [],
@@ -19,10 +35,35 @@
       "instructions": "Responda só sobre o software X, consultando a documentação e o código do projeto. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem o conteúdo de outras conversas."
     },
     "acompanhar-numero": {
-      "targets": ["5511999990000"],
-      "triggers": ["from"],
+      "targets": [
+        "5511999990000"
+      ],
+      "triggers": [
+        "from"
+      ],
       "mode": "draft",
       "instructions": "Só acompanhar e resumir o que este número escreve; reunir evidências para montar uma tarefa."
+    },
+    "wall-e": {
+      "aliases": [
+        "@wall-e"
+      ],
+      "allow_own_alias": true,
+      "chats": [
+        "120363000000000000@g.us"
+      ],
+      "mode": "auto",
+      "auto_chats": [
+        "120363000000000000@g.us"
+      ],
+      "approval_token": "troque-por-um-valor-so-seu",
+      "limits": {
+        "replies_per_chat_per_hour": 10,
+        "replies_per_sender_per_hour": 5,
+        "cooldown_seconds": 15,
+        "max_reply_chars": 1200
+      },
+      "instructions": "Você é o Wall-E. Quem digitar @wall-e no grupo está falando com você; a pergunta está em `command`. Responda curto, consultando a documentação e o código do projeto. Quem responder a uma mensagem sua também fala com você. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem outras conversas."
     }
   }
 }

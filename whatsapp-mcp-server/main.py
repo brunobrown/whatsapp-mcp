@@ -374,7 +374,8 @@ async def monitor_messages(
     triggers: Optional[List[str]] = None,
     cursor: Union[int, str, None] = None,
     wait_seconds: float = 0,
-    limit: int = 20
+    limit: int = 20,
+    aliases: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Watch for new messages that refer to the account or to other numbers. Call it in a loop, passing back the cursor.
 
@@ -389,7 +390,11 @@ async def monitor_messages(
         targets: "me" (the account behind the bridge) and/or phone numbers, LIDs or user JIDs to watch
         triggers: What counts as a reference: mention (the number is tagged with @ in the text), reply (a message of the
                   number is quoted), direct (a message arrives in a direct chat: for "me" any received one, for another
-                  number the chat with it), from (a message sent by the number, any chat). Default: mention, reply, direct
+                  number the chat with it), from (a message sent by the number, any chat), alias (the text has one of the
+                  aliases, a name that calls the agent, as a whole word in any case; the event has command: the text
+                  without the name), agent_reply (a message quotes a reply the monitor sent). Default: mention, reply,
+                  direct for targets, plus alias and agent_reply for aliases
+        aliases: Names that call the agent, such as "@wall-e" (read-only, without a profile). Use targets, aliases or both
         cursor: The cursor of the previous call
         wait_seconds: How long to wait for an event (0 to 55, default 0)
         limit: Most events per call (1 to 100, default 20)
@@ -403,7 +408,7 @@ async def monitor_messages(
     Errors: success=false with INVALID_ARGUMENT, MONITOR_CONFIG_INVALID, PROFILE_NOT_FOUND, PROFILE_DISABLED,
     OWN_ACCOUNT_UNKNOWN (set WHATSAPP_OWN_NUMBER or start the bridge) or DIRECTORY_UNAVAILABLE
     """
-    return await monitor.monitor_messages(profile, targets, triggers, cursor, wait_seconds, limit)
+    return await monitor.monitor_messages(profile, targets, triggers, cursor, wait_seconds, limit, aliases)
 
 @mcp.tool()
 def monitor_reply(

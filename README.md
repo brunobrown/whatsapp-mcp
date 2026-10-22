@@ -160,7 +160,7 @@ Claude can access the following 19 tools to interact with WhatsApp.
 
 **Monitoring** (see [Monitoring and auto-reply](#monitoring-and-auto-reply))
 
-- **monitor_messages**: Watch for new messages that mention, reply to or write to the account (or to other numbers). Call it in a loop with the returned cursor; it can wait for new events.
+- **monitor_messages**: Watch for new messages that mention, reply to or write to the account (or to other numbers), call the agent by name, or reply to the agent. Call it in a loop with the returned cursor; it can wait for new events.
 - **monitor_reply**: Answer one of those messages, in its chat and quoting it, under the guardrails of a profile (approval, trusted senders, rate limits, audit).
 - **get_monitor_profiles**: List the monitoring profiles and their guardrails.
 
@@ -211,16 +211,18 @@ An agent can watch the account (`"me"`) and/or other numbers and answer on its o
 3. For each event: `matched` (which trigger fired for which target), `reply_mode` and the full `message` (author, text, media, the quoted message, replies).
 4. To answer, the agent calls `monitor_reply(profile, chat_jid, message_id, text)`.
 
-**What counts as a reference** (`triggers`, default `mention`, `reply`, `direct`):
+**What counts as a reference** (`triggers`; by default `mention`, `reply`, `direct` for `targets`, plus `alias` and `agent_reply` when the profile has `aliases`):
 
 | Trigger | Fires when |
 | ------- | ---------- |
+| `alias` | the text has one of the profile's `aliases` (a name that calls the agent, like `@wall-e`) as a whole word, in any case. The event has `command`: the text without the name |
+| `agent_reply` | someone replies to a message the agent sent (`monitor_reply`), in the same chat |
 | `mention` | the text has `@<number or LID>` of a target (works with the phone or the LID) |
 | `reply` | the message quotes a message of the target (for `me`: a message sent by the account), in the same chat |
 | `direct` | a message arrives in a direct chat: for `me`, any received one; for another number, the chat with that number |
 | `from` | the target wrote the message, in any chat (only when asked; not for `me`) |
 
-Messages sent by the account itself never fire, and neither do messages older than `max_event_age_minutes` (default 60), so the history WhatsApp re-sends is not taken as new. Targets are `"me"` (the account behind the bridge; set `WHATSAPP_OWN_NUMBER` if the bridge is not running) or phone numbers, LIDs and user JIDs.
+Messages sent by the account itself never fire (except `allow_own_alias`, below), and neither do messages older than `max_event_age_minutes` (default 60), so the history WhatsApp re-sends is not taken as new. Targets are `"me"` (the account behind the bridge; set `WHATSAPP_OWN_NUMBER` if the bridge is not running) or phone numbers, LIDs and user JIDs.
 
 **Without a profile** (`monitor_messages(targets=["me", "+5511999990000"])`) the monitor only reads. To answer you need a profile.
 
@@ -230,7 +232,10 @@ Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-
 
 | Field | Meaning | Enforced by the server? |
 | ----- | ------- | ----------------------- |
-| `targets`, `triggers` | whom to watch and what counts | yes |
+| `targets`, `triggers` | whom to watch and what counts. A profile needs `targets`, `aliases` or both | yes |
+| `aliases` | names that call the agent (1 to 10, 2 to 40 characters, no spaces), e.g. `["@wall-e"]` | yes |
+| `allow_own_alias` | `true`: a message **you** send with the name also calls the agent (nothing else you send does); default `false` | yes |
+| `auto_chats` | in `auto` mode, anyone in these chats is answered without a token | yes |
 | `chats` | only these chats (JIDs); empty = all | yes |
 | `senders.allow` / `senders.deny` | who may trigger; `deny` wins. A sender the directory cannot identify is skipped when a block entry has no other id to compare (fail closed) | yes |
 | `topics` | keywords; only messages containing one (any case) are delivered | yes |
@@ -242,6 +247,20 @@ Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-
 | `instructions` | what to answer, tone, what never to reveal | **no, guidance only** |
 
 The server cannot judge what a reply *says*. Topic and tone live in `instructions`, which the agent receives with every batch of events, and in `topics`, which only filters what the agent sees. Do not rely on `instructions` to keep a secret.
+
+#### Calling the agent by name
+
+Give the agent a name and anyone can call it by typing it, in a group or in a direct chat, without using WhatsApp's own mention:
+
+```text
+@wall-e qual é o próximo item da lista de tarefas?
+```
+
+- The name matches as a whole word, in any case: `@Wall-E, me ajuda` calls it; `@wall-ember`, `a@wall-e` (an e-mail) and `@wall-e2` do not. The event carries `command` (`"qual é o próximo item da lista de tarefas?"`), so the agent goes straight to the question.
+- Someone who **replies to a message the agent sent** calls it too (`agent_reply`), and so does a real mention of the account (`mention`) or a reply to one of your messages (`reply`), if the profile has `targets`. The follow-up goes through the same filters (`topics` included, so a short "thanks" is filtered if you set `topics`).
+- In `auto` mode, `auto_chats` lets everyone in a group call the agent and be answered without a token; the other chats stay in draft. Everyone in that group can try to manipulate the agent by text: keep the limits low and read the audit log.
+- To call the agent **yourself**, from your own phone, set `"allow_own_alias": true`. Only your messages that contain the name count, and a reply the monitor itself sent never does, even if it contains the name (the monitor recognises its replies by the ids in `monitor_audit.log`, and waits for a reply that is still being recorded). In `auto` mode your own messages are answered without a token.
+- A profile that only has `aliases` and the `alias` trigger answers direct messages only when they contain the name.
 
 **Draft or automatic.**
 - `draft` (default): `monitor_reply` sends nothing unless it gets the profile's `approval_token`; without it, it returns `APPROVAL_REQUIRED` and a `preview`. A profile with no token never sends in draft mode. Use `dry_run=true` to see the preview, the mode and whether a token is needed.

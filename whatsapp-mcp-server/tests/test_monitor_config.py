@@ -133,7 +133,8 @@ def test_listing_never_shows_the_token(config):  # CFG-04
 
     assert out["success"] is True and "segredo-12345" not in json.dumps(out)
     assert out["profiles"] == [{
-        "name": "suporte", "enabled": True, "targets": ["me", "5581999990000"], "triggers": ["mention", "direct"],
+        "name": "suporte", "enabled": True, "targets": ["me", "5581999990000"], "aliases": [], "allow_own_alias": False,
+        "auto_chats": [], "triggers": ["mention", "direct"],
         "chats": ["120363411171471138@g.us"], "senders": {"allow": ["5511911112222"], "deny": []}, "topics": ["deploy"],
         "mode": "auto", "auto_senders": ["5511911112222"],
         "limits": {"replies_per_chat_per_hour": 6, "replies_per_sender_per_hour": 4, "cooldown_seconds": 5,
@@ -165,7 +166,7 @@ def test_the_example_file_is_valid_once_the_placeholder_token_is_replaced(config
 
     out = monitor.list_profiles()
 
-    assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["suporte-software", "acompanhar-numero"]
+    assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["suporte-software", "acompanhar-numero", "wall-e"]
 
 
 def test_the_example_file_is_refused_until_the_placeholder_token_is_changed(monkeypatch):  # CFG-03
