@@ -826,11 +826,8 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			direction = "→"
 		}
 
-		// Log based on message type
-		if mediaType != "" {
-			fmt.Printf("[%s] %s %s: [%s: %s] %s\n", timestamp, direction, sender, mediaType, filename, content)
-		} else if content != "" {
-			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
+		if line := messageLogLine(timestamp, direction, sender, mediaType, filename, content, includeTextInLog); line != "" {
+			fmt.Println(line)
 		}
 	}
 }
@@ -1530,7 +1527,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 			return
 		}
 
-		fmt.Println("Received request to send message", req.Message, req.MediaPath)
+		fmt.Println("Received request to send a message", loggedText(req.Message, includeTextInLog), loggedText(req.MediaPath, includeTextInLog))
 
 		// Send the message
 		result := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, req.Mentions, req.ReplyTo, logger)
@@ -1982,7 +1979,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				}
 
 				// Log the message content for debugging
-				logger.Infof("Message content: %v, Media Type: %v", content, mediaType)
+				logger.Infof("Message content: %v, Media Type: %v", loggedText(content, includeTextInLog), mediaType)
 
 				// Skip messages with no content and no media
 				if content == "" && mediaType == "" {
@@ -2041,13 +2038,8 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					}
 					syncedCount++
 					// Log successful message storage
-					if mediaType != "" {
-						logger.Infof("Stored message: [%s] %s -> %s: [%s: %s] %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, mediaType, filename, content)
-					} else {
-						logger.Infof("Stored message: [%s] %s -> %s: %s",
-							timestamp.Format("2006-01-02 15:04:05"), sender, chatJID, content)
-					}
+					logger.Infof("Stored message: %s -> %s", messageLogLine(
+						timestamp.Format("2006-01-02 15:04:05"), "", sender, mediaType, filename, content, includeTextInLog), chatJID)
 				}
 			}
 		}
