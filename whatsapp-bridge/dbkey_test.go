@@ -18,6 +18,7 @@ const (
 
 func clearKeyEnv(t *testing.T) string {
 	t.Helper()
+	t.Chdir(t.TempDir()) // the key check looks at ./store: never at the real one
 	dir := filepath.Join(t.TempDir(), "config")
 	t.Setenv("WHATSAPP_CONFIG_DIR", dir)
 	t.Setenv("WHATSAPP_DB_KEY", "")
@@ -274,5 +275,35 @@ func TestCreatePrivateFileNeverReplacesAnExistingOne(t *testing.T) { // KEY-01
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Errorf("temporary files left behind: %v", entries)
+	}
+}
+
+func TestAMissingDefaultKeyIsNotReplacedWhenEncryptedDatabasesExist(t *testing.T) { // KEY-02
+	dir := clearKeyEnv(t)
+	t.Chdir(t.TempDir())
+	os.MkdirAll("store", 0o700)
+	os.WriteFile("store/messages.db", []byte("\x62\x98\x72\xb6 encrypted"), 0o600)
+
+	_, _, err := loadMasterKey()
+
+	if err == nil || !strings.Contains(err.Error(), "restore db.key") || !strings.Contains(err.Error(), "messages.db") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "db.key")); statErr == nil {
+		t.Error("a new key was created next to databases it cannot open")
+	}
+}
+
+func TestAMissingDefaultKeyIsCreatedForANewInstallationOrPlaintextDatabases(t *testing.T) { // KEY-01
+	dir := clearKeyEnv(t)
+	t.Chdir(t.TempDir())
+	os.MkdirAll("store", 0o700)
+	os.WriteFile("store/messages.db", append([]byte(sqliteMagic), make([]byte, 50)...), 0o600) // plaintext: it will be migrated
+
+	if _, _, err := loadMasterKey(); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "db.key")); err != nil {
+		t.Error("the key was not created")
 	}
 }

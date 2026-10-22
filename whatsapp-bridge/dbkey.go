@@ -85,6 +85,12 @@ func loadMasterKeyWithWarnings() (key []byte, source string, warnings []string, 
 	case !os.IsNotExist(readErr):
 		return nil, path, nil, fmt.Errorf("cannot read the key file %s: %v", path, readErr)
 	}
+	// No key yet. A new one is only right for a new installation: with encrypted databases already there it
+	// could never open them, and it would sit where the real key belongs.
+	if existing := encryptedDatabasesIn("store"); len(existing) > 0 {
+		return nil, path, nil, fmt.Errorf("the key file %s is missing, but %s already encrypted: restore db.key (from your backup or vault), or point %s at it. A new key was NOT created, because it could not open them",
+			path, strings.Join(existing, " and "), dbKeyFileEnv)
+	}
 	key = make([]byte, dbKeyBytes)
 	if _, err := rand.Read(key); err != nil {
 		return nil, path, nil, err
@@ -113,4 +119,15 @@ func deriveKey(master []byte, name string) []byte {
 		panic(err)
 	}
 	return key
+}
+
+// encryptedDatabasesIn names the databases in dir (messages.db, whatsapp.db) that are already encrypted.
+func encryptedDatabasesIn(dir string) []string {
+	var names []string
+	for _, name := range []string{messagesDBName, sessionDBName} {
+		if state, err := detectDBState(filepath.Join(dir, name)); err == nil && state == dbEncrypted {
+			names = append(names, name)
+		}
+	}
+	return names
 }
