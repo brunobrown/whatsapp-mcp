@@ -4,6 +4,7 @@
 BIN := bin/whatsapp-bridge
 SERVICE := whatsapp-bridge.service
 SERVICE_DIR ?= $(HOME)/.config/systemd/user
+CONFIG_DIR ?= $(if $(WHATSAPP_CONFIG_DIR),$(WHATSAPP_CONFIG_DIR),$(HOME)/.config/whatsapp-mcp)
 
 .PHONY: build run test install-service
 
@@ -18,8 +19,9 @@ test:
 
 # Writes the systemd --user unit for this directory. Then: systemctl --user enable --now whatsapp-bridge
 install-service: build
-	@case "$(CURDIR)" in *[!A-Za-z0-9_./-]*) echo "install-service: the directory $(CURDIR) has characters (space, & | % and others) that break the unit file; use a path of letters, digits and _ . / -" >&2; exit 1;; esac
+	@case "$(CURDIR)$(CONFIG_DIR)" in *[!A-Za-z0-9_./-]*) echo "install-service: the directories $(CURDIR) and $(CONFIG_DIR) have characters (space, & | % and others) that break the unit file; use paths of letters, digits and _ . / -" >&2; exit 1;; esac
+	mkdir -p -m 700 $(CONFIG_DIR) $(CURDIR)/store
 	mkdir -p $(SERVICE_DIR)
-	sed 's|@DIR@|$(CURDIR)|g' $(SERVICE).in > $(SERVICE_DIR)/$(SERVICE)
+	sed -e 's|@DIR@|$(CURDIR)|g' -e 's|@CONFIG@|$(CONFIG_DIR)|g' $(SERVICE).in > $(SERVICE_DIR)/$(SERVICE)
 	@echo "Wrote $(SERVICE_DIR)/$(SERVICE)"
 	@echo "Next: systemctl --user daemon-reload && systemctl --user enable --now whatsapp-bridge"
