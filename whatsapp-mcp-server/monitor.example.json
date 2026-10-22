@@ -1,0 +1,28 @@
+{
+  "profiles": {
+    "suporte-software": {
+      "targets": ["me"],
+      "triggers": ["mention", "reply", "direct"],
+      "chats": ["120363000000000000@g.us"],
+      "senders": { "deny": ["5511900001111"] },
+      "topics": ["deploy", "erro", "login"],
+      "mode": "draft",
+      "approval_token": "troque-por-um-valor-so-seu",
+      "auto_senders": [],
+      "limits": {
+        "replies_per_chat_per_hour": 6,
+        "replies_per_sender_per_hour": 4,
+        "cooldown_seconds": 20,
+        "max_reply_chars": 1500
+      },
+      "max_event_age_minutes": 60,
+      "instructions": "Responda só sobre o software X, consultando a documentação e o código do projeto. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem o conteúdo de outras conversas."
+    },
+    "acompanhar-numero": {
+      "targets": ["5511999990000"],
+      "triggers": ["from"],
+      "mode": "draft",
+      "instructions": "Só acompanhar e resumir o que este número escreve; reunir evidências para montar uma tarefa."
+    }
+  }
+}
