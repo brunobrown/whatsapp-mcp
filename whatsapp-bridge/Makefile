@@ -6,7 +6,7 @@ SERVICE := whatsapp-bridge.service
 SERVICE_DIR ?= $(HOME)/.config/systemd/user
 CONFIG_DIR ?= $(if $(WHATSAPP_CONFIG_DIR),$(WHATSAPP_CONFIG_DIR),$(HOME)/.config/whatsapp-mcp)
 
-.PHONY: build run test install-service
+.PHONY: build run test install-service purge-plaintext
 
 build:
 	go build -o $(BIN) .
@@ -25,3 +25,7 @@ install-service: build
 	sed -e 's|@DIR@|$(CURDIR)|g' -e 's|@CONFIG@|$(CONFIG_DIR)|g' $(SERVICE).in > $(SERVICE_DIR)/$(SERVICE)
 	@echo "Wrote $(SERVICE_DIR)/$(SERVICE)"
 	@echo "Next: systemctl --user daemon-reload && systemctl --user enable --now whatsapp-bridge"
+
+# Overwrites with zeros and removes the plaintext copies left behind when the databases were encrypted.
+purge-plaintext: build
+	./$(BIN) purge-plaintext
