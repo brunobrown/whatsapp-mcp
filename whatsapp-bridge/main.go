@@ -1604,8 +1604,9 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 	return mux
 }
 
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, logger waLog.Logger) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state *bridgeState, port int, token string, logger waLog.Logger) {
 	mux := newRESTMux(client, messageStore, clientSource{client}, state, logger)
+	handler := newAPIGuard(token, port).wrap(mux)
 
 	// Start the server (bound to localhost only, to avoid exposing the API on the network)
 	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
@@ -1613,7 +1614,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, state
 
 	// Run server in a goroutine so it doesn't block
 	go func() {
-		if err := http.ListenAndServe(serverAddr, mux); err != nil {
+		if err := http.ListenAndServe(serverAddr, handler); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
@@ -1793,7 +1794,19 @@ func main() {
 
 	// Start REST API server
 	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
-	startRESTServer(client, messageStore, state, 8080, logger)
+	// The API is never started without its token: it can send messages as the account.
+	apiConfigDir, err := configDir()
+	if err != nil {
+		logger.Errorf("Cannot start the REST API: %v", err)
+		return
+	}
+	apiToken, err := loadOrCreateToken(apiConfigDir)
+	if err != nil {
+		logger.Errorf("Cannot start the REST API: %v", err)
+		return
+	}
+	logger.Infof("The REST API token is in %s", filepath.Join(apiConfigDir, apiTokenFile))
+	startRESTServer(client, messageStore, state, 8080, apiToken, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
