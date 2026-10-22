@@ -1476,6 +1476,25 @@ def _with_quoted(cursor, columns, chat_jid, cache: dict, messages: List[Message]
     return {**cache, **extra}
 
 
+def thread_dicts(cursor: sqlite3.Cursor, columns: str, messages: List[Message]) -> List[dict]:
+    """The get_message_thread form of messages, which may come from several chats."""
+    out = {}
+    for chat_jid in dict.fromkeys(m.chat_jid for m in messages):
+        group = [m for m in messages if m.chat_jid == chat_jid]
+        cache = {m.id: m for m in group}
+        supported = _has_quoted_column(cursor)
+        if supported:
+            _resolve_ancestors(cursor, columns, chat_jid, cache, set(), group)
+        roots = {m.id: _root_id(m, cache) for m in group}
+        replies: dict = {}
+        if supported:
+            for child in _fetch_children(cursor, columns, chat_jid, [m.id for m in group]):
+                replies.setdefault(child.quoted_message_id, []).append(child.id)
+        for m in group:
+            out[(chat_jid, m.id)] = _thread_message(m, False, cache, replies, roots)
+    return [out[(m.chat_jid, m.id)] for m in messages]
+
+
 def _thread_of(cursor, columns, target: Message, supported: bool) -> dict:
     cache, missing = {target.id: target}, set()
     if supported:

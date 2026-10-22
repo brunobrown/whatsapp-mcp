@@ -239,3 +239,174 @@ def list_profiles() -> dict:
     if problem:
         return error(CONFIG_INVALID, f"{CONFIG_PATH} is not usable, so no profile works: {problem}")
     return {"success": True, "profiles": [describe(p) for p in profiles.values()]}
+
+
+# ---------------------------------------------------------------------------------------------------------
+# Scan: the messages that arrived after a cursor and refer to the monitored numbers
+# ---------------------------------------------------------------------------------------------------------
+import logging  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+import whatsapp  # noqa: E402
+
+logger = logging.getLogger(__name__)
+_SCAN_BATCH = 200
+_own_cache: Dict[str, str] = {}
+
+
+class OwnAccountUnknown(Exception):
+    """The number of the account behind the bridge could not be found."""
+
+
+def own_number() -> str:
+    """The account's number: WHATSAPP_OWN_NUMBER, else what the bridge reports (and remembers)."""
+    configured = normalize_number(os.environ.get("WHATSAPP_OWN_NUMBER", ""))
+    if configured:
+        return configured
+    try:
+        status = whatsapp.get_connection_status()
+        phone = normalize_number(str(status.get("phone") or ""))
+    except Exception:  # noqa: BLE001 - any failure just means "unknown"
+        phone = None
+    if phone:
+        _own_cache["number"] = phone
+        return phone
+    if "number" in _own_cache:
+        return _own_cache["number"]
+    raise OwnAccountUnknown('The account number is unknown: the bridge is not answering. Start it, or set WHATSAPP_OWN_NUMBER')
+
+
+@dataclass
+class Target:
+    label: str          # "me" or the digits given
+    ids: frozenset      # every id the person is stored under (phone, LID)
+    is_me: bool
+
+
+def resolve_targets(profile: Profile) -> List[Target]:
+    targets = []
+    for raw in profile.targets:
+        is_me = raw == "me"
+        number = own_number() if is_me else raw
+        targets.append(Target("me" if is_me else raw, frozenset(whatsapp.sender_ids(number)) | {number}, is_me))
+    return targets
+
+
+def _ids_of(numbers: List[str]) -> frozenset:
+    out = set()
+    for number in numbers:
+        out.update(whatsapp.sender_ids(number))
+        out.add(number)
+    return frozenset(out)
+
+
+def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], quoted_sender) -> List[dict]:
+    """The triggers this message fires, as [{trigger, target}]. quoted_sender(message) -> (sender, is_from_me) or None."""
+    if message.is_from_me:
+        return []
+    found = []
+    is_group = message.chat_jid.endswith("@g.us")
+    mentioned = {m.group(1) for m in whatsapp._MENTION.finditer(message.content or "")}
+    chat_user = message.chat_jid.split("@")[0]
+    quoted = quoted_sender(message) if "reply" in profile.triggers and message.quoted_message_id else None
+    for target in targets:
+        if "mention" in profile.triggers and mentioned & target.ids:
+            found.append({"trigger": "mention", "target": target.label})
+        if quoted is not None and ((target.is_me and quoted[1]) or (not target.is_me and quoted[0] in target.ids)):
+            found.append({"trigger": "reply", "target": target.label})
+        if "direct" in profile.triggers and not is_group and (target.is_me or chat_user in target.ids):
+            found.append({"trigger": "direct", "target": target.label})
+        if "from" in profile.triggers and not target.is_me and message.sender in target.ids:
+            found.append({"trigger": "from", "target": target.label})
+    return found
+
+
+def passes_filters(message: whatsapp.Message, profile: Profile) -> bool:
+    if profile.chats and message.chat_jid not in profile.chats:
+        return False
+    sender = message.sender
+    if profile.senders_deny and sender in _ids_of(profile.senders_deny):
+        return False
+    if profile.senders_allow and sender not in _ids_of(profile.senders_allow):
+        return False
+    if profile.topics:
+        text = (message.content or "").casefold()
+        if not any(topic in text for topic in profile.topics):
+            return False
+    return True
+
+
+def reply_mode(message: whatsapp.Message, profile: Profile, adhoc: bool) -> str:
+    if adhoc:
+        return "none"
+    if profile.mode == "auto" and message.sender in _ids_of(profile.auto_senders):
+        return "auto"
+    return "draft"
+
+
+def current_cursor() -> int:
+    """The position of the newest stored message (0 when there is none)."""
+    conn = whatsapp._open_chats()
+    try:
+        return conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM messages").fetchone()[0]
+    finally:
+        conn.close()
+
+
+@dataclass
+class ScanResult:
+    events: List[dict]
+    cursor: int
+    has_more: bool
+
+
+def scan(profile: Profile, cursor: int, limit: int, adhoc: bool = False, now: Optional[datetime] = None,
+         targets: Optional[List[Target]] = None) -> ScanResult:
+    """The events for the messages stored after cursor, in arrival order, at most limit of them.
+
+    The returned cursor is the position of the last message looked at: right after the last event when the page
+    is full (so none is skipped), else the newest message read.
+    """
+    now = now or datetime.now(timezone.utc)
+    oldest = now - timedelta(minutes=profile.max_event_age_minutes)
+    targets = targets if targets is not None else resolve_targets(profile)
+    conn = whatsapp._open_chats()
+    try:
+        cursor_obj = conn.cursor()
+        columns = whatsapp._message_select(cursor_obj)
+        has_quoted = whatsapp._has_quoted_column(cursor_obj)
+
+        def quoted_sender(message):
+            if not has_quoted:
+                return None
+            row = conn.execute("SELECT sender, is_from_me FROM messages WHERE chat_jid = ? AND id = ?",
+                               (message.chat_jid, message.quoted_message_id)).fetchone()
+            return (row[0], bool(row[1])) if row else None
+
+        picked, position = [], cursor
+        while True:
+            rows = cursor_obj.execute(
+                f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+                f"WHERE messages.rowid > ? ORDER BY messages.rowid LIMIT ?", (position, _SCAN_BATCH)).fetchall()
+            if not rows:
+                return ScanResult(_build(cursor_obj, columns, picked, profile, adhoc), position, False)
+            for row in rows:
+                message = whatsapp._message_from_row(row)
+                if whatsapp._aware(message.timestamp) >= oldest and passes_filters(message, profile):
+                    hit = matches(message, profile, targets, quoted_sender)
+                    if hit:
+                        picked.append((message, hit))
+                position = message.rowid
+                if len(picked) >= limit:
+                    more = conn.execute("SELECT 1 FROM messages WHERE rowid > ? LIMIT 1", (position,)).fetchone()
+                    return ScanResult(_build(cursor_obj, columns, picked, profile, adhoc), position, bool(more))
+    finally:
+        conn.close()
+
+
+def _build(cursor_obj, columns, picked, profile: Profile, adhoc: bool) -> List[dict]:
+    if not picked:
+        return []
+    dicts = whatsapp.thread_dicts(cursor_obj, columns, [m for m, _ in picked])
+    return [{"matched": hit, "reply_mode": reply_mode(m, profile, adhoc), "message": d}
+            for (m, hit), d in zip(picked, dicts)]
