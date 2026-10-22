@@ -224,3 +224,55 @@ func TestAnExplicitKeyFileWithWideModeIsReportedNotChanged(t *testing.T) { // KE
 		t.Error("a key file the user chose must not be changed")
 	}
 }
+
+func TestAKeySetToBlanksIsAnErrorNotUnset(t *testing.T) { // KEY-02
+	clearKeyEnv(t)
+	t.Setenv("WHATSAPP_DB_KEY", "   ")
+
+	_, _, err := loadMasterKey()
+
+	if err == nil || !strings.Contains(err.Error(), "WHATSAPP_DB_KEY") {
+		t.Errorf("a blank key must be an error, got %v", err)
+	}
+}
+
+func TestTwoFirstStartsAtOnceShareTheSameKey(t *testing.T) { // KEY-01
+	dir := clearKeyEnv(t)
+	const starts = 16
+	keys := make(chan string, starts)
+	for i := 0; i < starts; i++ {
+		go func() {
+			key, _, err := loadMasterKey()
+			if err != nil {
+				keys <- "error: " + err.Error()
+				return
+			}
+			keys <- hex.EncodeToString(key)
+		}()
+	}
+	seen := map[string]bool{}
+	for i := 0; i < starts; i++ {
+		seen[<-keys] = true
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "db.key"))
+
+	if len(seen) != 1 || !seen[strings.TrimSpace(string(data))] {
+		t.Errorf("starts got %d different results, file holds %q", len(seen), data)
+	}
+}
+
+func TestCreatePrivateFileNeverReplacesAnExistingOne(t *testing.T) { // KEY-01
+	dir := t.TempDir()
+	if created, err := createPrivateFile(dir, "k", "first"); !created || err != nil {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+
+	created, err := createPrivateFile(dir, "k", "second")
+
+	if created || err != nil || string(mustRead(t, filepath.Join(dir, "k"))) != "first" {
+		t.Errorf("created=%v err=%v content=%q", created, err, mustRead(t, filepath.Join(dir, "k")))
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("temporary files left behind: %v", entries)
+	}
+}
