@@ -16,6 +16,7 @@ from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import filemode
 import send_policy
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -226,6 +227,7 @@ def _parse_profile(name: str, raw) -> Profile:
 
 def load_profiles() -> Tuple[Dict[str, Profile], Optional[str]]:
     """(profiles by name, problem). No file means no profiles; a file that does not validate means a problem."""
+    filemode.warn_if_open(CONFIG_PATH)   # the approval token must not be readable by other users
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             text = f.read()
@@ -287,11 +289,20 @@ def describe(profile: Profile) -> dict:
     }
 
 
+def file_warnings() -> List[str]:
+    """Warnings about the files that hold tokens (profiles and send policy) being open to other users."""
+    return [w for w in (filemode.warn_if_open(CONFIG_PATH), filemode.warn_if_open(send_policy.POLICY_PATH)) if w]
+
+
 def list_profiles() -> dict:
+    warnings = file_warnings()
     profiles, problem = load_profiles()
     if problem:
         return error(CONFIG_INVALID, f"{CONFIG_PATH} is not usable, so no profile works: {problem}")
-    return {"success": True, "profiles": [describe(p) for p in profiles.values()]}
+    answer = {"success": True, "profiles": [describe(p) for p in profiles.values()]}
+    if warnings:
+        answer["warnings"] = warnings
+    return answer
 
 
 # ---------------------------------------------------------------------------------------------------------
