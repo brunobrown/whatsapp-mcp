@@ -327,3 +327,33 @@ func mustHex(s string) []byte {
 	}
 	return b
 }
+
+// TestWriteCrossLanguageFixture regenerates whatsapp-mcp-server/tests/fixtures/encrypted_messages.db, the
+// file the Python tests read to prove that the server opens what the bridge writes. Run it with
+// WRITE_CROSSLANG_FIXTURE=<path>; the key is the test master key.
+func TestWriteCrossLanguageFixture(t *testing.T) {
+	target := os.Getenv("WRITE_CROSSLANG_FIXTURE")
+	if target == "" {
+		t.Skip("set WRITE_CROSSLANG_FIXTURE to regenerate the fixture")
+	}
+	encryptedEnv(t)
+	t.Chdir(t.TempDir())
+	store, err := NewMessageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	store.StoreChat("fixture@g.us", "Grupo Fixture", when)
+	store.StoreMessage("FX1", "fixture@g.us", "5511999990000", "primeira mensagem do fixture", when, false, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("FX2", "fixture@g.us", "5511888880000", "segunda, em resposta", when.Add(time.Minute), false, "", "", "", nil, nil, nil, 0)
+	store.SetMessageMeta("FX2", "fixture@g.us", MessageMeta{QuotedID: "FX1"})
+	store.UpsertIdentity("207571524796601", "5511999990000", "Ana Fixture", "")
+	store.Close()
+	data, err := os.ReadFile("store/messages.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

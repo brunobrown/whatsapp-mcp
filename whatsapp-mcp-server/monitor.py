@@ -16,6 +16,7 @@ from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+import dbcrypto
 import filemode
 import send_policy
 
@@ -674,7 +675,7 @@ async def monitor_messages(profile: Optional[str] = None, targets: Optional[List
         return error("OWN_ACCOUNT_UNKNOWN", str(e))
     except send_policy.DirectoryError as e:
         return error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         return error("UNKNOWN", f"Database error: {e}")
 
     answer = {"success": True, "cursor": str(position), "events": events, "has_more": has_more, "timed_out": timed_out,
@@ -859,7 +860,7 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         return error("OWN_ACCOUNT_UNKNOWN", str(e))
     except send_policy.DirectoryError as e:
         return error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         return error("UNKNOWN", f"Database error: {e}")
     if not hit:
         return error(NOT_A_TRIGGER, f"Message {message_id} of {jid} does not fire profile {profile!r}: "
