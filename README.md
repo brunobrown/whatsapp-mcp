@@ -117,7 +117,7 @@ This application consists of two main components:
 
 ### Data Storage
 
-- All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
+- All message history is stored in an encrypted SQLite database (SQLCipher) within the `whatsapp-bridge/store/` directory; see [Security of your data](#security-of-your-data)
 - The database maintains tables for chats, messages and `contacts_identity` (who is behind each phone number and LID, with address-book and push names)
 - Messages are indexed for efficient searching and retrieval
 - Downloaded media lives under `whatsapp-bridge/store/<chat>/<message id>/`
@@ -372,6 +372,11 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_AUTO_DOWNLOAD_MAX_MB` | bridge | `25` | Largest media saved automatically (by the size WhatsApp declares) |
 | `WHATSAPP_AUTO_DOWNLOAD_TYPES` | bridge | `image,document,audio` | Comma-separated types saved automatically (`image`, `video`, `audio`, `document`) |
 | `WHATSAPP_MEDIA_RETENTION_DAYS` | bridge | off | Delete downloaded files of messages older than this many days (the messages stay). Only a positive whole number turns it on. |
+| `WHATSAPP_DB_ENCRYPTION` | bridge | `on` | `on` encrypts the databases (and migrates plaintext ones at start); `off` keeps them in plain SQLite |
+| `WHATSAPP_DB_KEY` | bridge, MCP server | - | The master key of the databases, 64 hexadecimal characters; wins over the key file |
+| `WHATSAPP_DB_KEY_FILE` | bridge, MCP server | `<config dir>/db.key` | A file with the master key (it must exist) |
+| `WHATSAPP_CONFIG_DIR` | bridge, MCP server | the user configuration directory + `whatsapp-mcp` | Where `db.key` and `api_token` live |
+| `WHATSAPP_LOG_MESSAGES` | bridge | off | `true` puts the text of messages in the log |
 | `WHATSAPP_TIMEZONE` | MCP server | system zone | IANA zone (`America/Recife`) for dates given without an offset. An unknown name is an error. |
 | `WHATSAPP_SEND_POLICY` | MCP server | `whatsapp-mcp-server/send_policy.json` | Path of the send policy file |
 | `WHATSAPP_SEND_AUDIT_LOG` | MCP server | `whatsapp-mcp-server/send_audit.log` | Path of the send audit log |
@@ -385,8 +390,61 @@ The bridge also needs to be **restarted after updating it** for new behaviour to
 
 Monitoring: `MONITOR_CONFIG_INVALID`, `PROFILE_NOT_FOUND`, `PROFILE_DISABLED`, `OWN_ACCOUNT_UNKNOWN`, `NOT_A_TRIGGER`, `APPROVAL_REQUIRED`, `RATE_LIMITED`, `RATE_LIMIT_UNVERIFIABLE`, `INVALID_ARGUMENT`.
 Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
-Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
-Status: `BRIDGE_UNREACHABLE`, `UNKNOWN`.
+Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
+Status: `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
+Database: `DATABASE_KEY_UNAVAILABLE`, `DATABASE_UNREADABLE` (the MCP server cannot open an encrypted database).
+
+## Security of your data
+
+Everything the bridge stores is yours and stays on your machine. These are the protections, and their limits.
+
+| Protected | How |
+| --------- | --- |
+| The two databases (`messages.db`: your messages; `whatsapp.db`: the keys of the linked device) read by someone who only has the **file** (a copy, a backup, a stolen disk) | Encrypted with SQLCipher (AES-256). The key is **not** in the file nor in the project: it lives in `db.key` in your user configuration directory |
+| Other users of the machine | `store/` is `0700` and every file in it `0600`; the bridge sets `umask 077` and tightens what already exists when it starts |
+| Other programs and web pages talking to the bridge | The local API (`127.0.0.1:8080`) needs a token, refuses a foreign `Host`, any `Origin` header (a browser) and any `POST` that is not JSON. A web page cannot send a message through it |
+| What the log reveals | The log says who, when and what kind of message, never its text (`WHATSAPP_LOG_MESSAGES=true` turns the text on for debugging) |
+
+**Not protected:** downloaded media (images, audio, documents) and `bridge.log` are plain files, private to your user (`0600`) but not encrypted: use disk encryption (LUKS, FileVault, BitLocker) and `WHATSAPP_MEDIA_RETENTION_DAYS`. Malware running **as you** can read the key as the bridge does. The database is decrypted in memory while the bridge runs. Disk encryption is still the base layer, and this does not replace it.
+
+### The database key
+
+- The bridge creates a random 256-bit master key in `db.key` the first time it starts (`~/.config/whatsapp-mcp/db.key` on Linux; `WHATSAPP_CONFIG_DIR` changes the directory). Each database gets its own key derived from it (HKDF-SHA256), and the MCP server derives the same ones.
+- Other sources, in this order: `WHATSAPP_DB_KEY` (64 hexadecimal characters, for a secret manager or a container) and `WHATSAPP_DB_KEY_FILE`. A source that is set and wrong is an error; the bridge never falls back to another key.
+- **Back up `db.key` somewhere safe and separate from the databases (a password manager).** If you lose it, the encrypted databases cannot be recovered. (Losing `whatsapp.db` only means scanning the QR code again; losing `messages.db` loses the history.)
+- A wrong key stops the start with a clear error and does not touch the file. The MCP server reports `DATABASE_KEY_UNAVAILABLE` (no key) or `DATABASE_UNREADABLE` (the key does not open the file) instead of showing an empty chat list.
+
+### Moving an existing installation to encrypted databases
+
+Nothing to do: the next time the bridge starts it migrates `messages.db` and `whatsapp.db` by itself (`WHATSAPP_DB_ENCRYPTION=on` is the default).
+
+1. It exports each database into a temporary encrypted file, **verifies** it (tables, row counts, indexes, triggers, `user_version`, integrity) and only then swaps it in. If anything fails, the original is left as it was. If the bridge is interrupted, the next start finishes the job.
+2. The original plaintext is kept as `store/<name>.plain-<UTC time>.bak` (`0600`). **It is still readable by anyone who gets it**, so once you have checked that everything works, run:
+
+```bash
+cd whatsapp-bridge
+make purge-plaintext      # or: ./bin/whatsapp-bridge purge-plaintext
+```
+
+It overwrites with zeros and deletes the plaintext copies (the `.plain-*.bak` files and the `.bak*` files in `store/` that are plain SQLite), and never touches the databases in use. On an SSD or a journaling file system an overwrite is a best effort: the old blocks may survive, which is one more reason to use disk encryption. Also delete any copy of the database you made yourself, such as `messages.db.bak-...`.
+
+Set `WHATSAPP_DB_ENCRYPTION=off` to keep plaintext databases (the bridge warns on every start). An encrypted database with `off` is an error, not a silent downgrade.
+
+### The local API token
+
+The bridge keeps a random token in `api_token` (same directory as `db.key`, `0600`) and the MCP server reads it on every call. After updating, restart the bridge and the MCP server. If they get out of step, the tools answer `BRIDGE_UNAUTHORIZED` with that hint.
+
+### Files with tokens
+
+`send_policy.json` and `monitor_profiles.json` hold tokens. If other users can read them, the server logs a warning, and `get_monitor_profiles` lists `warnings`, with the `chmod 600` to run.
+
+### As a service
+
+`make install-service` writes a hardened `systemd --user` unit: `UMask=0077`, no new privileges, read-only file system except `store/` and the configuration directory, read-only home, restricted address families and no capabilities. It does not use `PrivateTmp`, because audio conversion by the MCP server writes to `/tmp` and the bridge has to read it.
+
+### Windows
+
+Permissions and `umask` do not apply (they rely on your user profile's access rules); encryption works the same way, and the SQLCipher code is built in (needs CGO, as before).
 
 ## Technical Details
 
