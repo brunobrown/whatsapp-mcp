@@ -662,3 +662,62 @@ func TestADatabaseWithAHotJournalIsRecoveredOnACopyAndTheOriginalStaysUntouched(
 		t.Error("the old journal was left against the new database")
 	}
 }
+
+func TestAStaleRecoveryCopyIsWipedOnTheNextStart(t *testing.T) { // MIG-04 (revisão de segurança)
+	skipOnWindows(t)
+	plaintextStore(t)
+	stale := "store/messages.db" + migrationTempSuffix + "-src"
+	os.WriteFile(stale, []byte(secretMessage), 0o600)
+	os.WriteFile(stale+"-wal", []byte(secretMessage), 0o600)
+	witness := filepath.Join(t.TempDir(), "witness")
+	os.Link(stale, witness) // a second name: shows whether the content was overwritten before the unlink
+
+	store, err := NewMessageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	for _, leftover := range []string{stale, stale + "-wal"} {
+		if _, err := os.Stat(leftover); err == nil {
+			t.Errorf("%s was left behind", leftover)
+		}
+	}
+	if !allZero(mustRead(t, witness)) {
+		t.Error("the plaintext of the stale copy was not overwritten")
+	}
+}
+
+func TestPurgeAlsoRemovesRecoveryCopiesAndTheSidecarsOfPlaintextCopies(t *testing.T) { // MIG-06
+	skipOnWindows(t)
+	t.Chdir(t.TempDir())
+	os.MkdirAll("store", 0o700)
+	plain := append([]byte(sqliteMagic), make([]byte, 100)...)
+	files := map[string][]byte{
+		"store/messages.db.plain-X.bak":         plain,
+		"store/messages.db.plain-X.bak-wal":     []byte(secretMessage),
+		"store/messages.db.plain-X.bak-journal": []byte(secretMessage),
+		"store/messages.db.enc-tmp-src":         plain,
+		"store/messages.db.enc-tmp-src-journal": []byte(secretMessage),
+		"store/messages.db":                     []byte("\x62\x98\x72\xb6 encrypted live"),
+		"store/messages.db-wal":                 []byte("sidecar of a live database"),
+		"store/other.bak":                       []byte("my notes"),
+		"store/other.bak-wal":                   []byte("not a sidecar of a plaintext copy"),
+		"store/encrypted.bak":                   []byte("\x62\x98\x72\xb6 encrypted"),
+		"store/encrypted.bak-journal":           []byte("sidecar of an encrypted copy"),
+	}
+	for name, data := range files {
+		os.WriteFile(name, data, 0o600)
+	}
+
+	removed, err := purgePlaintext("store")
+
+	if err != nil || len(removed) != 5 {
+		t.Fatalf("removed %v err %v, want the 5 plaintext files", removed, err)
+	}
+	for _, kept := range []string{"store/messages.db", "store/messages.db-wal", "store/other.bak", "store/other.bak-wal", "store/encrypted.bak", "store/encrypted.bak-journal"} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s must not be touched", kept)
+		}
+	}
+}

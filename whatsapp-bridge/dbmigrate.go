@@ -274,6 +274,13 @@ func migrateToEncrypted(path, name string, cfg dbConfig) error {
 	tmp := path + migrationTempSuffix
 	os.Remove(tmp)
 	removeStaleSidecars(tmp)
+	// the private copy a recovery leaves when the process dies holds plaintext: wipe it, do not just unlink it
+	staleSource := path + migrationTempSuffix + "-src"
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+		if _, err := os.Lstat(staleSource + suffix); err == nil {
+			overwriteAndRemove(staleSource + suffix)
+		}
+	}
 
 	var madeBackup string
 	source := path
@@ -364,12 +371,28 @@ func plaintextCopies(dir string) ([]string, error) {
 	var found []string
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == messagesDBName || name == sessionDBName || !strings.Contains(name, ".bak") {
+		stem, sidecar := name, false
+		for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+			if strings.HasSuffix(name, suffix) {
+				stem, sidecar = strings.TrimSuffix(name, suffix), true
+			}
+		}
+		isCopy := strings.Contains(stem, ".bak") || strings.Contains(stem, migrationTempSuffix+"-src")
+		if name == messagesDBName || name == sessionDBName || !isCopy {
 			continue
 		}
 		path := filepath.Join(dir, name)
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || isLive(info) {
+			continue
+		}
+		if sidecar { // a journal or WAL of a plaintext copy is plaintext too, and has no SQLite header to check
+			if main, err := os.Lstat(filepath.Join(dir, stem)); err == nil && main.Mode().IsRegular() {
+				if state, _ := detectDBState(filepath.Join(dir, stem)); state != dbPlaintext {
+					continue
+				}
+			}
+			found = append(found, path)
 			continue
 		}
 		if state, err := detectDBState(path); err == nil && state == dbPlaintext {
