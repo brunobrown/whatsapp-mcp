@@ -28,6 +28,8 @@ PROFILE_DISABLED = "PROFILE_DISABLED"
 TRIGGERS = ("mention", "reply", "direct", "from")
 DEFAULT_TRIGGERS = ("mention", "reply", "direct")
 MODES = ("draft", "auto")
+MIN_TOKEN_CHARS = 8
+EXAMPLE_TOKEN = "troque-por-um-valor-so-seu"
 DEFAULT_LIMITS = {
     "replies_per_chat_per_hour": 6,
     "replies_per_sender_per_hour": 4,
@@ -148,9 +150,12 @@ def _parse_profile(name: str, raw) -> Profile:
         profile.auto_senders = _numbers(raw["auto_senders"], f"{where}.auto_senders")
 
     if "approval_token" in raw:
-        if not isinstance(raw["approval_token"], str) or not raw["approval_token"]:
-            raise _Invalid(f"{where}.approval_token must be a non-empty text")
-        profile.approval_token = raw["approval_token"]
+        token = raw["approval_token"]
+        if not isinstance(token, str) or len(token) < MIN_TOKEN_CHARS:
+            raise _Invalid(f"{where}.approval_token must be a text of at least {MIN_TOKEN_CHARS} characters")
+        if token == EXAMPLE_TOKEN:
+            raise _Invalid(f"{where}.approval_token is still the placeholder of monitor.example.json: choose your own value")
+        profile.approval_token = token
 
     if "limits" in raw:
         limits = raw["limits"]
@@ -437,6 +442,7 @@ def _build(cursor_obj, columns, picked, profile: Profile, adhoc: bool) -> List[d
 # monitor_messages: the call an agent repeats in a loop
 # ---------------------------------------------------------------------------------------------------------
 import asyncio  # noqa: E402
+import math  # noqa: E402
 import sqlite3  # noqa: E402
 import time  # noqa: E402
 
@@ -464,7 +470,7 @@ def _cursor_value(cursor) -> Optional[int]:
 
 
 def _is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 async def monitor_messages(profile: Optional[str] = None, targets: Optional[List[str]] = None,
@@ -542,10 +548,30 @@ _HOUR = 3600
 _reply_lock = threading.Lock()   # the limits are checked and the reply sent as one step
 
 
+class _ProcessLock:
+    """A lock file next to the audit log, so two server processes (two MCP clients) also take turns. No-op without fcntl."""
+
+    def __enter__(self):
+        self.fd = None
+        try:
+            import fcntl
+            self.fd = os.open(AUDIT_PATH + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+            fcntl.flock(self.fd, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)     # closing releases the lock
+
+
 def _read_sent(now: datetime) -> List[dict]:
     """The replies any profile sent in the last hour, from the audit log. Raises OSError when it cannot be read."""
     try:
-        with open(AUDIT_PATH, encoding="utf-8") as f:
+        with open(AUDIT_PATH, encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
     except FileNotFoundError:
         return []
@@ -556,6 +582,8 @@ def _read_sent(now: datetime) -> List[dict]:
             when = datetime.fromisoformat(entry["ts"])
         except (ValueError, KeyError, TypeError):
             continue
+        if not isinstance(entry, dict) or when.tzinfo is None:
+            continue    # a line that cannot be placed in time is not counted (the file is written only by this module)
         if entry.get("result") == "sent" and 0 <= (now - when).total_seconds() < _HOUR:
             entry["_when"] = when
             sent.append(entry)
@@ -581,7 +609,8 @@ def _rate_check(profile: Profile, chat_jid: str, sender: str, now: datetime) -> 
     if len(in_chat) >= limits["replies_per_chat_per_hour"]:
         waits.append(_retry_after(in_chat, limits["replies_per_chat_per_hour"], now))
         why.append(f"{limits['replies_per_chat_per_hour']} replies per chat per hour")
-    to_sender = [e["_when"] for e in sent if e.get("sender") == sender]
+    same_person = _ids_of([sender])      # the same person seen as a LID and as a phone counts once
+    to_sender = [e["_when"] for e in sent if e.get("sender") in same_person]
     if len(to_sender) >= limits["replies_per_sender_per_hour"]:
         waits.append(_retry_after(to_sender, limits["replies_per_sender_per_hour"], now))
         why.append(f"{limits['replies_per_sender_per_hour']} replies per sender per hour")
@@ -613,14 +642,25 @@ def _audit(profile: Profile, chat_jid: str, message: whatsapp.Message, hit: List
     try:
         fd = os.open(AUDIT_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
+            _private(fd)
             f.write(json.dumps(line, ensure_ascii=False) + "\n")
     except OSError as e:
         logger.warning("Could not write the monitor audit log %s: %s", AUDIT_PATH, e)
 
 
+def _private(fd: int) -> None:
+    """The mode of os.open only applies to a file it creates; an older log with a wider mode is tightened."""
+    try:
+        os.fchmod(fd, 0o600)
+    except (OSError, AttributeError):    # a file of another owner, or no fchmod (Windows): keep logging
+        pass
+
+
 def _audit_writable() -> bool:
     try:
-        os.close(os.open(AUDIT_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
+        fd = os.open(AUDIT_PATH, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        _private(fd)
+        os.close(fd)
         return True
     except OSError:
         return False
@@ -677,8 +717,9 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
 
     mode = reply_mode(message, selected, adhoc=False)
     needs_token = mode != "auto"
-    token_ok = bool(needs_token and selected.approval_token and approval_token and
-                    hmac.compare_digest(str(approval_token).encode(), selected.approval_token.encode()))
+    token_ok = bool(needs_token and selected.approval_token and isinstance(approval_token, str) and approval_token and
+                    hmac.compare_digest(approval_token.encode("utf-8", "surrogatepass"),
+                                        selected.approval_token.encode("utf-8", "surrogatepass")))
     preview = whatsapp.send_message(jid, text, None, None, message.id, True)
 
     if dry_run:
@@ -690,7 +731,7 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
             out["preview"] = preview.preview
         return out
 
-    with _reply_lock:
+    with _reply_lock, _ProcessLock():
         def refuse(result: str, code: str, answer: dict) -> dict:
             _audit(selected, jid, message, hit, mode, token_ok, result, len(text), error_code=code)
             return answer
@@ -707,7 +748,7 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         # read the clock only now, inside the lock: a reply that waited for another must see that one's audit line as past
         try:
             limited = _rate_check(selected, jid, message.sender, now or datetime.now(timezone.utc))
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
             return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be read ({e}), so the reply "
                                                   "limits cannot be checked. Nothing was sent.")
         if limited:

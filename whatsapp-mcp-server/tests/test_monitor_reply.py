@@ -500,3 +500,95 @@ def test_cooldown_counts_a_reply_of_another_profile(conn, sent):  # RESP-06
     put_audit(ts=(NOW - timedelta(seconds=10)).isoformat(), profile="outro", sender=BOB)
 
     assert reply()["error_code"] == "RATE_LIMITED"
+
+
+@pytest.mark.parametrize("token", [123456789, ["token-do-bruno"], b"token-do-bruno", "\ud800", "token-do-bruno\ud800"])
+def test_a_token_of_the_wrong_type_or_with_stray_surrogates_is_just_refused(conn, sent, token):  # RESP-04
+    seed(conn)
+    config()
+
+    out = reply(approval_token=token)
+
+    assert out["error_code"] == "APPROVAL_REQUIRED" and real_sends(sent) == []
+
+
+def test_a_numeric_token_does_not_match_its_text(conn, sent):  # RESP-04
+    seed(conn)
+    config(approval_token="12345678")
+
+    assert reply(approval_token=12345678)["error_code"] == "APPROVAL_REQUIRED"
+    assert reply(approval_token="12345678")["success"] is True
+
+
+@pytest.mark.parametrize("line", [
+    b'{"ts": "2026-10-21T11:50:00", "profile": "p", "result": "sent", "chat_jid": "x"}\n',   # sem fuso
+    b'\xff\xfe lixo\n',                                                                       # UTF-8 inválido
+    b'[1, 2, 3]\n', b'"texto"\n', b'null\n', b'{"ts": 5}\n', b'\n',
+])
+def test_corrupted_audit_lines_are_skipped_not_fatal(conn, sent, line):  # RESP-07
+    seed(conn)
+    config()
+    with open(monitor.AUDIT_PATH, "wb") as f:
+        f.write(line)
+
+    out = reply()
+
+    assert out["success"] is True and len(real_sends(sent)) == 1
+
+
+def test_the_same_person_as_lid_and_phone_counts_once_per_sender_limit(conn, sent):  # RESP-06 (revisão do Verifier)
+    add(conn, "AS_LID", f"@{ME} oi", sender=ANA_LID, minute=56)
+    config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 50, "replies_per_sender_per_hour": 1})
+    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), sender=ANA, chat_jid=GROUP2)   # respondida como telefone
+
+    out = reply("AS_LID")
+
+    assert out["error_code"] == "RATE_LIMITED" and "per sender" in out["message"] and real_sends(sent) == []
+
+
+def test_audit_log_that_can_be_read_but_not_written_blocks_the_reply(conn, sent):  # RESP-07
+    seed(conn)
+    config()
+    open(monitor.AUDIT_PATH, "w").close()
+    os.chmod(monitor.AUDIT_PATH, 0o444)
+    try:
+        if os.access(monitor.AUDIT_PATH, os.W_OK):
+            pytest.skip("running as a user that can write anything (root)")
+        out = reply()
+    finally:
+        os.chmod(monitor.AUDIT_PATH, 0o644)
+
+    assert out["error_code"] == "RATE_LIMIT_UNVERIFIABLE" and real_sends(sent) == []
+
+
+def test_an_older_audit_log_with_a_wider_mode_is_made_private(conn, sent):  # RESP-09
+    seed(conn)
+    config()
+    open(monitor.AUDIT_PATH, "w").close()
+    os.chmod(monitor.AUDIT_PATH, 0o644)
+
+    assert reply()["success"] is True
+    assert stat.S_IMODE(os.stat(monitor.AUDIT_PATH).st_mode) == 0o600
+
+
+def test_another_process_holding_the_lock_makes_the_reply_wait(conn, sent):  # RESP-06 (dois servidores no mesmo log)
+    fcntl = pytest.importorskip("fcntl")
+    seed(conn)
+    config()
+    fd = os.open(monitor.AUDIT_PATH + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    done = threading.Event()
+    result = []
+
+    def run():
+        result.append(reply())
+        done.set()
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert not done.wait(0.4), "the reply must wait for the other process"
+    finally:
+        os.close(fd)     # libera o lock
+    thread.join(5)
+
+    assert result[0]["success"] is True

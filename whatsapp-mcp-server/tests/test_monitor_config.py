@@ -157,9 +157,27 @@ def test_disabled_and_unknown_profiles(config):  # CFG-05
     assert [p["name"] for p in monitor.list_profiles()["profiles"]] == ["off", "on"]  # a listagem mostra também os desligados
 
 
-def test_the_example_file_is_valid(monkeypatch):
-    monkeypatch.setattr(monitor, "CONFIG_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.example.json"))
+EXAMPLE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.example.json")
+
+
+def test_the_example_file_is_valid_once_the_placeholder_token_is_replaced(config, monkeypatch):
+    config(open(EXAMPLE).read().replace("troque-por-um-valor-so-seu", "meu-token-de-verdade"))
 
     out = monitor.list_profiles()
 
     assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["suporte-software", "acompanhar-numero"]
+
+
+def test_the_example_file_is_refused_until_the_placeholder_token_is_changed(monkeypatch):  # CFG-03
+    monkeypatch.setattr(monitor, "CONFIG_PATH", EXAMPLE)
+
+    out = monitor.list_profiles()
+
+    assert out["error_code"] == "MONITOR_CONFIG_INVALID" and "placeholder" in out["message"]
+
+
+@pytest.mark.parametrize("token", ["curto", "1234567", 12345678, ["abcdefgh"], None])
+def test_weak_or_mistyped_approval_tokens_are_refused(config, token):  # CFG-03
+    config(profile(approval_token=token))
+
+    assert monitor.list_profiles()["error_code"] == "MONITOR_CONFIG_INVALID"
