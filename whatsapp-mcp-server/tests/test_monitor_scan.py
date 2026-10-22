@@ -362,3 +362,24 @@ def test_normalize_number():
     assert monitor.normalize_number("5511999990000:7@s.whatsapp.net") == "5511999990000"
     for bad in ("", "abc", "123456", "12345678901234567890123", "1203@g.us", "٥٥١١٩٩٩٩٩٠٠٠٠", None, 55119999):
         assert monitor.normalize_number(bad) is None
+
+
+UNKNOWN_LID = "999888777666555"   # um LID que contacts_identity não conhece
+
+
+def test_deny_list_fails_closed_for_a_sender_that_cannot_be_matched(conn):  # MON-10 (revisão de segurança)
+    add(conn, "UNKNOWN", f"@{ME} oi", sender=UNKNOWN_LID)          # remetente sem mapeamento: pode ser o bloqueado
+    add(conn, "KNOWN", f"@{ME} oi", sender=ANA_LID)                # mapeado para a Ana: dá para comparar
+    add(conn, "PHONE", f"@{ME} oi", sender=BOB)                    # telefone: o bloqueio por telefone o alcança
+
+    ids = lambda **f: [h[0] for h in hits(run(profile(**f)))]  # noqa: E731
+
+    assert ids(senders_deny=[BOB]) == ["KNOWN"]        # UNKNOWN é pulado; BOB é o bloqueado
+    assert ids(senders_deny=[ANA]) == ["UNKNOWN", "PHONE"]   # a Ana tem telefone e LID: o desconhecido é outra pessoa
+    assert ids() == ["UNKNOWN", "KNOWN", "PHONE"]      # sem lista de bloqueio nada é pulado
+
+
+def test_allow_list_never_lets_an_unknown_sender_in(conn):  # MON-10
+    add(conn, "UNKNOWN", f"@{ME} oi", sender=UNKNOWN_LID)
+
+    assert hits(run(profile(senders_allow=[ANA]))) == []
