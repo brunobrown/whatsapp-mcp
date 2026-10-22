@@ -292,11 +292,10 @@ def test_replies_per_sender_per_hour(conn, sent):  # RESP-06
     assert 1199 <= out["retry_after_seconds"] <= 1202 and real_sends(sent) == []
 
 
-def test_only_recent_sent_replies_of_this_profile_count(conn, sent):  # RESP-06
+def test_only_recent_sent_replies_count(conn, sent):  # RESP-06
     seed(conn)
     config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 1, "replies_per_sender_per_hour": 1})
     put_audit(ts=(NOW - timedelta(minutes=61)).isoformat())                       # fora da janela
-    put_audit(ts=(NOW - timedelta(minutes=5)).isoformat(), profile="outro")       # outro perfil
     put_audit(ts=(NOW - timedelta(minutes=5)).isoformat(), result="blocked")      # não foi enviada
     put_audit(ts=(NOW + timedelta(minutes=5)).isoformat())                        # do futuro: relógio errado, não conta
     with open(monitor.AUDIT_PATH, "a") as f:
@@ -482,3 +481,22 @@ def test_tool_passes_its_arguments(conn, sent):  # RESP-02
     out = main.monitor_reply("p", GROUP, "HIT", "pelo tool", approval_token=TOKEN)
 
     assert out["success"] is True and real_sends(sent)[0]["message"] == "pelo tool"
+
+
+def test_replies_of_other_profiles_count_too(conn, sent):  # RESP-06 (revisão de segurança)
+    seed(conn)
+    config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 2, "replies_per_sender_per_hour": 50})
+    put_audit(ts=(NOW - timedelta(minutes=30)).isoformat(), profile="outro", sender=BOB)
+    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), profile="mais-um", sender=BOB)
+
+    out = reply()
+
+    assert out["error_code"] == "RATE_LIMITED" and real_sends(sent) == []
+
+
+def test_cooldown_counts_a_reply_of_another_profile(conn, sent):  # RESP-06
+    seed(conn)
+    config(limits={"cooldown_seconds": 60, "replies_per_chat_per_hour": 50, "replies_per_sender_per_hour": 50})
+    put_audit(ts=(NOW - timedelta(seconds=10)).isoformat(), profile="outro", sender=BOB)
+
+    assert reply()["error_code"] == "RATE_LIMITED"
