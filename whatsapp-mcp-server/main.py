@@ -406,6 +406,39 @@ async def monitor_messages(
     return await monitor.monitor_messages(profile, targets, triggers, cursor, wait_seconds, limit)
 
 @mcp.tool()
+def monitor_reply(
+    profile: str,
+    chat_jid: str,
+    message_id: str,
+    text: str,
+    approval_token: Optional[str] = None,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """Reply to a message that fired a monitoring profile (see monitor_messages), under the profile's guardrails.
+
+    The reply goes to the chat of that message and quotes it; you cannot choose another destination or another message.
+
+    Args:
+        profile: Name of the profile (monitor_profiles.json)
+        chat_jid: Chat of the message (from the event)
+        message_id: ID of the message to answer (from the event); it must fire the profile
+        text: The reply. At most the profile's max_reply_chars; the send policy still applies
+        approval_token: Needed to send in draft mode (the default) and for senders not in auto_senders. Ask the user for it:
+                        do not guess or invent it. Senders in auto_senders of a profile with mode "auto" need none
+        dry_run: Returns the preview (text, chat, quoted message, mode, whether a token is required) and sends nothing
+
+    Returns:
+        success, message, mode (auto or draft), and when sent message_id, timestamp and chat_jid.
+        Refusals have success=false and an error_code: NOT_A_TRIGGER (the message does not fire the profile),
+        APPROVAL_REQUIRED (draft only, with a preview; nothing was sent), RATE_LIMITED (with retry_after_seconds: cooldown
+        between replies in a chat, replies per chat per hour, replies per sender per hour),
+        RATE_LIMIT_UNVERIFIABLE (the audit log that counts replies cannot be used), INVALID_ARGUMENT, SEND_BLOCKED_BY_POLICY,
+        MONITOR_CONFIG_INVALID, PROFILE_NOT_FOUND, PROFILE_DISABLED, OWN_ACCOUNT_UNKNOWN, DIRECTORY_UNAVAILABLE.
+        Every attempt is written to monitor_audit.log (never the text or the token)
+    """
+    return monitor.monitor_reply(profile, chat_jid, message_id, text, approval_token, dry_run)
+
+@mcp.tool()
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     """List the participants of a WhatsApp group with their name, phone number, LID and admin status.
 
