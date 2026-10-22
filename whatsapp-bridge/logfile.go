@@ -40,7 +40,7 @@ func newRotatingFile(path string, maxBytes int64, keep int) (*rotatingFile, erro
 }
 
 func (r *rotatingFile) open() error {
-	if err := os.MkdirAll(filepath.Dir(r.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(r.path), privateDirMode); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, logFileMode)
