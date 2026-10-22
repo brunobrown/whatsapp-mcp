@@ -721,3 +721,29 @@ func TestPurgeAlsoRemovesRecoveryCopiesAndTheSidecarsOfPlaintextCopies(t *testin
 		}
 	}
 }
+
+
+func TestPurgeKeepsTheJournalsOfALivePlaintextDatabase(t *testing.T) { // MIG-06
+	skipOnWindows(t)
+	t.Chdir(t.TempDir())
+	os.MkdirAll("store", 0o700)
+	plain := append([]byte(sqliteMagic), make([]byte, 100)...)
+	os.WriteFile("store/messages.db", plain, 0o600)
+	os.WriteFile("store/messages.db-journal", []byte("hot journal of the live database"), 0o600)
+	os.WriteFile("store/messages.db-wal", []byte("wal of the live database"), 0o600)
+	// a swap that moved the journal to the backup name and then failed leaves it next to a link to the live file
+	os.Link("store/messages.db", "store/messages.db.plain-X.bak")
+	os.WriteFile("store/messages.db.plain-X.bak-journal", []byte("hot journal now under the backup name"), 0o600)
+
+	removed, err := purgePlaintext("store")
+
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("removed %v err %v, want nothing", removed, err)
+	}
+	for _, kept := range []string{"store/messages.db", "store/messages.db-journal", "store/messages.db-wal",
+		"store/messages.db.plain-X.bak", "store/messages.db.plain-X.bak-journal"} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s must not be removed: %v", kept, err)
+		}
+	}
+}

@@ -388,6 +388,9 @@ func plaintextCopies(dir string) ([]string, error) {
 		}
 		if sidecar { // a journal or WAL of a plaintext copy is plaintext too, and has no SQLite header to check
 			if main, err := os.Lstat(filepath.Join(dir, stem)); err == nil && main.Mode().IsRegular() {
+				if isLive(main) { // the journal of a database in use, even under another name: never ours to remove
+					continue
+				}
 				if state, _ := detectDBState(filepath.Join(dir, stem)); state != dbPlaintext {
 					continue
 				}
