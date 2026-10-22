@@ -1,0 +1,12 @@
+[Unit]
+Description=WhatsApp bridge (whatsmeow)
+
+[Service]
+Type=simple
+WorkingDirectory=@DIR@
+ExecStart=@DIR@/bin/whatsapp-bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

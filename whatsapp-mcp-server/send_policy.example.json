@@ -1,0 +1,6 @@
+{
+  "mode": "denylist",
+  "allow": ["Projeto Elbratec"],
+  "deny": ["Software Elbratec"],
+  "override_token": "troque-por-um-valor-so-seu"
+}
