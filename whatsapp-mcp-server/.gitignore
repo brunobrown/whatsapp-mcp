@@ -13,3 +13,4 @@ send_policy.json
 send_audit.log
 monitor_profiles.json
 monitor_audit.log
+monitor_audit.log.lock
