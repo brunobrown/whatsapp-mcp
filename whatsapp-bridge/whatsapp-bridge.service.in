@@ -5,8 +5,27 @@ Description=WhatsApp bridge (whatsmeow)
 Type=simple
 WorkingDirectory=@DIR@
 ExecStart=@DIR@/bin/whatsapp-bridge
+Environment=WHATSAPP_CONFIG_DIR=@CONFIG@
 Restart=on-failure
 RestartSec=5
+
+# Sandboxing: the bridge may write only its store and its configuration directory (database key and API token).
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@DIR@/store @CONFIG@
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+# No PrivateTmp: the MCP server converts audio into /tmp and the bridge has to read the file from there.
 
 [Install]
 WantedBy=default.target

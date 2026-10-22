@@ -405,6 +405,17 @@ wheels = [
 ]
 
 [[package]]
+name = "sqlcipher3-binary"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/5e/f0b3021365f421495c66961160798e628e866b3d75aea8147bf2d4087d9b/sqlcipher3_binary-0.6.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:421abf7a81e134bd808a7933d296f408aaf75475d6561d4a21e1f285b75445aa", size = 3244473, upload-time = "2025-12-31T16:40:26.74Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/ff/de25662f378f0a5cedef2a5c1d9479db5a9bf7b6bff4fdb8e413869548ac/sqlcipher3_binary-0.6.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:c8a7076a18b4f6fc9b580b0f24aa526d6a47605b1e3e6491ee3e9f2977940d8e", size = 3247275, upload-time = "2025-12-31T16:40:31.593Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/ce/48fabcff1a441e1bc7d91aab00fc1ec398571238b7cf131a4fa73d6eebd2/sqlcipher3_binary-0.6.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:8a6afbdef7cbbb33b1228ce96edc1bfe7f15bdf2a5e8bdab87261ab52e4111e6", size = 3246980, upload-time = "2025-12-31T16:40:36.653Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/ce/fbe8da71656eefd5fd4db70cb6d7b5911ba34279985ee3c11476a1f8550d/sqlcipher3_binary-0.6.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f9bccb9e942a04bbf920714940c8f9e00134cd655b11ba4c6f1306bcc3504d6c", size = 3246791, upload-time = "2025-12-31T16:40:41.484Z" },
+]
+
+[[package]]
 name = "sse-starlette"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -495,6 +506,7 @@ dependencies = [
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
     { name = "requests" },
+    { name = "sqlcipher3-binary" },
 ]
 
 [package.dev-dependencies]
@@ -507,6 +519,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
     { name = "requests", specifier = ">=2.32.3" },
+    { name = "sqlcipher3-binary", specifier = ">=0.5.4" },
 ]
 
 [package.metadata.requires-dev]

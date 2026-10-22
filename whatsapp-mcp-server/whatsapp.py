@@ -8,6 +8,8 @@ from pathlib import Path
 import requests
 import json
 import audio
+import dbcrypto
+import localconfig
 import send_policy
 import logging
 import re
@@ -17,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def _connect() -> sqlite3.Connection:
-    """The bridge database, read-only. The server never writes it, and a missing file is an error, not a new empty database."""
-    return sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+    """The bridge database, read-only, plain or encrypted. The server never writes it, and a missing file is an error, not a new empty database."""
+    return dbcrypto.connect_readonly(MESSAGES_DB_PATH)
 
 WHATSAPP_API_BASE_URL = "http://localhost:8080/api"
 
@@ -108,7 +110,7 @@ def lookup_identity(value: str) -> Optional[Identity]:
                     return Identity(*row)
         finally:
             conn.close()
-    except sqlite3.Error:
+    except dbcrypto.DB_ERRORS:
         pass
     return None
 
@@ -177,7 +179,7 @@ def get_sender_name(sender_jid: str) -> str:
         else:
             return sender_jid
         
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error while getting sender name: %s", e)
         return sender_jid
     finally:
@@ -502,7 +504,7 @@ def list_messages(
             "next_page": page + 1 if has_more else None,
         }
         
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         print(f"Database error: {e}")
         return [] if format == "text" else {"messages": [], "total": 0, "page": page, "limit": limit,
                                             "has_more": False, "next_page": None, "error": str(e)}
@@ -549,7 +551,7 @@ def get_message_context(
             after=_neighbours(cursor, columns, target, after, False)
         )
         
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         print(f"Database error: {e}")
         raise
     finally:
@@ -619,7 +621,7 @@ def list_chats(
         )
         return [_chat_from_row(row, include_last_message) for row in cursor.fetchall()]
 
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return []
     finally:
@@ -644,7 +646,7 @@ def _search_identities(conn: sqlite3.Connection, query: str) -> Tuple[List[Conta
             ORDER BY COALESCE(full_name, push_name), phone, lid
             LIMIT 50
         """, (pattern, pattern, digit_pattern, digit_pattern)).fetchall()
-    except sqlite3.Error:
+    except dbcrypto.DB_ERRORS:
         return [], set()
     people, ids = [], set()
     for lid, phone, full_name, push_name in rows:
@@ -684,7 +686,7 @@ def search_contacts(query: str) -> List[Contact]:
             
         return result[:50]
         
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return []
     finally:
@@ -721,7 +723,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Chat]:
         )
         return [_chat_from_row(row) for row in cursor.fetchall()]
 
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return []
     finally:
@@ -772,7 +774,7 @@ def get_last_interaction(jid: str) -> str:
         
         return format_message(message)
         
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         print(f"Database error: {e}")
         return None
     finally:
@@ -793,7 +795,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Chat]
         row = cursor.fetchone()
         return _chat_from_row(row, include_last_message) if row else None
 
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return None
     finally:
@@ -819,7 +821,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         row = cursor.fetchone()
         return _chat_from_row(row) if row else None
 
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return None
     finally:
@@ -837,15 +839,22 @@ class SendResult:
     preview: Optional[dict] = None
 
 
+def _refused(response) -> bool:
+    """True when the bridge turned the request down for its token, Host or Origin (401/403)."""
+    return response.status_code in (401, 403)
+
+
 def _post_send(payload: dict) -> SendResult:
     """POST a send request to the bridge and parse its answer."""
     try:
-        response = requests.post(f"{WHATSAPP_API_BASE_URL}/send", json=payload)
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/send", json=payload, headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return SendResult(False, f"Request error: {str(e)}")
     except Exception as e:
         return SendResult(False, f"Unexpected error: {str(e)}")
 
+    if _refused(response):
+        return SendResult(False, localconfig.UNAUTHORIZED_HINT, error_code=localconfig.BRIDGE_UNAUTHORIZED)
     if response.status_code != 200:
         return SendResult(False, f"Error: HTTP {response.status_code} - {response.text}")
     try:
@@ -869,14 +878,16 @@ def _post_send(payload: dict) -> SendResult:
 def _open_chats() -> sqlite3.Connection:
     """Open the bridge database read-only (never creating it) and check that chats can be read."""
     try:
-        conn = sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
+        conn = _connect()
         try:
             conn.execute("SELECT 1 FROM chats LIMIT 1")
-        except sqlite3.Error:
+        except dbcrypto.DB_ERRORS:
             conn.close()
             raise
         return conn
-    except sqlite3.Error as e:
+    except dbcrypto.DatabaseKeyError as e:
+        raise send_policy.DirectoryError(str(e)) from e
+    except dbcrypto.DB_ERRORS as e:
         raise send_policy.DirectoryError(str(e)) from e
 
 
@@ -886,7 +897,7 @@ def _chat_jids_by_name(name: str) -> List[str]:
     conn = _open_chats()
     try:
         rows = conn.execute("SELECT jid, name FROM chats WHERE name IS NOT NULL").fetchall()
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         raise send_policy.DirectoryError(str(e)) from e
     finally:
         conn.close()
@@ -908,7 +919,7 @@ def _chat_name_of(jid: str) -> Optional[str]:
             row = conn.execute("SELECT name FROM chats WHERE jid = ?", (candidate,)).fetchone()
             if row and row[0]:
                 return row[0]
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
     finally:
         conn.close()
@@ -1015,8 +1026,8 @@ def _find_reply_target(message_id: str, chat_jid: str) -> Optional[dict]:
     under the other addressing of the same person."""
     candidates = [chat_jid] if chat_jid.endswith("@g.us") else _person_ids_and_jids(chat_jid)[1]
     try:
-        conn = sqlite3.connect(Path(MESSAGES_DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error as e:
+        conn = _connect()
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
         return None
     try:
@@ -1025,7 +1036,7 @@ def _find_reply_target(message_id: str, chat_jid: str) -> Optional[dict]:
                                (message_id, candidate)).fetchone()
             if row:
                 return {"id": row[0], "sender": row[1], "text": row[2] or ""}
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         logger.error("Database error: %s", e)
     finally:
         conn.close()
@@ -1113,6 +1124,7 @@ class GroupParticipantsResult:
     success: bool
     message: Optional[str] = None
     participants: Optional[List[dict]] = None
+    error_code: Optional[str] = None
 
 
 def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
@@ -1120,9 +1132,12 @@ def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
     if not chat_jid:
         return GroupParticipantsResult(False, "chat_jid must be provided")
     try:
-        response = requests.post(f"{WHATSAPP_API_BASE_URL}/group_participants", json={"chat_jid": chat_jid})
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/group_participants", json={"chat_jid": chat_jid},
+                                 headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return GroupParticipantsResult(False, f"Could not reach the WhatsApp bridge: {e}")
+    if _refused(response):
+        return GroupParticipantsResult(False, localconfig.UNAUTHORIZED_HINT, error_code=localconfig.BRIDGE_UNAUTHORIZED)
     try:
         body = response.json()
     except ValueError:
@@ -1158,7 +1173,7 @@ def _classify_download_error(message: str) -> str:
 
 def _download_failure(message: str, error_code: Optional[str] = None) -> DownloadResult:
     code = error_code or _classify_download_error(message)
-    hint = LINK_EXPIRED_HINT if code == "LINK_EXPIRED_PHONE_OFFLINE" else None
+    hint = {"LINK_EXPIRED_PHONE_OFFLINE": LINK_EXPIRED_HINT, localconfig.BRIDGE_UNAUTHORIZED: localconfig.UNAUTHORIZED_HINT}.get(code)
     logger.error("download_media failed (%s): %s", code, message)
     return DownloadResult(False, message, error_code=code, hint=hint)
 
@@ -1180,6 +1195,7 @@ def download_media(message_id: str, chat_jid: str, timeout: Optional[float] = No
         response = requests.post(
             f"{WHATSAPP_API_BASE_URL}/download",
             json={"message_id": message_id, "chat_jid": chat_jid},
+            headers=localconfig.auth_headers(),
             **extra,
         )
     except requests.RequestException as e:
@@ -1188,6 +1204,8 @@ def download_media(message_id: str, chat_jid: str, timeout: Optional[float] = No
             return _download_failure(f"The bridge did not answer within {timeout:g} seconds: {e}", "DOWNLOAD_TIMEOUT")
         return _download_failure(f"Could not reach the WhatsApp bridge: {e}", "BRIDGE_UNREACHABLE")
 
+    if _refused(response):
+        return _download_failure(localconfig.UNAUTHORIZED_HINT, localconfig.BRIDGE_UNAUTHORIZED)
     try:
         result = response.json()
     except ValueError:
@@ -1206,12 +1224,12 @@ def _last_message_at() -> Optional[str]:
     """The newest stored message time, or None when there is none or no database."""
     try:
         conn = _open_chats()
-    except (sqlite3.Error, send_policy.DirectoryError):
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError):
         return None
     try:
         row = conn.execute("SELECT timestamp FROM messages ORDER BY strftime('%Y-%m-%d %H:%M:%f', timestamp) DESC LIMIT 1").fetchone()
         return datetime.fromisoformat(row[0]).isoformat() if row and row[0] else None
-    except (sqlite3.Error, ValueError):
+    except (*dbcrypto.DB_ERRORS, ValueError):
         return None
     finally:
         conn.close()
@@ -1228,7 +1246,8 @@ def _last_log_at() -> Optional[str]:
 def get_connection_status() -> dict:
     """The bridge's status; a bridge that does not answer is reported as not connected."""
     try:
-        response = requests.get(f"{WHATSAPP_API_BASE_URL}/status", timeout=_STATUS_TIMEOUT_SECONDS)
+        response = requests.get(f"{WHATSAPP_API_BASE_URL}/status", timeout=_STATUS_TIMEOUT_SECONDS,
+                                headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return {
             "connected": False,
@@ -1237,6 +1256,13 @@ def get_connection_status() -> dict:
             "message": f"Could not reach the WhatsApp bridge: {e}",
             "last_message_at": _last_message_at(),
             "last_log_at": _last_log_at(),
+        }
+    if _refused(response):
+        return {
+            "connected": False,
+            "bridge_reachable": True,
+            "error_code": localconfig.BRIDGE_UNAUTHORIZED,
+            "message": localconfig.UNAUTHORIZED_HINT,
         }
     try:
         status = response.json()
@@ -1313,7 +1339,7 @@ def download_media_batch(
 
     try:
         conn = _open_chats()
-    except (sqlite3.Error, send_policy.DirectoryError) as e:
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
         return {"success": False, "error_code": "DIRECTORY_UNAVAILABLE", "message": f"Could not read the message database: {e}"}
     try:
         columns = _message_select(conn.cursor())
@@ -1347,8 +1373,8 @@ def download_media_batch(
             else:
                 items.append(_batch_item(message, "failed", error_code=result.error_code, detail=result.message,
                                          hint=result.hint))
-                if result.error_code == "BRIDGE_UNREACHABLE":
-                    aborted = "BRIDGE_UNREACHABLE"
+                if result.error_code in ("BRIDGE_UNREACHABLE", localconfig.BRIDGE_UNAUTHORIZED):
+                    aborted = result.error_code    # every other item would fail the same way
 
     count = lambda status: sum(1 for item in items if item["status"] == status)
     return {
@@ -1559,7 +1585,7 @@ def get_message_thread(
 
     try:
         conn = _open_chats()
-    except (sqlite3.Error, send_policy.DirectoryError) as e:
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
         return _thread_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
     try:
         cursor = conn.cursor()
@@ -1614,7 +1640,7 @@ def get_message_thread(
                 replies.setdefault(child.quoted_message_id, []).append(child.id)
         result["messages"] = [_thread_message(m, m.id == targets_id, cache, replies, roots) for m in messages]
         return result
-    except sqlite3.Error as e:
+    except dbcrypto.DB_ERRORS as e:
         return _thread_error("UNKNOWN", f"Database error: {e}")
     finally:
         conn.close()
