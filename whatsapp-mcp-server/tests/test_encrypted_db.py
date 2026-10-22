@@ -216,3 +216,29 @@ def test_encrypted_files_have_no_plain_header_and_no_readable_text():  # PYENC-0
 
     assert not data.startswith(dbcrypto.SQLITE_MAGIC)
     assert b"primeira mensagem" not in data and b"Grupo Fixture" not in data and b"messages" not in data
+
+
+def test_reply_target_lookup_reads_the_encrypted_database(encrypted):  # PYENC-03
+    found = whatsapp._find_reply_target("FX1", GROUP)
+
+    assert found and found["id"] == "FX1" and "primeira mensagem" in found["text"]
+
+
+def test_a_key_of_only_blanks_is_an_error_not_unset(tmp_path, monkeypatch):  # KEY-02
+    keyfile = tmp_path / "good.key"
+    keyfile.write_text(MASTER)
+    monkeypatch.setenv("WHATSAPP_DB_KEY_FILE", str(keyfile))
+    monkeypatch.setenv("WHATSAPP_DB_KEY", "   ")
+
+    with pytest.raises(dbcrypto.DatabaseKeyError) as error:
+        dbcrypto.master_key()
+
+    assert "WHATSAPP_DB_KEY" in str(error.value)
+
+
+def test_no_module_opens_the_database_without_going_through_the_key(tmp_path):  # PYENC-01
+    import pathlib
+    offenders = [p.name for p in pathlib.Path(__file__).parent.parent.glob("*.py")
+                 if p.name != "dbcrypto.py" and "sqlite3.connect" in p.read_text()]
+
+    assert offenders == [], f"these open the database directly and would ignore the encryption: {offenders}"
