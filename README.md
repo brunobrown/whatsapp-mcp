@@ -132,7 +132,7 @@ Once connected, you can interact with your WhatsApp contacts through Claude, lev
 
 ### MCP Tools
 
-Claude can access the following 15 tools to interact with WhatsApp.
+Claude can access the following 16 tools to interact with WhatsApp.
 
 **Reading**
 
@@ -144,6 +144,7 @@ Claude can access the following 15 tools to interact with WhatsApp.
 - **get_contact_chats**: List all chats involving a specific contact (each chat once)
 - **get_last_interaction**: Get the most recent message with a contact
 - **get_message_context**: Retrieve context around a specific message, both sides in chronological order. Takes an optional `chat_jid` for when the same message ID exists in more than one chat.
+- **get_message_thread**: Read messages with their replies linked: the whole chain around one message, or a window of a chat. See [Reading replies](#reading-replies).
 - **get_group_participants**: List the participants of a group with name, phone number, LID and admin status
 
 **Sending**
@@ -177,6 +178,21 @@ Claude can access the following 15 tools to interact with WhatsApp.
 With `format="structured"` the result is a dict: `messages`, `total` (matches, not counting context), `page`, `limit`, `has_more` and `next_page` (`null` on the last page). Each message has `id`, `timestamp` (ISO-8601 with offset), `chat_jid`, `chat_name`, `sender`, `sender_name`, `content`, `is_from_me`, `is_match` and `media` (`null` for text, otherwise `type`, `filename`, `mimetype`, `size`, `forwarded`, `quoted_message_id`, `local_path`).
 
 In text output, a message with media starts with `[type - Message ID: … - Chat JID: … - File: name (mime, size) - Forwarded - Reply to: id - Local path: path]`. The local path appears only while the file exists. Mentions in the text (`@5511999990000`) are shown with the person's name when it is known.
+
+### Reading replies
+
+`list_messages` shows a reply only by the ID it quotes. `get_message_thread` is always structured and links the replies. Two uses:
+
+- **A chain**: `get_message_thread(message_id="…", chat_jid="…")` returns the root of the conversation, everything quoted above the message and every reply below it, oldest first (at most 500, the oldest; `truncated=true` when there were more; the climb to the root goes up to 50 levels). `chat_jid` is needed only when the same ID exists in several chats (`AMBIGUOUS_MESSAGE` otherwise). `after`, `before`, `limit`, `page` and `order` are refused with a `message_id`.
+- **A window**: `get_message_thread(chat_jid="…", after="…", before="…", limit=20, page=0, order="asc")` returns the chat's messages with `total`, `has_more` and `next_page`; same date and time zone rules as `list_messages`.
+
+Each message has `id`, `timestamp`, `chat_jid`, `chat_name`, `sender`, `sender_name`, `content`, `is_from_me`, `forwarded`, `media`, `thread_root_id`, `is_target` (the message you asked for), `replies` (IDs of the messages that quote it, also those outside the window) and `reply_to`:
+
+- `null` when the message answers nothing;
+- `{id, found: false}` when the quoted message is not in the database;
+- `{id, found: true, sender, sender_name, content, timestamp, is_from_me, media}` otherwise.
+
+**Media.** A message with a file has `media` (`type`, `filename`, `mimetype`, `size`, `forwarded`, `quoted_message_id`, `local_path` only while the file exists); text has `null`. When a reply quotes a media, `reply_to.media` carries its `type`, `filename`, `mimetype` and `size`, and `reply_to.content` is its caption (empty without one), so you can tell "a reply to a PDF" from "a reply to a photo". Only metadata is read: images, audio and video are not described or transcribed. To get the file, call `download_media` with the `message_id` and `chat_jid`.
 
 ### Sending messages
 

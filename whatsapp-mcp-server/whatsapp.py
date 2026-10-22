@@ -196,7 +196,8 @@ def resolve_mentions(content: str) -> str:
     def replace(match: "re.Match[str]") -> str:
         identity = lookup_identity(match.group(1))
         name = identity.display_name if identity else None
-        return f"@{name}" if name else match.group(0)
+        # a push name can itself start with "@" (a username), which would read "@@name"
+        return f"@{name.lstrip('@')}" if name else match.group(0)
     return _MENTION.sub(replace, content or "")
 
 # Columns the bridge added over time; a database from an older bridge may lack them.
@@ -1357,3 +1358,220 @@ def download_media_batch(
         "aborted": aborted,
         "items": items,
     }
+
+
+_THREAD_MAX_MESSAGES = 500
+_THREAD_FETCH_LIMIT = 2000   # most messages read while walking down a chain, before the oldest 500 are kept
+_THREAD_MAX_DEPTH = 50
+_IN_CHUNK = 400
+
+
+def _thread_error(code: str, message: str) -> dict:
+    return {"success": False, "error_code": code, "message": message}
+
+
+def _has_quoted_column(cursor: sqlite3.Cursor) -> bool:
+    return any(row[1] == "quoted_id" for row in cursor.execute("PRAGMA table_info(messages)"))
+
+
+def _fetch_by_ids(cursor: sqlite3.Cursor, columns: str, chat_jid: str, ids) -> List[Message]:
+    ids, found = list(ids), []
+    for start in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[start:start + _IN_CHUNK]
+        cursor.execute(
+            f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+            f"WHERE messages.chat_jid = ? AND messages.id IN ({','.join('?' * len(chunk))})", (chat_jid, *chunk))
+        found.extend(_message_from_row(row) for row in cursor.fetchall())
+    return found
+
+
+def _fetch_children(cursor: sqlite3.Cursor, columns: str, chat_jid: str, parent_ids) -> List[Message]:
+    """The messages of the chat that quote one of parent_ids, oldest first."""
+    parent_ids, found = list(parent_ids), []
+    for start in range(0, len(parent_ids), _IN_CHUNK):
+        chunk = parent_ids[start:start + _IN_CHUNK]
+        cursor.execute(
+            f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+            f"WHERE messages.chat_jid = ? AND messages.quoted_id IN ({','.join('?' * len(chunk))}) "
+            f"ORDER BY {_INSTANT}, messages.rowid", (chat_jid, *chunk))
+        found.extend(_message_from_row(row) for row in cursor.fetchall())
+    return found
+
+
+def _resolve_ancestors(cursor, columns, chat_jid, cache: dict, missing: set, start: List[Message]) -> None:
+    """Read every message the given ones quote, and those quote, up to the depth limit, into cache.
+
+    What the database does not have goes to missing.
+    """
+    frontier = start
+    for _ in range(_THREAD_MAX_DEPTH):
+        wanted = {m.quoted_message_id for m in frontier if m.quoted_message_id} - cache.keys() - missing
+        if not wanted:
+            return
+        frontier = _fetch_by_ids(cursor, columns, chat_jid, wanted)
+        for message in frontier:
+            cache[message.id] = message
+        missing |= wanted - {m.id for m in frontier}
+
+
+def _root_id(message: Message, cache: dict) -> str:
+    current, seen = message, {message.id}
+    while current.quoted_message_id in cache and current.quoted_message_id not in seen:
+        current = cache[current.quoted_message_id]
+        seen.add(current.id)
+    return current.id
+
+
+def _media_brief(message: Message) -> Optional[dict]:
+    if not message.media_type:
+        return None
+    return {"type": message.media_type, "filename": message.filename, "mimetype": message.mimetype,
+            "size": message.file_length}
+
+
+def _reply_ref(message: Message, cache: dict) -> Optional[dict]:
+    if not message.quoted_message_id:
+        return None
+    quoted = cache.get(message.quoted_message_id)
+    if quoted is None:
+        return {"id": message.quoted_message_id, "found": False}
+    return {
+        "id": quoted.id,
+        "found": True,
+        "sender": quoted.sender,
+        "sender_name": "Me" if quoted.is_from_me else sender_label(quoted.sender),
+        "content": resolve_mentions(quoted.content),
+        "timestamp": _aware(quoted.timestamp).isoformat(),
+        "is_from_me": bool(quoted.is_from_me),
+        "media": _media_brief(quoted),
+    }
+
+
+def _thread_message(message: Message, is_target: bool, cache: dict, replies: dict) -> dict:
+    out = _message_dict(message, False)
+    del out["is_match"]
+    out.update({
+        "forwarded": bool(message.forwarded),
+        "is_target": is_target,
+        "reply_to": _reply_ref(message, cache),
+        "replies": replies.get(message.id, []),
+        "thread_root_id": _root_id(message, cache),
+    })
+    return out
+
+
+def _thread_of(cursor, columns, target: Message, supported: bool) -> dict:
+    cache, missing = {target.id: target}, set()
+    if supported:
+        _resolve_ancestors(cursor, columns, target.chat_jid, cache, missing, [target])
+    root = cache[_root_id(target, cache)]
+
+    members, truncated = {root.id: root}, False
+    frontier = [root.id]
+    while supported and frontier and not truncated:
+        added = []
+        for child in _fetch_children(cursor, columns, target.chat_jid, frontier):
+            if child.id in members:
+                continue
+            if len(members) >= _THREAD_FETCH_LIMIT:
+                truncated = True
+                break
+            members[child.id] = child
+            added.append(child.id)
+        frontier = added
+    members[target.id] = target
+    ordered = sorted(members.values(), key=lambda m: (_aware(m.timestamp), m.rowid))
+    if len(ordered) > _THREAD_MAX_MESSAGES:
+        truncated = True
+        ordered = ordered[:_THREAD_MAX_MESSAGES]
+        if target.id not in {m.id for m in ordered}:
+            ordered = sorted(ordered[:-1] + [target], key=lambda m: (_aware(m.timestamp), m.rowid))
+    cache.update(members)
+    return {"root": root, "messages": ordered, "truncated": truncated, "cache": cache}
+
+
+def get_message_thread(
+    message_id: Optional[str] = None,
+    chat_jid: Optional[str] = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    limit: Optional[int] = None,
+    page: Optional[int] = None,
+    order: Optional[str] = None,
+) -> dict:
+    """Messages with their replies linked: the chain around one message, or a window of a chat."""
+    if message_id:
+        if any(value is not None for value in (after, before, limit, page, order)):
+            return _thread_error("INVALID_ARGUMENT", "With message_id, after, before, limit, page and order do not apply")
+    else:
+        if not chat_jid:
+            return _thread_error("INVALID_ARGUMENT", "Give message_id, or chat_jid to read a window of a chat")
+        limit, page, order = 20 if limit is None else limit, 0 if page is None else page, order or "asc"
+        if limit < 1 or page < 0:
+            return _thread_error("INVALID_ARGUMENT", "limit must be at least 1 and page at least 0")
+        if order not in _ORDERS:
+            return _thread_error("INVALID_ARGUMENT", f"Invalid order: {order}. Use one of: {', '.join(_ORDERS)}.")
+        try:
+            after_param = _instant_param(after, "after") if after else None
+            before_param = _instant_param(before, "before") if before else None
+        except ValueError as e:
+            return _thread_error("INVALID_ARGUMENT", str(e))
+
+    try:
+        conn = _open_chats()
+    except (sqlite3.Error, send_policy.DirectoryError) as e:
+        return _thread_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    try:
+        cursor = conn.cursor()
+        columns = _message_select(cursor)
+        supported = _has_quoted_column(cursor)
+
+        if message_id:
+            scope, params = ("AND messages.chat_jid = ?", (chat_jid,)) if chat_jid else ("", ())
+            cursor.execute(f"SELECT {columns} FROM messages JOIN chats ON messages.chat_jid = chats.jid "
+                           f"WHERE messages.id = ? {scope}", (message_id, *params))
+            targets = [_message_from_row(row) for row in cursor.fetchall()]
+            if not targets:
+                return _thread_error("MESSAGE_NOT_FOUND", f"Message {message_id} was not found" +
+                                     (f" in {chat_jid}" if chat_jid else ""))
+            if len(targets) > 1:
+                return _thread_error("AMBIGUOUS_MESSAGE", f"Message {message_id} exists in {len(targets)} chats; give chat_jid")
+            target = targets[0]
+            found = _thread_of(cursor, columns, target, supported)
+            messages, cache = found["messages"], found["cache"]
+            _resolve_ancestors(cursor, columns, target.chat_jid, cache, set(), messages)
+            result = {"success": True, "chat_jid": target.chat_jid, "root_id": found["root"].id,
+                      "target_id": target.id, "total": len(messages), "truncated": found["truncated"]}
+            targets_id = target.id
+        else:
+            conditions, params = ["messages.chat_jid = ?"], [chat_jid]
+            if after_param:
+                conditions.append(f"{_INSTANT} > ?")
+                params.append(after_param)
+            if before_param:
+                conditions.append(f"{_INSTANT} < ?")
+                params.append(before_param)
+            source = "FROM messages JOIN chats ON messages.chat_jid = chats.jid WHERE " + " AND ".join(conditions)
+            total = cursor.execute(f"SELECT COUNT(*) {source}", params).fetchone()[0]
+            direction = order.upper()
+            cursor.execute(f"SELECT {columns} {source} ORDER BY {_INSTANT} {direction}, messages.rowid {direction} "
+                           f"LIMIT ? OFFSET ?", (*params, limit, page * limit))
+            messages = [_message_from_row(row) for row in cursor.fetchall()]
+            cache = {m.id: m for m in messages}
+            if supported:
+                _resolve_ancestors(cursor, columns, chat_jid, cache, set(), messages)
+            has_more = page * limit + len(messages) < total
+            result = {"success": True, "chat_jid": chat_jid, "total": total, "page": page, "limit": limit,
+                      "has_more": has_more, "next_page": page + 1 if has_more else None}
+            targets_id = None
+
+        replies: dict = {}
+        if supported and messages:
+            for child in _fetch_children(cursor, columns, messages[0].chat_jid, [m.id for m in messages]):
+                replies.setdefault(child.quoted_message_id, []).append(child.id)
+        result["messages"] = [_thread_message(m, m.id == targets_id, cache, replies) for m in messages]
+        return result
+    except sqlite3.Error as e:
+        return _thread_error("UNKNOWN", f"Database error: {e}")
+    finally:
+        conn.close()
