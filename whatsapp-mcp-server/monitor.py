@@ -542,8 +542,8 @@ _HOUR = 3600
 _reply_lock = threading.Lock()   # the limits are checked and the reply sent as one step
 
 
-def _read_sent(profile_name: str, now: datetime) -> List[dict]:
-    """The replies this profile sent in the last hour, from the audit log. Raises OSError when it cannot be read."""
+def _read_sent(now: datetime) -> List[dict]:
+    """The replies any profile sent in the last hour, from the audit log. Raises OSError when it cannot be read."""
     try:
         with open(AUDIT_PATH, encoding="utf-8") as f:
             lines = f.readlines()
@@ -556,8 +556,7 @@ def _read_sent(profile_name: str, now: datetime) -> List[dict]:
             when = datetime.fromisoformat(entry["ts"])
         except (ValueError, KeyError, TypeError):
             continue
-        if entry.get("profile") == profile_name and entry.get("result") == "sent" and \
-                0 <= (now - when).total_seconds() < _HOUR:
+        if entry.get("result") == "sent" and 0 <= (now - when).total_seconds() < _HOUR:
             entry["_when"] = when
             sent.append(entry)
     return sent
@@ -571,7 +570,7 @@ def _retry_after(times: List[datetime], limit: int, now: datetime) -> int:
 
 
 def _rate_check(profile: Profile, chat_jid: str, sender: str, now: datetime) -> Optional[dict]:
-    sent = _read_sent(profile.name, now)
+    sent = _read_sent(now)   # all profiles: a second profile on the same chat or sender must not double the pace
     limits, waits, why = profile.limits, [], []
     in_chat = [e["_when"] for e in sent if e.get("chat_jid") == chat_jid]
     if in_chat:
