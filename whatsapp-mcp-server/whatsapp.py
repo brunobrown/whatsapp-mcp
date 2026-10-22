@@ -1415,11 +1415,20 @@ def _resolve_ancestors(cursor, columns, chat_jid, cache: dict, missing: set, sta
 
 
 def _root_id(message: Message, cache: dict) -> str:
-    current, seen = message, {message.id}
-    while current.quoted_message_id in cache and current.quoted_message_id not in seen:
-        current = cache[current.quoted_message_id]
-        seen.add(current.id)
-    return current.id
+    """The top of the chain the message is in, as far as cache holds it.
+
+    A chain that quotes itself in a circle has the oldest message of the circle as its root, for every member.
+    """
+    path, current = [], message
+    while True:
+        path.append(current)
+        parent = cache.get(current.quoted_message_id) if current.quoted_message_id else None
+        if parent is None:
+            return current.id
+        if any(parent.id == seen.id for seen in path):
+            circle = path[[seen.id for seen in path].index(parent.id):]
+            return min(circle, key=lambda m: (_aware(m.timestamp), m.rowid or 0)).id
+        current = parent
 
 
 def _media_brief(message: Message) -> Optional[dict]:
@@ -1447,7 +1456,7 @@ def _reply_ref(message: Message, cache: dict) -> Optional[dict]:
     }
 
 
-def _thread_message(message: Message, is_target: bool, cache: dict, replies: dict) -> dict:
+def _thread_message(message: Message, is_target: bool, cache: dict, replies: dict, roots: dict) -> dict:
     out = _message_dict(message, False)
     del out["is_match"]
     out.update({
@@ -1455,9 +1464,16 @@ def _thread_message(message: Message, is_target: bool, cache: dict, replies: dic
         "is_target": is_target,
         "reply_to": _reply_ref(message, cache),
         "replies": replies.get(message.id, []),
-        "thread_root_id": _root_id(message, cache),
+        "thread_root_id": roots[message.id],
     })
     return out
+
+
+def _with_quoted(cursor, columns, chat_jid, cache: dict, messages: List[Message]) -> dict:
+    """cache plus the messages the given ones quote (one level), for showing reply_to."""
+    wanted = {m.quoted_message_id for m in messages if m.quoted_message_id} - cache.keys()
+    extra = {m.id: m for m in _fetch_by_ids(cursor, columns, chat_jid, wanted)} if wanted else {}
+    return {**cache, **extra}
 
 
 def _thread_of(cursor, columns, target: Message, supported: bool) -> dict:
@@ -1539,7 +1555,9 @@ def get_message_thread(
             target = targets[0]
             found = _thread_of(cursor, columns, target, supported)
             messages, cache = found["messages"], found["cache"]
-            _resolve_ancestors(cursor, columns, target.chat_jid, cache, set(), messages)
+            # roots first: the lookup below reads one more level only to show what each message quotes
+            roots = {m.id: _root_id(m, cache) for m in messages}
+            cache = _with_quoted(cursor, columns, target.chat_jid, cache, messages)
             result = {"success": True, "chat_jid": target.chat_jid, "root_id": found["root"].id,
                       "target_id": target.id, "total": len(messages), "truncated": found["truncated"]}
             targets_id = target.id
@@ -1560,6 +1578,7 @@ def get_message_thread(
             cache = {m.id: m for m in messages}
             if supported:
                 _resolve_ancestors(cursor, columns, chat_jid, cache, set(), messages)
+            roots = {m.id: _root_id(m, cache) for m in messages}
             has_more = page * limit + len(messages) < total
             result = {"success": True, "chat_jid": chat_jid, "total": total, "page": page, "limit": limit,
                       "has_more": has_more, "next_page": page + 1 if has_more else None}
@@ -1569,7 +1588,7 @@ def get_message_thread(
         if supported and messages:
             for child in _fetch_children(cursor, columns, messages[0].chat_jid, [m.id for m in messages]):
                 replies.setdefault(child.quoted_message_id, []).append(child.id)
-        result["messages"] = [_thread_message(m, m.id == targets_id, cache, replies) for m in messages]
+        result["messages"] = [_thread_message(m, m.id == targets_id, cache, replies, roots) for m in messages]
         return result
     except sqlite3.Error as e:
         return _thread_error("UNKNOWN", f"Database error: {e}")

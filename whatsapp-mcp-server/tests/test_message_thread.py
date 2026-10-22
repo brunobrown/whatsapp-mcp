@@ -301,3 +301,76 @@ def test_tool_documents_both_uses():
 
     for expected in ("message_id", "chat_jid", "reply_to", "replies", "thread_root_id", "forwarded", "media", "AMBIGUOUS_MESSAGE"):
         assert expected in doc
+
+
+def test_deep_chain_root_is_the_same_for_every_message(conn):  # THREAD-01 (subida limitada a 50 níveis)
+    add(conn, "M0", 0, hour=0)
+    for n in range(1, 120):
+        add(conn, f"M{n}", n % 60, hour=n // 60, quoted=f"M{n - 1}")
+
+    out = thread(message_id="M119", chat_jid=A)
+
+    roots = {m["thread_root_id"] for m in out["messages"]}
+    assert roots == {out["root_id"]} and out["root_id"] == "M69"  # 119 - 50 níveis
+    assert out["root_id"] in ids(out)
+
+
+def test_circle_has_one_deterministic_root_the_oldest(conn):  # THREAD-05
+    add(conn, "X", 1, quoted="Y")
+    add(conn, "Y", 2, quoted="X")
+
+    for start in ("X", "Y"):
+        out = thread(message_id=start, chat_jid=A)
+        assert out["root_id"] == "X" and {m["thread_root_id"] for m in out["messages"]} == {"X"}
+
+
+def test_target_beyond_the_500th_replaces_the_last_one(conn):  # THREAD-04
+    add(conn, "M0", 0, hour=0)
+    for n in range(1, 520):
+        add(conn, f"M{n}", n % 60, hour=n // 60, quoted="M0")  # 519 respostas diretas à raiz
+
+    out = thread(message_id="M515", chat_jid=A)
+
+    assert out["truncated"] is True and out["total"] == 500 and "M515" in ids(out) and "M499" not in ids(out)
+    assert ids(out) == sorted(ids(out), key=lambda i: int(i[1:]))  # segue cronológica
+
+
+def test_chain_order_uses_instants_across_offsets_and_write_order(conn):  # THREAD-01
+    def raw(id, ts, quoted=None):
+        conn.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, quoted_id) "
+                     "VALUES (?, ?, 's', '', ?, 0, ?)", (id, A, ts, quoted))
+    raw("R", "2026-10-21 09:00:00+00:00")
+    raw("LATE", "2026-10-21 10:00:00-03:00", "R")   # 13:00 UTC
+    raw("EARLY", "2026-10-21 12:00:00+00:00", "R")  # 12:00 UTC: antes, embora o texto "12" venha depois de "10"
+    raw("TIE", "2026-10-21 13:00:00+00:00", "R")    # mesmo instante de LATE, gravada depois
+    conn.commit()
+
+    assert ids(thread(message_id="R", chat_jid=A)) == ["R", "EARLY", "LATE", "TIE"]
+
+
+def test_replies_of_more_than_400_messages(conn):  # THREAD-01 (IN em blocos)
+    add(conn, "R", 0, hour=0)
+    for n in range(1, 450):
+        add(conn, f"C{n}", n % 60, hour=1 + n // 60, quoted="R")
+
+    out = thread(message_id="R", chat_jid=A)
+
+    assert len(by_id(out)["R"]["replies"]) == 449 and out["total"] == 450
+
+
+def test_window_page_beyond_the_end_and_root_outside_the_window(conn):  # WIN-02, WIN-03
+    add(conn, "OLD", 0, hour=8)
+    add(conn, "MID", 10, quoted="OLD", hour=10)
+
+    empty = thread(chat_jid=A, page=9)
+    window = thread(chat_jid=A, after="2026-10-21T09:00:00+00:00")
+
+    assert empty["messages"] == [] and empty["has_more"] is False and empty["next_page"] is None and empty["total"] == 2
+    assert ids(window) == ["MID"] and window["messages"][0]["thread_root_id"] == "OLD"
+
+
+def test_window_descending_breaks_ties_by_latest_write_first(conn):  # WIN-01
+    for n in range(3):
+        add(conn, f"T{n}", 0)
+
+    assert ids(thread(chat_jid=A, order="desc")) == ["T2", "T1", "T0"]
