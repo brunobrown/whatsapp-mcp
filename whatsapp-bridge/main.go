@@ -1628,6 +1628,10 @@ func main() {
 	// Nothing the bridge creates (databases, media, logs, backups) may be readable by other users.
 	restrictUmask()
 
+	if handled, code := runCommand(os.Args[1:], os.Stdout); handled {
+		os.Exit(code)
+	}
+
 	// Everything printed to stdout also goes to store/bridge.log (rotating); the pairing QR code is
 	// printed to the terminal only.
 	terminal := os.Stdout
