@@ -662,7 +662,6 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
     jid = send_policy.canonical_jid(chat_jid)
     if not jid:
         return error(INVALID_ARGUMENT, f"{chat_jid!r} is not a chat JID")
-    now = now or datetime.now(timezone.utc)
 
     try:
         message, hit = _trigger_message(selected, jid, message_id.strip())
@@ -705,8 +704,9 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         if not _audit_writable():
             return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be used, so the reply limits "
                                                   "cannot be checked. Nothing was sent.")
+        # read the clock only now, inside the lock: a reply that waited for another must see that one's audit line as past
         try:
-            limited = _rate_check(selected, jid, message.sender, now)
+            limited = _rate_check(selected, jid, message.sender, now or datetime.now(timezone.utc))
         except OSError as e:
             return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be read ({e}), so the reply "
                                                   "limits cannot be checked. Nothing was sent.")
