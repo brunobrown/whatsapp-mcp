@@ -43,7 +43,7 @@ func loadMasterKey() ([]byte, string, error) {
 }
 
 func loadMasterKeyWithWarnings() (key []byte, source string, warnings []string, err error) {
-	if value := os.Getenv(dbKeyEnv); strings.TrimSpace(value) != "" {
+	if value := os.Getenv(dbKeyEnv); value != "" { // set to blanks is a mistake, not "unset"
 		key, err = parseKey(value)
 		if err != nil {
 			return nil, dbKeyEnv, nil, fmt.Errorf("%s %v", dbKeyEnv, err)
@@ -89,8 +89,18 @@ func loadMasterKeyWithWarnings() (key []byte, source string, warnings []string, 
 	if _, err := rand.Read(key); err != nil {
 		return nil, path, nil, err
 	}
-	if err := writePrivateFile(dir, dbKeyFileName, hex.EncodeToString(key)+"\n"); err != nil {
+	created, err := createPrivateFile(dir, dbKeyFileName, hex.EncodeToString(key)+"\n")
+	if err != nil {
 		return nil, path, nil, fmt.Errorf("could not save the new key %s: %v", path, err)
+	}
+	if !created { // another start made it first: that one is the key
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, path, nil, fmt.Errorf("cannot read the key file %s: %v", path, readErr)
+		}
+		if key, err = parseKey(string(data)); err != nil {
+			return nil, path, nil, fmt.Errorf("the key file %s %v", path, err)
+		}
 	}
 	return key, path, nil, nil
 }

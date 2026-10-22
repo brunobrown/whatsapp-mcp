@@ -1285,7 +1285,7 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	if err := storeDownloadedMedia(messageStore, messageID, chatJID, absPath, mediaData); err != nil {
 		return false, "", "", "", err
 	}
-	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, absPath, len(mediaData))
+	fmt.Printf("Successfully downloaded %s media to %s (%d bytes)\n", mediaType, loggedText(absPath, includeTextInLog), len(mediaData))
 	return true, mediaType, filename, absPath, nil
 }
 

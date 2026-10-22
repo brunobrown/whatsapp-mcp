@@ -54,17 +54,61 @@ func writePrivateFile(dir, name, content string) error {
 		return err
 	}
 	if _, err = tmp.WriteString(content); err == nil {
-		err = tmp.Close()
-	} else {
-		tmp.Close()
+		err = tmp.Sync() // on disk before it takes its name
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
 	}
 	if err == nil {
 		err = os.Rename(tmp.Name(), filepath.Join(dir, name))
 	}
 	if err != nil {
 		os.Remove(tmp.Name())
+		return err
 	}
-	return err
+	syncDir(dir)
+	return nil
+}
+
+// syncDir flushes a directory so that a new name survives a crash. Best effort (not available everywhere).
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+// createPrivateFile creates dir/name (0600) with content only if it does not exist, flushed to disk before it
+// appears. It reports whether it created the file: two starts at once cannot both win.
+func createPrivateFile(dir, name, content string) (bool, error) {
+	if err := os.MkdirAll(dir, privateDirMode); err != nil {
+		return false, err
+	}
+	if err := chmodPath(dir, privateDirMode); err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(dir, ".tmp-*") // 0600
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err = tmp.WriteString(content); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := os.Link(tmp.Name(), filepath.Join(dir, name)); err != nil {
+		if os.IsExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	syncDir(dir)
+	return true, nil
 }
 
 // loadOrCreateToken returns the token of the local API: the one in dir/api_token if it is valid,

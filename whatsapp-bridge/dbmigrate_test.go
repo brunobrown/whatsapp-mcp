@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -482,5 +483,182 @@ func TestBackupNamesNeverCollideAndAreReusedForTheSameFile(t *testing.T) { // MI
 	next, existing, _ := plainBackupName(path, now)
 	if next == taken || existing || !strings.HasSuffix(next, "-2.bak") {
 		t.Errorf("a name taken by another file must not be reused: %q existing=%v", next, existing)
+	}
+}
+
+func TestPurgeNeverReachesALiveDatabaseThroughABackupLink(t *testing.T) { // MIG-06 (perda de dados)
+	skipOnWindows(t)
+	plaintextStore(t) // a live plaintext messages.db
+	live := "store/messages.db"
+	before := fileHash(t, live)
+	size := len(mustRead(t, live))
+	link := "store/messages.db.plain-20261022T000000Z.bak" // the state an interrupted swap used to leave behind
+	if err := os.Link(live, link); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := purgePlaintext("store")
+
+	if err != nil || len(removed) != 0 {
+		t.Fatalf("removed %v err %v: a name of the live database must not be purged", removed, err)
+	}
+	if fileHash(t, live) != before || len(mustRead(t, live)) != size {
+		t.Error("the live database was overwritten")
+	}
+}
+
+func TestAFailedSwapLeavesNoLinkToTheLiveDatabase(t *testing.T) { // MIG-03, MIG-06
+	plaintextStore(t)
+	before := fileHash(t, "store/messages.db")
+	real := migrationStep
+	migrationStep = func(stage string) error {
+		if stage == "backed-up" {
+			return errors.New("o processo morreu aqui")
+		}
+		return nil
+	}
+	_, err := NewMessageStore()
+	migrationStep = real
+	if err == nil {
+		t.Fatal("the failure was not reported")
+	}
+
+	if len(backups(t)) != 0 {
+		t.Errorf("a link to the live database was left behind: %v", backups(t))
+	}
+	if removed, _ := purgePlaintext("store"); len(removed) != 0 || fileHash(t, "store/messages.db") != before {
+		t.Error("a purge after the failed swap touched the live database")
+	}
+}
+
+func TestADatabaseWithAWALIsRecoveredOnACopyAndLosesNothing(t *testing.T) { // MIG-01, MIG-03 (bridge morto no meio da escrita)
+	skipOnWindows(t)
+	plaintextStore(t)
+	t.Setenv("WHATSAPP_DB_ENCRYPTION", "off")
+	live, err := NewMessageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	live.db.Exec("PRAGMA journal_mode=WAL")
+	live.db.Exec("PRAGMA wal_autocheckpoint=0")
+	for _, id := range []string{"W1", "W2"} {
+		if err := live.StoreMessage(id, "chat@g.us", "x", "só no WAL "+id, migrationTime, false, "", "", "", nil, nil, nil, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the image a crash leaves: the database file and its WAL, with the two rows only in the WAL
+	crash := t.TempDir()
+	os.MkdirAll(filepath.Join(crash, "store"), 0o700)
+	for _, suffix := range []string{"", "-wal"} {
+		if err := copyPrivate("store/messages.db"+suffix, filepath.Join(crash, "store", "messages.db"+suffix)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(crash)
+	t.Setenv("WHATSAPP_DB_ENCRYPTION", "")
+	original := fileHash(t, "store/messages.db")
+
+	store, err := NewMessageStore()
+	if err != nil {
+		t.Fatalf("a database with a WAL must migrate: %v", err)
+	}
+	defer store.Close()
+
+	if got := countMessages(t, store); got != 5 {
+		t.Errorf("messages after the migration = %d, want 5 (3 + the 2 that were only in the WAL)", got)
+	}
+	copies := backups(t)
+	if len(copies) != 1 || fileHash(t, copies[0]) != original {
+		t.Fatalf("the plaintext copy must be the untouched original: %v", copies)
+	}
+	if _, err := os.Stat(copies[0] + "-wal"); err != nil {
+		t.Error("the WAL must go with the plaintext copy")
+	}
+	for _, leftover := range []string{"store/messages.db-wal", "store/messages.db-shm", "store/messages.db-journal"} {
+		if _, err := os.Stat(leftover); err == nil {
+			t.Errorf("%s was left against the new database", leftover)
+		}
+	}
+	entries, _ := os.ReadDir("store")
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), "enc-tmp") {
+			t.Errorf("temporary file left: %s", entry.Name())
+		}
+	}
+}
+
+func TestAnEmptyStaleJournalDoesNotStayAgainstTheNewDatabase(t *testing.T) { // MIG-03
+	plaintextStore(t)
+	os.WriteFile("store/messages.db-journal", nil, 0o600)
+
+	store, err := NewMessageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := os.Stat("store/messages.db-journal"); err == nil {
+		t.Error("a journal of the replaced file is still next to the new database")
+	}
+	if countMessages(t, store) != 3 {
+		t.Error("rows lost")
+	}
+}
+
+func TestADatabaseWithAHotJournalIsRecoveredOnACopyAndTheOriginalStaysUntouched(t *testing.T) { // MIG-01, MIG-03
+	skipOnWindows(t)
+	plaintextStore(t)
+	t.Setenv("WHATSAPP_DB_ENCRYPTION", "off")
+	live, err := NewMessageStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	conn, err := live.db.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.ExecContext(t.Context(), "PRAGMA cache_size = 1") // dirty pages spill to the file, which forces a journal
+	conn.ExecContext(t.Context(), "BEGIN")
+	big := strings.Repeat("x", 3000)
+	for i := 0; i < 60; i++ {
+		if _, err := conn.ExecContext(t.Context(), "INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES (?, 'chat@g.us', 'x', ?, '2026-10-21 10:00:00', 0)",
+			fmt.Sprintf("HOT%d", i), big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	crash := t.TempDir()
+	os.MkdirAll(filepath.Join(crash, "store"), 0o700)
+	if err := copyWithSidecars("store/messages.db", filepath.Join(crash, "store", "messages.db")); err != nil {
+		t.Fatal(err)
+	}
+	conn.ExecContext(t.Context(), "ROLLBACK")
+	if _, err := os.Stat(filepath.Join(crash, "store", "messages.db-journal")); err != nil {
+		t.Skip("this SQLite did not leave a hot journal for the test to use")
+	}
+	t.Chdir(crash)
+	t.Setenv("WHATSAPP_DB_ENCRYPTION", "")
+	original := fileHash(t, "store/messages.db")
+
+	store, err := NewMessageStore()
+	if err != nil {
+		t.Fatalf("a database with a hot journal must migrate: %v", err)
+	}
+	defer store.Close()
+
+	if got := countMessages(t, store); got != 3 { // the interrupted transaction is rolled back, as SQLite always does
+		t.Errorf("messages = %d, want the 3 that were committed", got)
+	}
+	copies := backups(t)
+	if len(copies) != 1 || fileHash(t, copies[0]) != original {
+		t.Fatalf("the plaintext copy must be the untouched original: %v", copies)
+	}
+	if _, err := os.Stat(copies[0] + "-journal"); err != nil {
+		t.Error("the journal must go with the plaintext copy")
+	}
+	if _, err := os.Stat("store/messages.db-journal"); err == nil {
+		t.Error("the old journal was left against the new database")
 	}
 }

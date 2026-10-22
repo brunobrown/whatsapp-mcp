@@ -140,7 +140,11 @@ func exportEncrypted(path, tmp, name string, cfg dbConfig) error {
 	} else {
 		f.Close()
 	}
-	db, err := sql.Open("sqlite3", "file:"+path+"?mode=ro")
+	mode := "?mode=ro"
+	if strings.HasSuffix(path, "-src") {
+		mode = "" // our private copy: recovery of a journal or WAL has to write to it
+	}
+	db, err := sql.Open("sqlite3", "file:"+path+mode)
 	if err != nil {
 		return err
 	}
@@ -170,6 +174,45 @@ func exportEncrypted(path, tmp, name string, cfg dbConfig) error {
 		}
 	}
 	return nil
+}
+
+func hasSidecars(path string) bool {
+	for _, suffix := range []string{"-journal", "-wal"} {
+		if info, err := os.Stat(path + suffix); err == nil && info.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// copyWithSidecars copies a database and its journal or WAL to dst (private files).
+func copyWithSidecars(src, dst string) error {
+	for _, suffix := range []string{"", "-journal", "-wal"} {
+		if _, err := os.Stat(src + suffix); suffix != "" && err != nil {
+			continue
+		}
+		if err := copyPrivate(src+suffix, dst+suffix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyPrivate(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, privateFileMode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // linkOrCopy gives the file at src a second name, or a private copy where hard links are not available.
@@ -232,18 +275,35 @@ func migrateToEncrypted(path, name string, cfg dbConfig) error {
 	os.Remove(tmp)
 	removeStaleSidecars(tmp)
 
+	var madeBackup string
+	source := path
 	fail := func(err error) error {
 		os.Remove(tmp)
 		removeStaleSidecars(tmp)
+		if source != path {
+			os.Remove(source)
+			removeStaleSidecars(source)
+		}
+		if madeBackup != "" { // a link we made to the live file: leaving it would let a purge reach the live database
+			os.Remove(madeBackup)
+		}
 		return fmt.Errorf("could not encrypt %s; it was left as it was: %v", path, err)
 	}
-	if err := exportEncrypted(path, tmp, name, cfg); err != nil {
+	// A database with a journal or a WAL (the bridge was killed mid-write) needs recovery, which writes. That is
+	// done on a private copy, so that the original stays untouched.
+	if hasSidecars(path) {
+		source = path + migrationTempSuffix + "-src"
+		if err := copyWithSidecars(path, source); err != nil {
+			return fail(fmt.Errorf("could not copy the database to recover it: %v", err))
+		}
+	}
+	if err := exportEncrypted(source, tmp, name, cfg); err != nil {
 		return fail(err)
 	}
 	if err := migrationStep("exported"); err != nil {
 		return fail(err)
 	}
-	if err := verifyEncryptedCopy(path, tmp, name, cfg); err != nil {
+	if err := verifyEncryptedCopy(source, tmp, name, cfg); err != nil {
 		return fail(err)
 	}
 	if err := migrationStep("verified"); err != nil {
@@ -258,13 +318,23 @@ func migrateToEncrypted(path, name string, cfg dbConfig) error {
 		if err := linkOrCopy(path, backup); err != nil {
 			return fail(fmt.Errorf("could not keep a plaintext backup: %v", err))
 		}
+		madeBackup = backup
 	}
 	if err := migrationStep("backed-up"); err != nil {
 		return fail(err)
 	}
-	removeStaleSidecars(path)
+	// the journal or WAL belongs to the old file: it goes with the backup, never against the new database
+	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+		if _, err := os.Stat(path + suffix); err == nil {
+			os.Rename(path+suffix, backup+suffix)
+		}
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
+	}
+	if source != path {
+		os.Remove(source)
+		removeStaleSidecars(source)
 	}
 	fmt.Printf("Encrypted %s. The plaintext copy is %s: once everything works, delete it with `make purge-plaintext`\n", path, backup)
 	return nil
@@ -277,6 +347,20 @@ func plaintextCopies(dir string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var live []os.FileInfo // the databases in use, whatever their names: a backup link may be another name for one
+	for _, name := range []string{messagesDBName, sessionDBName} {
+		if info, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			live = append(live, info)
+		}
+	}
+	isLive := func(info os.FileInfo) bool {
+		for _, db := range live {
+			if os.SameFile(db, info) {
+				return true
+			}
+		}
+		return false
+	}
 	var found []string
 	for _, entry := range entries {
 		name := entry.Name()
@@ -285,7 +369,7 @@ func plaintextCopies(dir string) ([]string, error) {
 		}
 		path := filepath.Join(dir, name)
 		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() {
+		if err != nil || !info.Mode().IsRegular() || isLive(info) {
 			continue
 		}
 		if state, err := detectDBState(path); err == nil && state == dbPlaintext {
