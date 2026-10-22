@@ -275,7 +275,7 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
     
     Returns:
         On success: success, message and file_path. On failure: success=false, the bridge's real message, an error_code
-        (LINK_EXPIRED_PHONE_OFFLINE, MEDIA_NOT_FOUND, BRIDGE_UNREACHABLE or UNKNOWN) and, when actionable, a hint
+        (LINK_EXPIRED_PHONE_OFFLINE, MEDIA_NOT_FOUND, BRIDGE_UNREACHABLE, BRIDGE_UNAUTHORIZED or UNKNOWN) and, when actionable, a hint
     """
     result = whatsapp_download_media(message_id, chat_jid)
 
@@ -320,8 +320,8 @@ def download_media_batch(
         success, total, downloaded, already_downloaded, failed, skipped, truncated, aborted and items. Each item has
         message_id, timestamp, media_type, filename, status (downloaded, already_downloaded, failed, skipped), path and,
         when it did not download, error_code (LINK_EXPIRED_PHONE_OFFLINE, MEDIA_NOT_FOUND, DOWNLOAD_TIMEOUT,
-        SKIPPED_TOO_LARGE, BRIDGE_UNREACHABLE, NOT_ATTEMPTED, UNKNOWN), message and, when actionable, hint.
-        A failed item does not stop the batch; a bridge that does not answer does (aborted=BRIDGE_UNREACHABLE).
+        SKIPPED_TOO_LARGE, BRIDGE_UNREACHABLE, BRIDGE_UNAUTHORIZED, NOT_ATTEMPTED, UNKNOWN), message and, when actionable, hint.
+        A failed item does not stop the batch; a bridge that does not answer or refuses the API token does (aborted=BRIDGE_UNREACHABLE or BRIDGE_UNAUTHORIZED).
         Bad arguments: success=false, error_code=INVALID_ARGUMENT
     """
     return whatsapp_download_media_batch(chat_jid, after, before, types, max_size_mb, max_items, timeout_seconds)
@@ -453,12 +453,15 @@ def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     Returns:
         On success: success=true and participants, a list of {name, phone, lid, is_admin}.
         A participant WhatsApp has no name for has an empty name; phone or lid can be empty when unknown.
-        On failure: success=false and a message.
+        On failure: success=false, a message and, when the bridge refused the API token, error_code=BRIDGE_UNAUTHORIZED.
     """
     result = whatsapp_get_group_participants(chat_jid)
     if result.success:
         return {"success": True, "participants": result.participants}
-    return {"success": False, "message": result.message}
+    answer = {"success": False, "message": result.message}
+    if result.error_code:
+        answer["error_code"] = result.error_code
+    return answer
 
 @mcp.tool()
 def get_connection_status() -> Dict[str, Any]:
