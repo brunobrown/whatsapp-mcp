@@ -8,6 +8,7 @@ from pathlib import Path
 import requests
 import json
 import audio
+import localconfig
 import send_policy
 import logging
 import re
@@ -837,15 +838,22 @@ class SendResult:
     preview: Optional[dict] = None
 
 
+def _refused(response) -> bool:
+    """True when the bridge turned the request down for its token, Host or Origin (401/403)."""
+    return response.status_code in (401, 403)
+
+
 def _post_send(payload: dict) -> SendResult:
     """POST a send request to the bridge and parse its answer."""
     try:
-        response = requests.post(f"{WHATSAPP_API_BASE_URL}/send", json=payload)
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/send", json=payload, headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return SendResult(False, f"Request error: {str(e)}")
     except Exception as e:
         return SendResult(False, f"Unexpected error: {str(e)}")
 
+    if _refused(response):
+        return SendResult(False, localconfig.UNAUTHORIZED_HINT, error_code=localconfig.BRIDGE_UNAUTHORIZED)
     if response.status_code != 200:
         return SendResult(False, f"Error: HTTP {response.status_code} - {response.text}")
     try:
@@ -1113,6 +1121,7 @@ class GroupParticipantsResult:
     success: bool
     message: Optional[str] = None
     participants: Optional[List[dict]] = None
+    error_code: Optional[str] = None
 
 
 def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
@@ -1120,9 +1129,12 @@ def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
     if not chat_jid:
         return GroupParticipantsResult(False, "chat_jid must be provided")
     try:
-        response = requests.post(f"{WHATSAPP_API_BASE_URL}/group_participants", json={"chat_jid": chat_jid})
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/group_participants", json={"chat_jid": chat_jid},
+                                 headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return GroupParticipantsResult(False, f"Could not reach the WhatsApp bridge: {e}")
+    if _refused(response):
+        return GroupParticipantsResult(False, localconfig.UNAUTHORIZED_HINT, error_code=localconfig.BRIDGE_UNAUTHORIZED)
     try:
         body = response.json()
     except ValueError:
@@ -1158,7 +1170,7 @@ def _classify_download_error(message: str) -> str:
 
 def _download_failure(message: str, error_code: Optional[str] = None) -> DownloadResult:
     code = error_code or _classify_download_error(message)
-    hint = LINK_EXPIRED_HINT if code == "LINK_EXPIRED_PHONE_OFFLINE" else None
+    hint = {"LINK_EXPIRED_PHONE_OFFLINE": LINK_EXPIRED_HINT, localconfig.BRIDGE_UNAUTHORIZED: localconfig.UNAUTHORIZED_HINT}.get(code)
     logger.error("download_media failed (%s): %s", code, message)
     return DownloadResult(False, message, error_code=code, hint=hint)
 
@@ -1180,6 +1192,7 @@ def download_media(message_id: str, chat_jid: str, timeout: Optional[float] = No
         response = requests.post(
             f"{WHATSAPP_API_BASE_URL}/download",
             json={"message_id": message_id, "chat_jid": chat_jid},
+            headers=localconfig.auth_headers(),
             **extra,
         )
     except requests.RequestException as e:
@@ -1188,6 +1201,8 @@ def download_media(message_id: str, chat_jid: str, timeout: Optional[float] = No
             return _download_failure(f"The bridge did not answer within {timeout:g} seconds: {e}", "DOWNLOAD_TIMEOUT")
         return _download_failure(f"Could not reach the WhatsApp bridge: {e}", "BRIDGE_UNREACHABLE")
 
+    if _refused(response):
+        return _download_failure(localconfig.UNAUTHORIZED_HINT, localconfig.BRIDGE_UNAUTHORIZED)
     try:
         result = response.json()
     except ValueError:
@@ -1228,7 +1243,8 @@ def _last_log_at() -> Optional[str]:
 def get_connection_status() -> dict:
     """The bridge's status; a bridge that does not answer is reported as not connected."""
     try:
-        response = requests.get(f"{WHATSAPP_API_BASE_URL}/status", timeout=_STATUS_TIMEOUT_SECONDS)
+        response = requests.get(f"{WHATSAPP_API_BASE_URL}/status", timeout=_STATUS_TIMEOUT_SECONDS,
+                                headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return {
             "connected": False,
@@ -1237,6 +1253,13 @@ def get_connection_status() -> dict:
             "message": f"Could not reach the WhatsApp bridge: {e}",
             "last_message_at": _last_message_at(),
             "last_log_at": _last_log_at(),
+        }
+    if _refused(response):
+        return {
+            "connected": False,
+            "bridge_reachable": True,
+            "error_code": localconfig.BRIDGE_UNAUTHORIZED,
+            "message": localconfig.UNAUTHORIZED_HINT,
         }
     try:
         status = response.json()
@@ -1347,8 +1370,8 @@ def download_media_batch(
             else:
                 items.append(_batch_item(message, "failed", error_code=result.error_code, detail=result.message,
                                          hint=result.hint))
-                if result.error_code == "BRIDGE_UNREACHABLE":
-                    aborted = "BRIDGE_UNREACHABLE"
+                if result.error_code in ("BRIDGE_UNREACHABLE", localconfig.BRIDGE_UNAUTHORIZED):
+                    aborted = result.error_code    # every other item would fail the same way
 
     count = lambda status: sum(1 for item in items if item["status"] == status)
     return {
