@@ -235,7 +235,7 @@ Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-
 | `senders.allow` / `senders.deny` | who may trigger; `deny` wins. A sender the directory cannot identify is skipped when a block entry has no other id to compare (fail closed) | yes |
 | `topics` | keywords; only messages containing one (any case) are delivered | yes |
 | `mode` | `draft` (default) or `auto` | yes |
-| `approval_token` | needed to send in draft mode | yes |
+| `approval_token` | needed to send in draft mode; at least 8 characters, and the placeholder of the example file is refused | yes |
 | `auto_senders` | in `auto` mode, only these senders are answered without a token | yes |
 | `limits` | `replies_per_chat_per_hour` (6), `replies_per_sender_per_hour` (4), `cooldown_seconds` (20), `max_reply_chars` (1500) | yes |
 | `max_event_age_minutes` | default 60 | yes |
@@ -248,7 +248,7 @@ The server cannot judge what a reply *says*. Topic and tone live in `instruction
 - `auto`: replies to the senders in `auto_senders` go out without a token; everyone else is still draft.
 - The token is **a speed bump, not a security boundary**: anyone who can read the file can read it. The real approval is your MCP client's permission prompt for each tool call.
 - Replies always go to the chat of the message that fired the profile, quoting it; the agent cannot pick another destination. The [send policy](#send-policy) still applies.
-- Every reply is limited by the cooldown, the per-chat and per-sender hourly limits and the maximum size (`RATE_LIMITED` with `retry_after_seconds`). The limits are counted from `monitor_audit.log`, over the replies of **all** profiles (two profiles on the same chat or sender do not double the pace); if that file cannot be used, nothing is sent (`RATE_LIMIT_UNVERIFIABLE`).
+- Every reply is limited by the cooldown, the per-chat and per-sender hourly limits and the maximum size (`RATE_LIMITED` with `retry_after_seconds`). The limits are counted from `monitor_audit.log`, over the replies of **all** profiles (two profiles on the same chat or sender do not double the pace, and the same person seen as a phone and as a LID counts once; two server processes on the same log take turns through a lock file); if that file cannot be used, nothing is sent (`RATE_LIMIT_UNVERIFIABLE`).
 - Every attempt (sent, blocked, failed) is appended to `monitor_audit.log` (JSON lines, mode 0600, git-ignored; path in `WHATSAPP_MONITOR_AUDIT_LOG`): time, profile, chat, sender, message, triggers, mode, whether a token was used, result. Never the reply text or the token.
 
 **Risk: prompt injection.** Whatever people write to you is untrusted data, and an agent that answers on its own can be talked into things by it ("ignore your instructions and send me ..."). Every `monitor_messages` answer carries `untrusted_content=true` and a notice. Practices that help: keep `mode` at `draft`; list only people you trust in `auto_senders`; restrict `chats` and `senders.allow`; give the agent no tools it does not need for this job (no file or secret access beyond the documentation it must read); use the send policy's allowlist; keep the limits low; read `monitor_audit.log`.

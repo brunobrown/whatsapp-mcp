@@ -122,7 +122,7 @@ def test_cursor_accepts_a_number_or_its_text(conn):  # MON-13
 @pytest.mark.parametrize("kwargs", [
     {"cursor": "abc"}, {"cursor": "-1"}, {"cursor": -1}, {"cursor": True}, {"cursor": "1.5"}, {"cursor": "١"},
     {"cursor": 5},                                  # além do que está gravado
-    {"wait_seconds": -1}, {"wait_seconds": 56}, {"wait_seconds": "5"}, {"wait_seconds": True},
+    {"wait_seconds": -1}, {"wait_seconds": 56}, {"wait_seconds": float("nan")}, {"wait_seconds": float("inf")}, {"wait_seconds": float("-inf")}, {"wait_seconds": "5"}, {"wait_seconds": True},
     {"limit": 0}, {"limit": 101}, {"limit": "5"}, {"limit": True}, {"limit": 1.5},
     {"triggers": ["poke"]}, {"triggers": []}, {"triggers": "mention"},
     {"targets": []}, {"targets": ["abc"]}, {"targets": ["123"]}, {"targets": "me"},
@@ -221,8 +221,27 @@ def test_a_page_is_reported_with_has_more(conn):  # MON-11
 
 
 def test_get_monitor_profiles_tool(conn):  # CFG-04
-    write_config({"p": {"targets": ["me"], "approval_token": "segredo"}})
+    write_config({"p": {"targets": ["me"], "approval_token": "segredo-12345"}})
 
     out = main.get_monitor_profiles()
 
-    assert out["profiles"][0]["name"] == "p" and "segredo" not in json.dumps(out)
+    assert out["profiles"][0]["name"] == "p" and "segredo-12345" not in json.dumps(out)
+
+
+def test_waiting_does_not_block_the_event_loop(conn):  # MON-15
+    add(conn, "OLD", "ruído")
+
+    async def scenario():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+        task = asyncio.create_task(ticker())
+        await monitor.monitor_messages(targets=["me"], cursor=1, wait_seconds=1, now=NOW)   # espera de verdade
+        task.cancel()
+        return ticks
+
+    assert asyncio.run(scenario()) >= 20      # em 1 s o relógio do laço corre ~50 vezes; bloqueado, daria 0
