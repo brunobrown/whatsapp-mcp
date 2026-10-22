@@ -155,3 +155,11 @@ def test_disabled_and_unknown_profiles(config):  # CFG-05
     assert "on, off" in monitor.get_profile("nope")[1]["message"] or "off, on" in monitor.get_profile("nope")[1]["message"]
     assert monitor.get_profile("on")[0].name == "on"
     assert [p["name"] for p in monitor.list_profiles()["profiles"]] == ["off", "on"]  # a listagem mostra também os desligados
+
+
+def test_the_example_file_is_valid(monkeypatch):
+    monkeypatch.setattr(monitor, "CONFIG_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.example.json"))
+
+    out = monitor.list_profiles()
+
+    assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["suporte-software", "acompanhar-numero"]

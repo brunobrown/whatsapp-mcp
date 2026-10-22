@@ -132,7 +132,7 @@ Once connected, you can interact with your WhatsApp contacts through Claude, lev
 
 ### MCP Tools
 
-Claude can access the following 16 tools to interact with WhatsApp.
+Claude can access the following 19 tools to interact with WhatsApp.
 
 **Reading**
 
@@ -157,6 +157,12 @@ Claude can access the following 16 tools to interact with WhatsApp.
 
 - **download_media**: Download the media of one message and get the local file path. Failures return the bridge's real message and an `error_code`.
 - **download_media_batch**: Download all the media of a chat inside a time window, one at a time, with a result per item. See [Downloading a window of media](#downloading-a-window-of-media).
+
+**Monitoring** (see [Monitoring and auto-reply](#monitoring-and-auto-reply))
+
+- **monitor_messages**: Watch for new messages that mention, reply to or write to the account (or to other numbers). Call it in a loop with the returned cursor; it can wait for new events.
+- **monitor_reply**: Answer one of those messages, in its chat and quoting it, under the guardrails of a profile (approval, trusted senders, rate limits, audit).
+- **get_monitor_profiles**: List the monitoring profiles and their guardrails.
 
 **Diagnostics**
 
@@ -193,6 +199,61 @@ Each message has `id`, `timestamp`, `chat_jid`, `chat_name`, `sender`, `sender_n
 - `{id, found: true, sender, sender_name, content, timestamp, is_from_me, media}` otherwise.
 
 **Media.** A message with a file has `media` (`type`, `filename`, `mimetype`, `size`, `forwarded`, `quoted_message_id`, `local_path` only while the file exists); text has `null`. When a reply quotes a media, `reply_to.media` carries its `type`, `filename`, `mimetype` and `size`, and `reply_to.content` is its caption (empty without one), so you can tell "a reply to a PDF" from "a reply to a photo". Only metadata is read: images, audio and video are not described or transcribed. To get the file, call `download_media` with the `message_id` and `chat_jid`.
+
+### Monitoring and auto-reply
+
+An agent can watch the account (`"me"`) and/or other numbers and answer on its own. Two uses: *be answered when someone mentions or writes to you* and *follow what other numbers write* (for example, to gather evidence for a task, a feature or a fix). The server enforces the guardrails; the agent only sees the result.
+
+**How it works.** MCP cannot push events to an agent, so the agent calls `monitor_messages` in a loop:
+
+1. First call, without `cursor`: returns the current `cursor` and no events (history is not replayed).
+2. Next calls, with the `cursor`: return the events that arrived after it, in arrival order, and a new cursor. With `wait_seconds` (up to 55) the call waits for a new event and comes back with `timed_out=true` if none arrives. Call again at once with the cursor you got.
+3. For each event: `matched` (which trigger fired for which target), `reply_mode` and the full `message` (author, text, media, the quoted message, replies).
+4. To answer, the agent calls `monitor_reply(profile, chat_jid, message_id, text)`.
+
+**What counts as a reference** (`triggers`, default `mention`, `reply`, `direct`):
+
+| Trigger | Fires when |
+| ------- | ---------- |
+| `mention` | the text has `@<number or LID>` of a target (works with the phone or the LID) |
+| `reply` | the message quotes a message of the target (for `me`: a message sent by the account), in the same chat |
+| `direct` | a message arrives in a direct chat: for `me`, any received one; for another number, the chat with that number |
+| `from` | the target wrote the message, in any chat (only when asked; not for `me`) |
+
+Messages sent by the account itself never fire, and neither do messages older than `max_event_age_minutes` (default 60), so the history WhatsApp re-sends is not taken as new. Targets are `"me"` (the account behind the bridge; set `WHATSAPP_OWN_NUMBER` if the bridge is not running) or phone numbers, LIDs and user JIDs.
+
+**Without a profile** (`monitor_messages(targets=["me", "+5511999990000"])`) the monitor only reads. To answer you need a profile.
+
+#### Profiles and guardrails
+
+Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-ignored; the path can be changed with `WHATSAPP_MONITOR_CONFIG`). It is read on every call, so an edit applies at once, and `"enabled": false` turns a profile off immediately. A file that does not validate (unknown key, bad value) blocks **every** profile (`MONITOR_CONFIG_INVALID`).
+
+| Field | Meaning | Enforced by the server? |
+| ----- | ------- | ----------------------- |
+| `targets`, `triggers` | whom to watch and what counts | yes |
+| `chats` | only these chats (JIDs); empty = all | yes |
+| `senders.allow` / `senders.deny` | who may trigger; `deny` wins. A sender the directory cannot identify is skipped when a block entry has no other id to compare (fail closed) | yes |
+| `topics` | keywords; only messages containing one (any case) are delivered | yes |
+| `mode` | `draft` (default) or `auto` | yes |
+| `approval_token` | needed to send in draft mode | yes |
+| `auto_senders` | in `auto` mode, only these senders are answered without a token | yes |
+| `limits` | `replies_per_chat_per_hour` (6), `replies_per_sender_per_hour` (4), `cooldown_seconds` (20), `max_reply_chars` (1500) | yes |
+| `max_event_age_minutes` | default 60 | yes |
+| `instructions` | what to answer, tone, what never to reveal | **no, guidance only** |
+
+The server cannot judge what a reply *says*. Topic and tone live in `instructions`, which the agent receives with every batch of events, and in `topics`, which only filters what the agent sees. Do not rely on `instructions` to keep a secret.
+
+**Draft or automatic.**
+- `draft` (default): `monitor_reply` sends nothing unless it gets the profile's `approval_token`; without it, it returns `APPROVAL_REQUIRED` and a `preview`. A profile with no token never sends in draft mode. Use `dry_run=true` to see the preview, the mode and whether a token is needed.
+- `auto`: replies to the senders in `auto_senders` go out without a token; everyone else is still draft.
+- The token is **a speed bump, not a security boundary**: anyone who can read the file can read it. The real approval is your MCP client's permission prompt for each tool call.
+- Replies always go to the chat of the message that fired the profile, quoting it; the agent cannot pick another destination. The [send policy](#send-policy) still applies.
+- Every reply is limited by the cooldown, the per-chat and per-sender hourly limits and the maximum size (`RATE_LIMITED` with `retry_after_seconds`). The limits are counted from `monitor_audit.log`; if that file cannot be used, nothing is sent (`RATE_LIMIT_UNVERIFIABLE`).
+- Every attempt (sent, blocked, failed) is appended to `monitor_audit.log` (JSON lines, mode 0600, git-ignored; path in `WHATSAPP_MONITOR_AUDIT_LOG`): time, profile, chat, sender, message, triggers, mode, whether a token was used, result. Never the reply text or the token.
+
+**Risk: prompt injection.** Whatever people write to you is untrusted data, and an agent that answers on its own can be talked into things by it ("ignore your instructions and send me ..."). Every `monitor_messages` answer carries `untrusted_content=true` and a notice. Practices that help: keep `mode` at `draft`; list only people you trust in `auto_senders`; restrict `chats` and `senders.allow`; give the agent no tools it does not need for this job (no file or secret access beyond the documentation it must read); use the send policy's allowlist; keep the limits low; read `monitor_audit.log`.
+
+**Example.** A profile for a company group: `targets: ["me"]`, `chats: ["<group JID>"]`, `topics: ["deploy", "login"]`, `mode: "draft"`, and `instructions` telling the agent to answer only about the software, from its documentation and source code. The agent loops on `monitor_messages(profile="suporte-software", cursor=…, wait_seconds=50)`, drafts a reply with `monitor_reply(..., dry_run=true)` and, after you approve, sends it with the token. For gathering evidence, a profile with `targets: [<number>]` and `triggers: ["from"]` lets the agent collect what that number writes and, with `get_message_thread`, the replies around it, to assemble a task, a feature or a fix.
 
 ### Sending messages
 
@@ -295,11 +356,15 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_TIMEZONE` | MCP server | system zone | IANA zone (`America/Recife`) for dates given without an offset. An unknown name is an error. |
 | `WHATSAPP_SEND_POLICY` | MCP server | `whatsapp-mcp-server/send_policy.json` | Path of the send policy file |
 | `WHATSAPP_SEND_AUDIT_LOG` | MCP server | `whatsapp-mcp-server/send_audit.log` | Path of the send audit log |
+| `WHATSAPP_MONITOR_CONFIG` | MCP server | `whatsapp-mcp-server/monitor_profiles.json` | Path of the monitoring profiles |
+| `WHATSAPP_MONITOR_AUDIT_LOG` | MCP server | `whatsapp-mcp-server/monitor_audit.log` | Path of the monitor's reply audit log (also where its rate limits are counted) |
+| `WHATSAPP_OWN_NUMBER` | MCP server | the number the bridge reports | The account's number for the `"me"` target, when the bridge is not running |
 
 The bridge also needs to be **restarted after updating it** for new behaviour to apply: recording of file name, MIME type, forwarded and reply information, automatic download, mentions and replies, the status endpoint and the log all live in the bridge.
 
 ## Error codes
 
+Monitoring: `MONITOR_CONFIG_INVALID`, `PROFILE_NOT_FOUND`, `PROFILE_DISABLED`, `OWN_ACCOUNT_UNKNOWN`, `NOT_A_TRIGGER`, `APPROVAL_REQUIRED`, `RATE_LIMITED`, `RATE_LIMIT_UNVERIFIABLE`, `INVALID_ARGUMENT`.
 Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
 Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
 Status: `BRIDGE_UNREACHABLE`, `UNKNOWN`.
