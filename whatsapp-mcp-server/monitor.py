@@ -12,6 +12,7 @@ A file that does not validate blocks every profile (fail closed).
 import json
 import os
 import re
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -25,8 +26,10 @@ CONFIG_INVALID = "MONITOR_CONFIG_INVALID"
 PROFILE_NOT_FOUND = "PROFILE_NOT_FOUND"
 PROFILE_DISABLED = "PROFILE_DISABLED"
 
-TRIGGERS = ("mention", "reply", "direct", "from")
+TRIGGERS = ("mention", "reply", "direct", "from", "alias", "agent_reply")
+TARGET_TRIGGERS = ("mention", "reply", "direct", "from")   # these need targets
 DEFAULT_TRIGGERS = ("mention", "reply", "direct")
+MAX_ALIASES = 10
 MODES = ("draft", "auto")
 MIN_TOKEN_CHARS = 8
 EXAMPLE_TOKEN = "troque-por-um-valor-so-seu"
@@ -38,7 +41,8 @@ DEFAULT_LIMITS = {
 }
 DEFAULT_MAX_EVENT_AGE_MINUTES = 60
 _PROFILE_KEYS = {"enabled", "targets", "triggers", "chats", "senders", "topics", "mode", "auto_senders",
-                 "approval_token", "limits", "max_event_age_minutes", "instructions"}
+                 "approval_token", "limits", "max_event_age_minutes", "instructions", "aliases", "allow_own_alias",
+                 "auto_chats"}
 _PHONE_FORMAT = re.compile(r"\+?[0-9 ().\-]+", re.ASCII)
 
 
@@ -47,6 +51,9 @@ class Profile:
     name: str
     enabled: bool = True
     targets: List[str] = field(default_factory=list)          # "me" or the digits of a phone / LID
+    aliases: List[str] = field(default_factory=list)          # names that call the agent, lower-cased
+    allow_own_alias: bool = False                             # the account's own messages may call the agent by name
+    auto_chats: List[str] = field(default_factory=list)       # in auto mode, anyone in these chats is answered without a token
     triggers: List[str] = field(default_factory=lambda: list(DEFAULT_TRIGGERS))
     chats: List[str] = field(default_factory=list)            # canonical JIDs; empty = every chat
     senders_allow: List[str] = field(default_factory=list)    # digits; empty = anyone
@@ -99,6 +106,16 @@ def _numbers(value, where: str, allow_me: bool = False) -> List[str]:
     return out
 
 
+def _parse_aliases(value, where: str) -> List[str]:
+    aliases = [a.casefold() for a in _list_of_strings(value, where)]
+    if not aliases or len(aliases) > MAX_ALIASES or len(set(aliases)) != len(aliases):
+        raise _Invalid(f"{where} must list 1 to {MAX_ALIASES} different names")
+    for alias in aliases:
+        if re.search(r"\s", alias) or not 2 <= len(alias) <= 40:
+            raise _Invalid(f"{where}: {alias!r} must be 2 to 40 characters without spaces")
+    return aliases
+
+
 def _parse_profile(name: str, raw) -> Profile:
     where = f"profiles.{name}"
     if not isinstance(raw, dict):
@@ -113,9 +130,15 @@ def _parse_profile(name: str, raw) -> Profile:
             raise _Invalid(f"{where}.enabled must be true or false")
         profile.enabled = raw["enabled"]
 
-    profile.targets = _numbers(raw.get("targets"), f"{where}.targets", allow_me=True) if "targets" in raw else []
-    if not profile.targets:
-        raise _Invalid(f"{where}.targets must list at least one target")
+    if "targets" in raw:
+        profile.targets = _numbers(raw["targets"], f"{where}.targets", allow_me=True)
+        if not profile.targets:
+            raise _Invalid(f"{where}.targets must list at least one target")
+
+    if "aliases" in raw:
+        profile.aliases = _parse_aliases(raw["aliases"], f"{where}.aliases")
+    if not profile.targets and not profile.aliases:
+        raise _Invalid(f"{where} needs targets or aliases")
 
     if "triggers" in raw:
         triggers = _list_of_strings(raw["triggers"], f"{where}.triggers")
@@ -123,6 +146,21 @@ def _parse_profile(name: str, raw) -> Profile:
         if bad or not triggers:
             raise _Invalid(f"{where}.triggers: use one or more of {', '.join(TRIGGERS)}")
         profile.triggers = list(dict.fromkeys(triggers))
+    else:
+        profile.triggers = (list(DEFAULT_TRIGGERS) if profile.targets else []) + \
+            (["alias", "agent_reply"] if profile.aliases else [])
+    for trigger in profile.triggers:
+        if trigger in TARGET_TRIGGERS and not profile.targets:
+            raise _Invalid(f"{where}.triggers: {trigger} needs targets")
+        if trigger == "alias" and not profile.aliases:
+            raise _Invalid(f"{where}.triggers: alias needs aliases")
+
+    if "allow_own_alias" in raw:
+        if not isinstance(raw["allow_own_alias"], bool):
+            raise _Invalid(f"{where}.allow_own_alias must be true or false")
+        if raw["allow_own_alias"] and (not profile.aliases or "alias" not in profile.triggers):
+            raise _Invalid(f"{where}.allow_own_alias needs aliases and the alias trigger")
+        profile.allow_own_alias = raw["allow_own_alias"]
 
     if "chats" in raw:
         for chat in _list_of_strings(raw["chats"], f"{where}.chats"):
@@ -130,6 +168,13 @@ def _parse_profile(name: str, raw) -> Profile:
             if not jid:
                 raise _Invalid(f"{where}.chats: {chat!r} is not a chat JID")
             profile.chats.append(jid)
+
+    if "auto_chats" in raw:
+        for chat in _list_of_strings(raw["auto_chats"], f"{where}.auto_chats"):
+            jid = send_policy.canonical_jid(chat)
+            if not jid:
+                raise _Invalid(f"{where}.auto_chats: {chat!r} is not a chat JID")
+            profile.auto_chats.append(jid)
 
     if "senders" in raw:
         senders = raw["senders"]
@@ -226,6 +271,9 @@ def describe(profile: Profile) -> dict:
         "name": profile.name,
         "enabled": profile.enabled,
         "targets": profile.targets,
+        "aliases": profile.aliases,
+        "allow_own_alias": profile.allow_own_alias,
+        "auto_chats": profile.auto_chats,
         "triggers": profile.triggers,
         "chats": profile.chats,
         "senders": {"allow": profile.senders_allow, "deny": profile.senders_deny},
@@ -305,13 +353,84 @@ def _ids_of(numbers: List[str]) -> frozenset:
     return frozenset(out)
 
 
-def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], quoted_sender) -> List[dict]:
+@lru_cache(maxsize=256)
+def _alias_regex(alias: str):
+    """The alias as a whole word: not inside another word, not after an @ (unless the alias starts with one)."""
+    before = r"(?<![\w])" if alias.startswith("@") else r"(?<![\w@])"
+    return re.compile(before + re.escape(alias) + r"(?![\w-])", re.IGNORECASE)
+
+
+def alias_matches(text: str, profile: Profile) -> List[re.Match]:
+    return [m for m in (_alias_regex(a).search(text) for a in profile.aliases) if m]
+
+
+def _alias_hits(text: str, profile: Profile) -> List[dict]:
+    return [{"trigger": "alias", "target": alias} for alias in profile.aliases if _alias_regex(alias).search(text)]
+
+
+def command_of(text: str, profile: Profile) -> str:
+    """The text without the first occurrence of an alias and the punctuation that follows it."""
+    found = alias_matches(text, profile)
+    if not found:
+        return ""
+    first = min(found, key=lambda m: m.start())
+    before, after = text[:first.start()].rstrip(), text[first.end():].lstrip(" \t\r\n,:;-\u2013\u2014")
+    return (before + " " + after if before and after else before + after).strip(" \t\r\n,:;-\u2013\u2014")
+
+
+class AgentMessages:
+    """The replies the monitor sent (their ids are in the audit log), to recognise answers to the agent and its own messages."""
+
+    def __init__(self):
+        self._known: Optional[Dict[str, str]] = None
+
+    def sent(self) -> Dict[str, str]:
+        if self._known is None:
+            self._known = sent_reply_ids()
+        return self._known
+
+    def settled(self) -> Dict[str, str]:
+        """Like sent(), after any reply being sent right now has been recorded."""
+        with _reply_lock, _ProcessLock():
+            return sent_reply_ids()
+
+
+def sent_reply_ids() -> Dict[str, str]:
+    """{id of a reply the monitor sent: its chat}, from the audit log. An unreadable log knows none."""
+    try:
+        with open(AUDIT_PATH, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        logger.warning("Could not read the monitor audit log %s: %s", AUDIT_PATH, e)
+        return {}
+    ids = {}
+    for line in lines:
+        try:
+            entry = json.loads(line)
+            if entry.get("result") == "sent" and isinstance(entry.get("reply_id"), str):
+                ids[entry["reply_id"]] = entry.get("chat_jid")
+        except (ValueError, AttributeError):
+            continue
+    return ids
+
+
+def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], quoted_sender,
+            agent: Optional[AgentMessages] = None) -> List[dict]:
     """The triggers this message fires, as [{trigger, target}]. quoted_sender(message) -> (sender, is_from_me) or None."""
+    agent = agent or AgentMessages()
+    text = message.content or ""
     if message.is_from_me:
+        # the account's own messages fire nothing, except a call by name when allowed, and never a reply the monitor sent
+        if profile.allow_own_alias and "alias" in profile.triggers:
+            hit = _alias_hits(text, profile)
+            if hit and agent.settled().get(message.id) != message.chat_jid:
+                return hit
         return []
     found = []
     is_group = message.chat_jid.endswith("@g.us")
-    mentioned = {m.group(1) for m in whatsapp._MENTION.finditer(message.content or "")}
+    mentioned = {m.group(1) for m in whatsapp._MENTION.finditer(text)}
     chat_user = message.chat_jid.split("@")[0]
     quoted = quoted_sender(message) if "reply" in profile.triggers and message.quoted_message_id else None
     for target in targets:
@@ -323,6 +442,11 @@ def matches(message: whatsapp.Message, profile: Profile, targets: List[Target], 
             found.append({"trigger": "direct", "target": target.label})
         if "from" in profile.triggers and not target.is_me and message.sender in target.ids:
             found.append({"trigger": "from", "target": target.label})
+    if "alias" in profile.triggers:
+        found.extend(_alias_hits(text, profile))
+    if "agent_reply" in profile.triggers and message.quoted_message_id and \
+            agent.sent().get(message.quoted_message_id) == message.chat_jid:
+        found.append({"trigger": "agent_reply", "target": "agent"})
     return found
 
 
@@ -360,7 +484,8 @@ def passes_filters(message: whatsapp.Message, profile: Profile) -> bool:
 def reply_mode(message: whatsapp.Message, profile: Profile, adhoc: bool) -> str:
     if adhoc:
         return "none"
-    if profile.mode == "auto" and message.sender in _ids_of(profile.auto_senders):
+    if profile.mode == "auto" and (message.is_from_me or message.chat_jid in profile.auto_chats or
+                                   message.sender in _ids_of(profile.auto_senders)):
         return "auto"
     return "draft"
 
@@ -398,6 +523,7 @@ def scan(profile: Profile, cursor: int, limit: int, adhoc: bool = False, now: Op
         has_quoted = whatsapp._has_quoted_column(cursor_obj)
 
         quoted_sender = _quoted_sender_lookup(conn, has_quoted)
+        agent = AgentMessages()
 
         picked, position = [], cursor
         while True:
@@ -409,7 +535,7 @@ def scan(profile: Profile, cursor: int, limit: int, adhoc: bool = False, now: Op
             for row in rows:
                 message = whatsapp._message_from_row(row)
                 if whatsapp._aware(message.timestamp) >= oldest and passes_filters(message, profile):
-                    hit = matches(message, profile, targets, quoted_sender)
+                    hit = matches(message, profile, targets, quoted_sender, agent)
                     if hit:
                         picked.append((message, hit))
                 position = message.rowid
@@ -434,7 +560,8 @@ def _build(cursor_obj, columns, picked, profile: Profile, adhoc: bool) -> List[d
     if not picked:
         return []
     dicts = whatsapp.thread_dicts(cursor_obj, columns, [m for m, _ in picked])
-    return [{"matched": hit, "reply_mode": reply_mode(m, profile, adhoc), "message": d}
+    return [{"matched": hit, "reply_mode": reply_mode(m, profile, adhoc), "message": d,
+             "command": command_of(m.content or "", profile) if any(h["trigger"] == "alias" for h in hit) else None}
             for (m, hit), d in zip(picked, dicts)]
 
 
@@ -475,12 +602,12 @@ def _is_number(value) -> bool:
 
 async def monitor_messages(profile: Optional[str] = None, targets: Optional[List[str]] = None,
                            triggers: Optional[List[str]] = None, cursor=None, wait_seconds=0, limit: int = 20,
-                           sleep=asyncio.sleep, clock=time.monotonic, now=None) -> dict:
+                           aliases: Optional[List[str]] = None, sleep=asyncio.sleep, clock=time.monotonic, now=None) -> dict:
     """The new messages that refer to the monitored numbers; with a cursor it can wait for them."""
-    if profile and (targets is not None or triggers is not None):
-        return error(INVALID_ARGUMENT, "With profile, targets and triggers come from the profile: do not pass them")
-    if not profile and not targets:
-        return error(INVALID_ARGUMENT, "Give a profile, or targets (\"me\" and/or phone numbers, LIDs or JIDs)")
+    if profile and (targets is not None or triggers is not None or aliases is not None):
+        return error(INVALID_ARGUMENT, "With profile, targets, aliases and triggers come from the profile: do not pass them")
+    if not profile and not targets and not aliases:
+        return error(INVALID_ARGUMENT, "Give a profile, or targets (\"me\" and/or phone numbers, LIDs or JIDs) or aliases")
     try:
         position = _cursor_value(cursor)
     except ValueError:
@@ -495,7 +622,11 @@ async def monitor_messages(profile: Optional[str] = None, targets: Optional[List
         if problem:
             return problem
     else:
-        spec = {"targets": targets}
+        spec = {}
+        if targets is not None:
+            spec["targets"] = targets
+        if aliases is not None:
+            spec["aliases"] = aliases
         if triggers is not None:
             spec["triggers"] = triggers
         try:
@@ -681,7 +812,7 @@ def _trigger_message(profile: Profile, chat_jid: str, message_id: str):
         if not passes_filters(message, profile):
             return message, []
         lookup = _quoted_sender_lookup(conn, whatsapp._has_quoted_column(cursor))
-        return message, matches(message, profile, resolve_targets(profile), lookup)
+        return message, matches(message, profile, resolve_targets(profile), lookup, AgentMessages())
     finally:
         conn.close()
 
