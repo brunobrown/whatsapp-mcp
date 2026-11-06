@@ -845,10 +845,10 @@ def _refused(response) -> bool:
     return response.status_code in (401, 403)
 
 
-def _post_send(payload: dict) -> SendResult:
+def _post_send(payload: dict, endpoint: str = "send") -> SendResult:
     """POST a send request to the bridge and parse its answer."""
     try:
-        response = requests.post(f"{WHATSAPP_API_BASE_URL}/send", json=payload, headers=localconfig.auth_headers())
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/{endpoint}", json=payload, headers=localconfig.auth_headers())
     except requests.RequestException as e:
         return SendResult(False, f"Request error: {str(e)}")
     except Exception as e:
@@ -1786,3 +1786,51 @@ def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> dict:
         return _poll_error("UNKNOWN", f"Database error: {e}")
     finally:
         conn.close()
+
+
+_MAX_POLL_QUESTION, _MIN_POLL_OPTIONS, _MAX_POLL_OPTIONS, _MAX_POLL_OPTION = 255, 2, 12, 100
+
+
+def _poll_problem(question, options) -> Optional[str]:
+    """What is wrong with the poll against WhatsApp's limits, or None. Options differing only in case are the same."""
+    if not isinstance(question, str) or not question.strip() or len(question) > _MAX_POLL_QUESTION:
+        return f"The question must have 1 to {_MAX_POLL_QUESTION} characters"
+    if not isinstance(options, (list, tuple)) or not all(isinstance(o, str) for o in options):
+        return "options must be a list of texts"
+    if not _MIN_POLL_OPTIONS <= len(options) <= _MAX_POLL_OPTIONS:
+        return f"A poll needs {_MIN_POLL_OPTIONS} to {_MAX_POLL_OPTIONS} options, got {len(options)}"
+    seen = set()
+    for option in options:
+        if not option.strip() or len(option) > _MAX_POLL_OPTION:
+            return f"Each option must have 1 to {_MAX_POLL_OPTION} characters"
+        key = option.strip().casefold()
+        if key in seen:
+            return f"The option '{option}' is repeated"
+        seen.add(key)
+    return None
+
+
+def send_poll(recipient: str, question: str, options: List[str], allow_multiple: bool = True,
+              allow_add_option: bool = False, hide_voter_names: bool = False,
+              override_token: Optional[str] = None, dry_run: bool = False) -> SendResult:
+    if not recipient:
+        return SendResult(False, "Recipient must be provided")
+    problem = _poll_problem(question, options)
+    if problem:
+        return SendResult(False, f"{problem}. Nothing was sent.", error_code="INVALID_POLL")
+    options = list(options)
+
+    def send(target: send_policy.Target) -> SendResult:
+        return _post_send({"recipient": target.recipient, "question": question, "options": options,
+                           "allow_multiple": allow_multiple, "allow_add_option": allow_add_option,
+                           "hide_voter_names": hide_voter_names}, "send_poll")
+
+    def preview(target: send_policy.Target) -> SendResult:
+        return SendResult(True, "Dry run: nothing was sent", preview={
+            "question": question, "options": options, "allow_multiple": allow_multiple,
+            "allow_add_option": allow_add_option, "hide_voter_names": hide_voter_names,
+            "chat_jid": target.jid, "chat_name": target.chat_name,
+        })
+
+    size = len(question) + sum(len(o) for o in options)
+    return _guarded_send("poll", recipient, size, override_token, send, preview if dry_run else None)
