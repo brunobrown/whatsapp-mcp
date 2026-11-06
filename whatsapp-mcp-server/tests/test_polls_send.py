@@ -1,0 +1,147 @@
+"""Testes de send_poll, vote_poll e delete_message: validação, política de envio, dry_run e auditoria."""
+import json
+import os
+import sqlite3
+import sys
+from unittest import mock
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+import send_policy  # noqa: E402
+import whatsapp  # noqa: E402
+
+GROUP = "120363222@g.us"
+BLOCKED = "120363111@g.us"
+OK_BODY = {"success": True, "message": "Poll sent", "message_id": "POLL1",
+           "timestamp": "2026-11-06T10:30:00-03:00", "chat_jid": GROUP}
+
+
+@pytest.fixture
+def db(tmp_path, monkeypatch):
+    path = str(tmp_path / "messages.db")
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        "CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);"
+        "CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,"
+        " is_from_me BOOLEAN, media_type TEXT, PRIMARY KEY (id, chat_jid));"
+        "CREATE TABLE polls (id TEXT, chat_jid TEXT, author TEXT, question TEXT, options_json TEXT,"
+        " selectable_count INTEGER, allow_add_option BOOLEAN, hide_voter_names BOOLEAN, PRIMARY KEY (id, chat_jid));"
+        "CREATE TABLE poll_votes (poll_id TEXT, chat_jid TEXT, voter TEXT, hashes_json TEXT, timestamp_ms INTEGER,"
+        " PRIMARY KEY (poll_id, chat_jid, voter));"
+    )
+    conn.executemany("INSERT INTO chats VALUES (?, ?, NULL)", [(GROUP, "Teste"), (BLOCKED, "Cliente")])
+    conn.executemany(
+        "INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, '2026-11-06 10:00:00', ?)",
+        [("POLL1", GROUP, "alice", "[enquete] Almoço?", 0), ("MYPOLL", GROUP, "555100000000", "[enquete] Nossa", 1),
+         ("TXT", GROUP, "alice", "oi", 0), ("MINE", GROUP, "555100000000", "meu texto", 1)])
+    conn.executemany("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
+                     [("POLL1", GROUP, "alice", "Almoço?", json.dumps(["Sim", "Não", "Talvez"]), 0),
+                      ("MYPOLL", GROUP, "555100000000", "Nossa", json.dumps(["Sim", "Não"]), 1)])
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
+    return path
+
+
+@pytest.fixture
+def post():
+    resp = mock.Mock(status_code=200, text="ok")
+    resp.json.return_value = OK_BODY
+    with mock.patch("whatsapp.requests.post", return_value=resp) as p:
+        yield p
+
+
+def sent(post):
+    return post.call_args.kwargs["json"]
+
+
+def audit_lines():
+    if not os.path.exists(send_policy.AUDIT_PATH):
+        return []
+    return [json.loads(line) for line in open(send_policy.AUDIT_PATH)]
+
+
+def block(chat):
+    with open(send_policy.POLICY_PATH, "w") as f:
+        json.dump({"mode": "denylist", "deny": [chat]}, f)
+
+
+def test_send_poll_posts_the_poll_to_the_bridge(db, post):  # SEND-01
+    out = whatsapp.send_poll("Teste", "Almoço?", ["Sim", "Não"], allow_multiple=False,
+                             allow_add_option=True, hide_voter_names=True)
+
+    assert out.success is True and out.message_id == "POLL1" and out.chat_jid == GROUP
+    assert post.call_args.args[0].endswith("/send_poll")
+    assert sent(post) == {"recipient": GROUP, "question": "Almoço?", "options": ["Sim", "Não"],
+                          "allow_multiple": False, "allow_add_option": True, "hide_voter_names": True}
+
+
+def test_send_poll_defaults(db, post):  # SEND-01, SEND-03
+    whatsapp.send_poll(GROUP, "Q", ["A", "B"])
+    body = sent(post)
+    assert body["allow_multiple"] is True and body["allow_add_option"] is False and body["hide_voter_names"] is False
+
+
+@pytest.mark.parametrize("question, options", [
+    ("", ["A", "B"]),
+    ("   ", ["A", "B"]),
+    ("q" * 256, ["A", "B"]),
+    ("Q", ["A"]),
+    ("Q", []),
+    ("Q", [str(n) for n in range(13)]),
+    ("Q", ["A", ""]),
+    ("Q", ["A", "x" * 101]),
+    ("Q", ["Sim", "sim"]),
+    ("Q", ["A", 3]),
+    ("Q", "AB"),
+])
+def test_invalid_polls_are_refused_before_anything_is_sent(db, post, question, options):  # SEND-04
+    out = whatsapp.send_poll(GROUP, question, options)
+
+    assert out.success is False and out.error_code == "INVALID_POLL"
+    post.assert_not_called()
+    assert audit_lines() == []
+
+
+def test_the_limits_themselves_are_accepted(db, post):  # SEND-04
+    out = whatsapp.send_poll(GROUP, "q" * 255, ["x" * 100] + [str(n) for n in range(11)])
+    assert out.success is True
+
+
+def test_send_poll_without_recipient(db, post):  # SEND-04
+    out = whatsapp.send_poll("", "Q", ["A", "B"])
+    assert out.success is False
+    post.assert_not_called()
+
+
+def test_dry_run_returns_the_preview_and_touches_nothing(db, post):  # SEND-05
+    out = whatsapp.send_poll("Teste", "Almoço?", ["Sim", "Não"], allow_multiple=False, dry_run=True)
+
+    post.assert_not_called()
+    assert out.success is True
+    assert out.preview == {"question": "Almoço?", "options": ["Sim", "Não"], "allow_multiple": False,
+                           "allow_add_option": False, "hide_voter_names": False,
+                           "chat_jid": GROUP, "chat_name": "Teste"}
+    assert audit_lines() == []
+
+
+def test_the_send_policy_blocks_a_poll(db, post):  # SEND-06
+    block(BLOCKED)
+
+    out = whatsapp.send_poll(BLOCKED, "Q", ["A", "B"])
+    dry = whatsapp.send_poll(BLOCKED, "Q", ["A", "B"], dry_run=True)
+
+    assert out.success is False and out.error_code == send_policy.BLOCKED
+    assert dry.success is False and dry.error_code == send_policy.BLOCKED and dry.preview is None
+    post.assert_not_called()
+    assert [line["result"] for line in audit_lines()] == ["blocked"]
+
+
+def test_a_real_poll_send_is_audited_without_the_text(db, post):  # SEND-06
+    whatsapp.send_poll(GROUP, "Almoço secreto?", ["Sim", "Não"])
+
+    [line] = audit_lines()
+    assert line["kind"] == "poll" and line["result"] == "sent" and line["message_id"] == "POLL1"
+    assert "secreto" not in json.dumps(line) and "Sim" not in json.dumps(line)
