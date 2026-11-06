@@ -214,3 +214,54 @@ def test_a_vote_is_audited_by_kind(db, post):  # VOTE-06
 
     [line] = audit_lines()
     assert line["kind"] == "poll_vote" and line["result"] == "sent"
+
+
+def test_delete_message_posts_a_message_of_ours(db, post):  # DEL-01
+    out = whatsapp.delete_message("Teste", "MINE")
+
+    assert out.success is True
+    assert post.call_args.args[0].endswith("/delete_message")
+    assert sent(post) == {"chat_jid": GROUP, "message_id": "MINE"}
+
+
+def test_delete_message_can_delete_our_own_poll(db, post):  # DEL-01
+    assert whatsapp.delete_message(GROUP, "MYPOLL").success is True
+
+
+def test_delete_message_refuses_what_is_not_ours_or_unknown(db, post):  # DEL-02
+    someone_elses = whatsapp.delete_message(GROUP, "TXT")
+    unknown = whatsapp.delete_message(GROUP, "NOPE")
+
+    assert someone_elses.success is False and someone_elses.error_code == "NOT_OWN_MESSAGE"
+    assert unknown.success is False and unknown.error_code == "MESSAGE_NOT_FOUND"
+    post.assert_not_called()
+
+
+def test_delete_message_dry_run_previews_the_text_and_deletes_nothing(db, post):  # DEL-04
+    out = whatsapp.delete_message("Teste", "MINE", dry_run=True)
+
+    post.assert_not_called()
+    assert out.success is True and out.preview == {
+        "message_id": "MINE", "chat_jid": GROUP, "chat_name": "Teste", "text": "meu texto"}
+    assert audit_lines() == []
+
+
+def test_delete_message_dry_run_still_refuses_what_is_not_ours(db, post):  # DEL-04
+    out = whatsapp.delete_message(GROUP, "TXT", dry_run=True)
+    assert out.success is False and out.error_code == "NOT_OWN_MESSAGE"
+
+
+def test_the_send_policy_blocks_a_delete(db, post):  # DEL-04
+    block(GROUP)
+
+    out = whatsapp.delete_message(GROUP, "MINE")
+
+    assert out.success is False and out.error_code == send_policy.BLOCKED
+    post.assert_not_called()
+
+
+def test_a_delete_is_audited_by_kind_without_the_text(db, post):  # DEL-04
+    whatsapp.delete_message(GROUP, "MINE")
+
+    [line] = audit_lines()
+    assert line["kind"] == "delete" and line["result"] == "sent" and "meu texto" not in json.dumps(line)
