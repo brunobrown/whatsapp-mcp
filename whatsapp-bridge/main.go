@@ -782,9 +782,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		return
 	}
 
-	recordPoll(messageStore, func(e *events.Message) (*waProto.PollVoteMessage, error) {
+	if !recordPoll(messageStore, func(e *events.Message) (*waProto.PollVoteMessage, error) {
 		return client.DecryptPollVote(context.Background(), e)
-	}, msg, logger)
+	}, msg, logger) {
+		return
+	}
 
 	// Extract text content
 	content := extractTextContent(msg.Message)
@@ -1583,6 +1585,12 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 		// Send response
 		json.NewEncoder(w).Encode(newSendResponse(result))
 	})
+
+	// Handlers for polls
+	pollClient := newPollEnv(client)
+	mux.HandleFunc("/api/send_poll", pollEndpoint(func(req SendPollRequest) (int, SendMessageResponse) {
+		return sendPoll(pollClient, messageStore, req, logger)
+	}))
 
 	// Handler for listing the participants of a group
 	mux.HandleFunc("/api/group_participants", handleGroupParticipants(client, messageStore))
