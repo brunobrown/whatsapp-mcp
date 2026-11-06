@@ -17,7 +17,12 @@ from whatsapp import (
     get_group_participants as whatsapp_get_group_participants,
     get_connection_status as whatsapp_get_connection_status,
     download_media_batch as whatsapp_download_media_batch,
-    get_message_thread as whatsapp_get_message_thread
+    get_message_thread as whatsapp_get_message_thread,
+    send_poll as whatsapp_send_poll,
+    get_poll_results as whatsapp_get_poll_results,
+    list_polls as whatsapp_list_polls,
+    vote_poll as whatsapp_vote_poll,
+    delete_message as whatsapp_delete_message
 )
 
 # Initialize FastMCP server
@@ -356,6 +361,121 @@ def get_message_thread(
     Errors: success=false with error_code INVALID_ARGUMENT, MESSAGE_NOT_FOUND, AMBIGUOUS_MESSAGE or DIRECTORY_UNAVAILABLE
     """
     return whatsapp_get_message_thread(message_id, chat_jid, after, before, limit, page, order)
+
+@mcp.tool()
+def send_poll(
+    recipient: str,
+    question: str,
+    options: List[str],
+    allow_multiple: bool = True,
+    allow_add_option: bool = False,
+    hide_voter_names: bool = False,
+    override_token: Optional[str] = None,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """Create a WhatsApp poll in a chat or group.
+
+    Args:
+        recipient: A phone number with country code but no + or other symbols, a JID (e.g. a group like "123456789@g.us")
+                 or the exact name of a chat
+        question: The question, 1 to 255 characters
+        options: 2 to 12 answers of 1 to 100 characters each; two that differ only in case count as the same and are refused
+        allow_multiple: True (default) lets people pick several options; False limits each person to one
+        allow_add_option: True lets participants add options (needs a WhatsApp client that supports it; default False)
+        hide_voter_names: True makes the poll anonymous: get_poll_results then counts votes without naming voters (default False)
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
+        dry_run: Returns the preview (question, options, flags, resolved chat) and sends nothing. The send policy still applies
+
+    Returns:
+        success, message and, when sent, message_id, timestamp and chat_jid (the message_id is what get_poll_results,
+        list_polls and vote_poll take). A dry run returns dry_run=true and preview.
+        Errors: success=false with error_code INVALID_POLL (limits above; nothing was sent), SEND_BLOCKED_BY_POLICY,
+        RECIPIENT_NOT_FOUND or RECIPIENT_AMBIGUOUS, BRIDGE_UNAUTHORIZED
+    """
+    return send_response(whatsapp_send_poll(recipient, question, options, allow_multiple, allow_add_option,
+                                            hide_voter_names, override_token, dry_run))
+
+@mcp.tool()
+def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Read the current result of a poll the bridge has seen (sent by you or received).
+
+    Args:
+        message_id: The message_id of the poll (from send_poll, list_polls or list_messages: polls show as "[enquete] <question>")
+        chat_jid: Optional chat JID, for when the same ID exists in more than one chat
+
+    Returns:
+        success, message_id, chat_jid, chat_name, question, allow_multiple, allow_add_option, anonymous, created_at,
+        created_by, total_voters (people with a vote), unknown_votes (people who chose an option added after the poll, whose
+        name the bridge does not know) and options: in creation order, each with text, votes, percent (of total_voters) and voters
+        (names, in voting order; empty when anonymous). Each person counts once, with their latest vote; a retracted vote counts for nothing.
+        Only votes the bridge received while it was running can be counted.
+        Errors: success=false with error_code POLL_NOT_FOUND, AMBIGUOUS_MESSAGE or DIRECTORY_UNAVAILABLE
+    """
+    return whatsapp_get_poll_results(message_id, chat_jid)
+
+@mcp.tool()
+def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> Dict[str, Any]:
+    """List the polls of a chat, newest first, with the votes of each option.
+
+    Args:
+        chat_jid: The JID of the chat
+        limit: Polls per page, at least 1 (default 20)
+        page: Page number, starting at 0 (default 0)
+
+    Returns:
+        success, chat_jid, total, page, limit, has_more and polls: each with message_id, question, created_at,
+        total_voters and options (text, votes). Use get_poll_results for the voters.
+        Errors: success=false with error_code INVALID_ARGUMENT or DIRECTORY_UNAVAILABLE
+    """
+    return whatsapp_list_polls(chat_jid, limit, page)
+
+@mcp.tool()
+def vote_poll(
+    chat_jid: str,
+    message_id: str,
+    options: List[str],
+    override_token: Optional[str] = None,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """Vote in a poll, change your vote or retract it.
+
+    Args:
+        chat_jid: The chat of the poll (a JID, or the exact name of a chat)
+        message_id: The message_id of the poll
+        options: The options to choose, by their text (case does not matter); a single-answer poll takes one. Your vote
+                 replaces the previous one. An empty list retracts the vote
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
+        dry_run: Returns the preview (question and the options that would be chosen) and sends nothing
+
+    Returns:
+        success, message and, when sent, message_id and chat_jid. A dry run returns dry_run=true and preview.
+        Errors: success=false with error_code POLL_NOT_FOUND (the bridge never saw it), INVALID_VOTE (an option the poll
+        does not have, a repeated one, or several in a single-answer poll; nothing was sent), SEND_BLOCKED_BY_POLICY
+    """
+    return send_response(whatsapp_vote_poll(chat_jid, message_id, options, override_token, dry_run))
+
+@mcp.tool()
+def delete_message(
+    chat_jid: str,
+    message_id: str,
+    override_token: Optional[str] = None,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """Delete for everyone a message you sent (text, file or poll). It cannot be undone.
+
+    Args:
+        chat_jid: The chat of the message (a JID, or the exact name of a chat)
+        message_id: The ID of the message; it must be one sent by this account
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
+        dry_run: Returns the preview (chat and text of the message) and deletes nothing
+
+    Returns:
+        success, message and, when deleted, message_id and chat_jid. Your copy is removed only after WhatsApp accepted it.
+        A dry run returns dry_run=true and preview.
+        Errors: success=false with error_code MESSAGE_NOT_FOUND, NOT_OWN_MESSAGE (only your own messages can be deleted),
+        SEND_BLOCKED_BY_POLICY
+    """
+    return send_response(whatsapp_delete_message(chat_jid, message_id, override_token, dry_run))
 
 @mcp.tool()
 def get_monitor_profiles() -> Dict[str, Any]:
