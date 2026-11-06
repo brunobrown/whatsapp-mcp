@@ -3,11 +3,16 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
@@ -18,7 +23,7 @@ import (
 
 func samplePoll() Poll {
 	return Poll{
-		ID: "POLL1", ChatJID: "chat@g.us", Question: "Almoço?", Options: []string{"Sim", "Não"},
+		ID: "POLL1", ChatJID: "chat@g.us", Author: "alice", Question: "Almoço?", Options: []string{"Sim", "Não"},
 		SelectableCount: 1, AllowAddOption: true, HideVoterNames: true,
 	}
 }
@@ -39,7 +44,7 @@ func votesOf(t *testing.T, store *MessageStore, pollID string) map[string]PollVo
 func TestStorePollRoundTrip(t *testing.T) { // RX-01 (armazenamento)
 	store := newTestStore(t)
 	want := samplePoll()
-	if err := store.StorePoll(want); err != nil {
+	if _, err := store.StorePoll(want); err != nil {
 		t.Fatal(err)
 	}
 	got, found, err := store.GetPoll("POLL1", "chat@g.us")
@@ -56,7 +61,7 @@ func TestStorePollRoundTrip(t *testing.T) { // RX-01 (armazenamento)
 
 func TestStorePollTwiceKeepsOneRowAndVotes(t *testing.T) { // RX-05
 	store := newTestStore(t)
-	if err := store.StorePoll(samplePoll()); err != nil {
+	if _, err := store.StorePoll(samplePoll()); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
@@ -64,7 +69,7 @@ func TestStorePollTwiceKeepsOneRowAndVotes(t *testing.T) { // RX-05
 		t.Fatal(err)
 	}
 
-	if err := store.StorePoll(samplePoll()); err != nil {
+	if _, err := store.StorePoll(samplePoll()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,6 +79,49 @@ func TestStorePollTwiceKeepsOneRowAndVotes(t *testing.T) { // RX-05
 	}
 	if len(votesOf(t, store, "POLL1")) != 1 {
 		t.Error("storing the poll again must keep its votes")
+	}
+}
+
+func TestPollWithTheIDOfSomeoneElsesPollIsRefused(t *testing.T) { // RX-05 (autoria)
+	store := newTestStore(t)
+	if _, err := store.StorePoll(samplePoll()); err != nil {
+		t.Fatal(err)
+	}
+	forged := samplePoll()
+	forged.Author = "mallory"
+	forged.Question = "Pergunta trocada"
+	forged.Options = []string{"X", "Y"}
+
+	stored, err := store.StorePoll(forged)
+	if err != nil || stored {
+		t.Fatalf("StorePoll by another author = (%v, %v), want refused", stored, err)
+	}
+	got, _, _ := store.GetPoll("POLL1", "chat@g.us")
+	if got.Question != "Almoço?" || !reflect.DeepEqual(got.Options, []string{"Sim", "Não"}) {
+		t.Errorf("poll = %+v, want the original untouched", got)
+	}
+
+	own := samplePoll()
+	own.Question = "Almoço hoje?"
+	if stored, err := store.StorePoll(own); err != nil || !stored {
+		t.Errorf("StorePoll by the author = (%v, %v), want updated", stored, err)
+	}
+}
+
+func TestReceivedPollOfAnotherAuthorIsNotAcceptedByRecordPoll(t *testing.T) { // RX-05 (autoria)
+	store := newTestStore(t)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	first := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "POLL1", creationMessage("Original", []string{"A", "B"}, 0), now)
+	forged := pollEvent("chat@g.us", "5511888880000@s.whatsapp.net", "POLL1", creationMessage("Falsa", []string{"X", "Y"}, 0), now)
+
+	if !recordPoll(store, nil, first, waLog.Noop) {
+		t.Fatal("the first poll must be accepted")
+	}
+	if recordPoll(store, nil, forged, waLog.Noop) {
+		t.Error("a poll reusing another author's ID must be refused, so the message is not stored either")
+	}
+	if got, _, _ := store.GetPoll("POLL1", "chat@g.us"); got.Question != "Original" {
+		t.Errorf("question = %q, want Original", got.Question)
 	}
 }
 
@@ -108,7 +156,7 @@ func TestPollVoteKeptWhenPollIsUnknownYet(t *testing.T) { // EDGE-02
 	if stored, err := store.StorePollVote("LATER", "chat@g.us", "bob", []string{"aa"}, now); err != nil || !stored {
 		t.Fatalf("vote before the poll = (%v, %v), want stored", stored, err)
 	}
-	if err := store.StorePoll(Poll{ID: "LATER", ChatJID: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}); err != nil {
+	if _, err := store.StorePoll(Poll{ID: "LATER", ChatJID: "chat@g.us", Author: "alice", Question: "Q", Options: []string{"A", "B"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := votesOf(t, store, "LATER")["bob"]; !ok {
@@ -135,7 +183,7 @@ func TestDeletePollRemovesVotesAndOtherPollsStay(t *testing.T) { // DEL-01 (arma
 	other := samplePoll()
 	other.ID = "KEEP"
 	for _, p := range []Poll{samplePoll(), other} {
-		if err := store.StorePoll(p); err != nil {
+		if _, err := store.StorePoll(p); err != nil {
 			t.Fatal(err)
 		}
 		store.StorePollVote(p.ID, p.ChatJID, "alice", []string{"aa"}, now)
@@ -205,7 +253,7 @@ func TestReceivedPollIsStoredWithOptionsInOrder(t *testing.T) { // RX-01
 	if err != nil || !found {
 		t.Fatalf("GetPoll = (%v, %v), want found", found, err)
 	}
-	want := Poll{ID: "POLL1", ChatJID: "chat@g.us", Question: "Almoço?", Options: []string{"Sim", "Não", "Talvez"},
+	want := Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: "5511999990000", Question: "Almoço?", Options: []string{"Sim", "Não", "Talvez"},
 		SelectableCount: 1, AllowAddOption: true, HideVoterNames: true}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("poll = %+v, want %+v", got, want)
@@ -281,10 +329,154 @@ func TestOlderReceivedVoteDoesNotReplaceNewer(t *testing.T) { // RX-03
 func TestPollInsideFutureProofWrapperIsRecognised(t *testing.T) { // RX-01
 	inner := creationMessage("Q", []string{"A", "B"}, 0)
 	wrapped := &waE2E.Message{PollCreationMessageV4: &waE2E.FutureProofMessage{Message: inner}}
-	if _, ok := pollFromMessage("chat@g.us", "P", wrapped); !ok {
+	if _, ok := pollFromMessage("chat@g.us", "P", "alice", wrapped); !ok {
 		t.Error("a poll inside the V4 wrapper must be recognised")
 	}
-	if _, ok := pollFromMessage("chat@g.us", "P", &waE2E.Message{Conversation: proto.String("oi")}); ok {
+	if _, ok := pollFromMessage("chat@g.us", "P", "alice", &waE2E.Message{Conversation: proto.String("oi")}); ok {
 		t.Error("a text message is not a poll")
+	}
+}
+
+// fakePollClient is a connected WhatsApp client that records what it was asked to send.
+type fakePollClient struct {
+	env  pollEnv
+	sent []*waE2E.Message
+	to   []types.JID
+	err  error
+}
+
+func newFakePollClient() *fakePollClient {
+	f := &fakePollClient{}
+	own, _ := types.ParseJID("5511900000000@s.whatsapp.net")
+	f.env = pollEnv{
+		own:       own,
+		connected: func() bool { return true },
+		send: func(to types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
+			if f.err != nil {
+				return whatsmeow.SendResponse{}, f.err
+			}
+			f.sent = append(f.sent, msg)
+			f.to = append(f.to, to)
+			return whatsmeow.SendResponse{ID: "SENT1", Timestamp: time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)}, nil
+		},
+	}
+	return f
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func TestSendPollBuildsTheMessageAndRecordsIt(t *testing.T) { // SEND-02, SEND-03, SEND-07
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	status, resp := sendPoll(f.env, store, SendPollRequest{
+		Recipient: "chat@g.us", Question: "Almoço?", Options: []string{"Sim", "Não"},
+		AllowMultiple: boolPtr(false), AllowAddOption: true, HideVoterNames: true,
+	}, waLog.Noop)
+
+	if status != http.StatusOK || !resp.Success || resp.MessageID != "SENT1" || resp.ChatJID != "chat@g.us" {
+		t.Fatalf("sendPoll = %d %+v, want 200 success SENT1 chat@g.us", status, resp)
+	}
+	creation := f.sent[0].GetPollCreationMessage()
+	if creation.GetName() != "Almoço?" || creation.GetSelectableOptionsCount() != 1 ||
+		!creation.GetAllowAddOption() || !creation.GetHideParticipantName() {
+		t.Errorf("message = %+v, want question, selectable 1 and both flags", creation)
+	}
+	if got := []string{creation.GetOptions()[0].GetOptionName(), creation.GetOptions()[1].GetOptionName()}; !reflect.DeepEqual(got, []string{"Sim", "Não"}) {
+		t.Errorf("options = %v, want [Sim Não]", got)
+	}
+	if len(f.sent[0].GetMessageContextInfo().GetMessageSecret()) != 32 {
+		t.Error("the poll needs a 32-byte message secret, or votes cannot be read")
+	}
+
+	poll, found, _ := store.GetPoll("SENT1", "chat@g.us")
+	if !found || poll.Question != "Almoço?" || poll.SelectableCount != 1 || !poll.AllowAddOption || !poll.HideVoterNames {
+		t.Errorf("stored poll = %+v (found %v)", poll, found)
+	}
+	row := readRow(t, store, "SENT1")
+	if row.content != "[enquete] Almoço?" || !row.isFromMe || row.sender != "5511900000000" {
+		t.Errorf("stored message = %+v, want [enquete] Almoço?, ours", row)
+	}
+}
+
+func TestSendPollDefaultsToMultipleAnswersWithoutFlags(t *testing.T) { // SEND-02, SEND-03
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	sendPoll(f.env, store, SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}, waLog.Noop)
+
+	creation := f.sent[0].GetPollCreationMessage()
+	if creation.GetSelectableOptionsCount() != 0 {
+		t.Errorf("selectable = %d, want 0 (any number of answers)", creation.GetSelectableOptionsCount())
+	}
+	if creation.AllowAddOption != nil || creation.HideParticipantName != nil {
+		t.Error("the flags must be absent from the message unless requested")
+	}
+}
+
+func TestSendPollRejectsInvalidPollsBeforeSending(t *testing.T) { // SEND-04 (defesa do bridge)
+	store := newTestStore(t)
+	for name, req := range map[string]SendPollRequest{
+		"empty question": {Recipient: "chat@g.us", Question: "", Options: []string{"A", "B"}},
+		"one option":     {Recipient: "chat@g.us", Question: "Q", Options: []string{"A"}},
+		"no recipient":   {Question: "Q", Options: []string{"A", "B"}},
+		"repeated":       {Recipient: "chat@g.us", Question: "Q", Options: []string{"Sim", "sim"}},
+	} {
+		f := newFakePollClient()
+		status, resp := sendPoll(f.env, store, req, waLog.Noop)
+		if status != http.StatusBadRequest || resp.Success || len(f.sent) != 0 {
+			t.Errorf("%s: sendPoll = %d %+v (sent %d), want 400 and nothing sent", name, status, resp, len(f.sent))
+		}
+	}
+}
+
+func TestSendPollFailureStoresNothing(t *testing.T) { // SEND-07
+	store := newTestStore(t)
+	f := newFakePollClient()
+	f.err = errors.New("network down")
+
+	status, resp := sendPoll(f.env, store, SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}, waLog.Noop)
+
+	if status != http.StatusInternalServerError || resp.Success {
+		t.Errorf("sendPoll = %d %+v, want 500 failure", status, resp)
+	}
+	var rows int
+	store.db.QueryRow("SELECT (SELECT COUNT(*) FROM polls) + (SELECT COUNT(*) FROM messages)").Scan(&rows)
+	if rows != 0 {
+		t.Errorf("%d rows stored after a failed send, want 0", rows)
+	}
+}
+
+func TestSendPollNotConnected(t *testing.T) { // SEND-01 (erro)
+	f := newFakePollClient()
+	f.env.connected = func() bool { return false }
+	status, resp := sendPoll(f.env, newTestStore(t), SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}, waLog.Noop)
+	if status != http.StatusServiceUnavailable || resp.Success || len(f.sent) != 0 {
+		t.Errorf("sendPoll = %d %+v, want 503 and nothing sent", status, resp)
+	}
+}
+
+func TestPollEndpointRejectsWrongMethodAndBadBody(t *testing.T) { // SEND-01 (HTTP)
+	handler := pollHandler(func(r *http.Request) (int, any) {
+		var req SendPollRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			return http.StatusBadRequest, nil
+		}
+		return http.StatusOK, SendMessageResponse{Success: true}
+	})
+	get := httptest.NewRecorder()
+	handler(get, httptest.NewRequest(http.MethodGet, "/api/send_poll", nil))
+	if get.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET = %d, want 405", get.Code)
+	}
+	bad := httptest.NewRecorder()
+	handler(bad, httptest.NewRequest(http.MethodPost, "/api/send_poll", strings.NewReader("{")))
+	if bad.Code != http.StatusBadRequest {
+		t.Errorf("bad body = %d, want 400", bad.Code)
+	}
+	ok := httptest.NewRecorder()
+	handler(ok, httptest.NewRequest(http.MethodPost, "/api/send_poll", strings.NewReader(`{"recipient":"x"}`)))
+	if ok.Code != http.StatusOK || !strings.Contains(ok.Body.String(), `"success":true`) {
+		t.Errorf("good body = %d %s, want 200 success", ok.Code, ok.Body.String())
 	}
 }
