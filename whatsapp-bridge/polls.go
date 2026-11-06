@@ -163,22 +163,6 @@ func (store *MessageStore) PollVotes(pollID, chatJID string) ([]PollVote, error)
 	return votes, rows.Err()
 }
 
-// DeletePoll removes the poll and its votes.
-func (store *MessageStore) DeletePoll(id, chatJID string) error {
-	tx, err := store.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM poll_votes WHERE poll_id = ? AND chat_jid = ?", id, chatJID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec("DELETE FROM polls WHERE id = ? AND chat_jid = ?", id, chatJID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 // pollContentPrefix marks the stored text of a poll message, so list_messages and the monitor
 // show the poll as what it is.
 const pollContentPrefix = "[enquete] "
@@ -299,6 +283,7 @@ type pollEnv struct {
 	// buildVote makes the vote message for a poll (client.BuildPollVote); resolveSender gives the
 	// JID of a stored sender user (phone number or LID).
 	buildVote     func(poll *types.MessageInfo, options []string) (*waE2E.Message, error)
+	buildRevoke   func(chat types.JID, id string) *waE2E.Message
 	resolveSender func(user string) types.JID
 }
 
@@ -310,6 +295,9 @@ func newPollEnv(client *whatsmeow.Client) pollEnv {
 		},
 		buildVote: func(poll *types.MessageInfo, options []string) (*waE2E.Message, error) {
 			return client.BuildPollVote(context.Background(), poll, options)
+		},
+		buildRevoke: func(chat types.JID, id string) *waE2E.Message {
+			return client.BuildRevoke(chat, types.EmptyJID, id) // an empty sender revokes our own message
 		},
 		resolveSender: func(user string) types.JID { return resolveSenderJID(client, user) },
 	}
@@ -507,4 +495,59 @@ func votePoll(env pollEnv, store *MessageStore, req VotePollRequest, logger waLo
 		logger.Warnf("The vote on poll %s was sent but could not be stored: %v", poll.ID, err)
 	}
 	return http.StatusOK, SendMessageResponse{Success: true, Message: "Vote sent", MessageID: resp.ID, ChatJID: chat.String()}
+}
+
+// DeleteMessage removes a message from the database, and its poll and votes if it was a poll.
+func (store *MessageStore) DeleteMessage(id, chatJID string) error {
+	tx, err := store.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		"DELETE FROM poll_votes WHERE poll_id = ? AND chat_jid = ?",
+		"DELETE FROM polls WHERE id = ? AND chat_jid = ?",
+		"DELETE FROM messages WHERE id = ? AND chat_jid = ?",
+	} {
+		if _, err := tx.Exec(stmt, id, chatJID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// DeleteMessageRequest is the body of /api/delete_message.
+type DeleteMessageRequest struct {
+	ChatJID   string `json:"chat_jid"`
+	MessageID string `json:"message_id"`
+}
+
+// deleteMessage deletes for everyone a message that we sent. The local copy goes only after the
+// revoke was accepted, so a failure leaves the database as it was.
+func deleteMessage(env pollEnv, store *MessageStore, req DeleteMessageRequest, logger waLog.Logger) (int, SendMessageResponse) {
+	chat, err := types.ParseJID(req.ChatJID)
+	if err != nil || req.MessageID == "" {
+		return failure(http.StatusBadRequest, "chat_jid and message_id are required")
+	}
+	_, fromMe, err := store.GetMessageSenderInfo(req.MessageID, chat.String())
+	if err == sql.ErrNoRows {
+		return failure(http.StatusNotFound, "Message %s was not found in %s", req.MessageID, req.ChatJID)
+	}
+	if err != nil {
+		return failure(http.StatusInternalServerError, "Error reading the message: %v", err)
+	}
+	if !fromMe {
+		return failure(http.StatusForbidden, "Message %s was not sent by this account; only your own messages can be deleted", req.MessageID)
+	}
+	if !env.connected() {
+		return failure(http.StatusServiceUnavailable, "Not connected to WhatsApp")
+	}
+
+	if _, err := env.send(chat, env.buildRevoke(chat, req.MessageID)); err != nil {
+		return failure(http.StatusInternalServerError, "Error deleting the message: %v", err)
+	}
+	if err := store.DeleteMessage(req.MessageID, chat.String()); err != nil {
+		logger.Warnf("Message %s was deleted on WhatsApp but not locally: %v", req.MessageID, err)
+	}
+	return http.StatusOK, SendMessageResponse{Success: true, Message: "Message deleted", MessageID: req.MessageID, ChatJID: chat.String()}
 }

@@ -177,33 +177,6 @@ func TestEmptyVoteIsStoredAsRetraction(t *testing.T) { // RES-04 (base) / VOTE-0
 	}
 }
 
-func TestDeletePollRemovesVotesAndOtherPollsStay(t *testing.T) { // DEL-01 (armazenamento)
-	store := newTestStore(t)
-	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
-	other := samplePoll()
-	other.ID = "KEEP"
-	for _, p := range []Poll{samplePoll(), other} {
-		if _, err := store.StorePoll(p); err != nil {
-			t.Fatal(err)
-		}
-		store.StorePollVote(p.ID, p.ChatJID, "alice", []string{"aa"}, now)
-	}
-
-	if err := store.DeletePoll("POLL1", "chat@g.us"); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, found, _ := store.GetPoll("POLL1", "chat@g.us"); found {
-		t.Error("the deleted poll must be gone")
-	}
-	if len(votesOf(t, store, "POLL1")) != 0 {
-		t.Error("the votes of the deleted poll must be gone")
-	}
-	if _, found, _ := store.GetPoll("KEEP", "chat@g.us"); !found || len(votesOf(t, store, "KEEP")) != 1 {
-		t.Error("another poll and its votes must stay")
-	}
-}
-
 func pollEvent(chat, sender, id string, msg *waE2E.Message, ts time.Time) *events.Message {
 	chatJID, _ := types.ParseJID(chat)
 	senderJID, _ := types.ParseJID(sender)
@@ -596,5 +569,113 @@ func TestVotePollSendFailureStoresNoVote(t *testing.T) { // VOTE-05
 	}
 	if n := len(votesOf(t, store, "POLL1")); n != 0 {
 		t.Errorf("%d votes stored after a failed send, want none", n)
+	}
+}
+
+func seedMessage(t *testing.T, store *MessageStore, id string, fromMe bool) {
+	t.Helper()
+	ts := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	if err := store.StoreChat("chat@g.us", "Chat", ts); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StoreMessage(id, "chat@g.us", "5511900000000", "texto "+id, ts, fromMe, "", "", "", nil, nil, nil, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func messageCount(t *testing.T, store *MessageStore, id string) int {
+	t.Helper()
+	var n int
+	if err := store.db.QueryRow("SELECT COUNT(*) FROM messages WHERE id = ? AND chat_jid = 'chat@g.us'", id).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func revokingFake() (*fakePollClient, *types.JID, *string) {
+	f := newFakePollClient()
+	var chat types.JID
+	var id string
+	f.env.buildRevoke = func(c types.JID, messageID string) *waE2E.Message {
+		chat, id = c, messageID
+		return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{Type: waE2E.ProtocolMessage_REVOKE.Enum()}}
+	}
+	return f, &chat, &id
+}
+
+func TestDeleteMessageRevokesOurMessageAndRemovesItLocally(t *testing.T) { // DEL-01
+	store := newTestStore(t)
+	seedMessage(t, store, "MINE", true)
+	seedMessage(t, store, "OTHER", true)
+	f, chat, id := revokingFake()
+
+	status, resp := deleteMessage(f.env, store, DeleteMessageRequest{ChatJID: "chat@g.us", MessageID: "MINE"}, waLog.Noop)
+
+	if status != http.StatusOK || !resp.Success {
+		t.Fatalf("deleteMessage = %d %+v, want 200 success", status, resp)
+	}
+	if chat.String() != "chat@g.us" || *id != "MINE" || len(f.sent) != 1 || f.to[0].String() != "chat@g.us" {
+		t.Errorf("revoke for %s/%s sent to %v (%d sent), want MINE in chat@g.us", chat, *id, f.to, len(f.sent))
+	}
+	if messageCount(t, store, "MINE") != 0 {
+		t.Error("the deleted message must be removed locally")
+	}
+	if messageCount(t, store, "OTHER") != 1 {
+		t.Error("another message must stay")
+	}
+}
+
+func TestDeleteMessageOfAPollRemovesPollAndVotes(t *testing.T) { // DEL-01
+	store := newTestStore(t)
+	seedMessage(t, store, "POLL1", true)
+	storeSamplePollBy(t, store, "5511900000000", 0)
+	store.StorePollVote("POLL1", "chat@g.us", "alice", []string{"aa"}, time.Now())
+	f, _, _ := revokingFake()
+
+	if status, resp := deleteMessage(f.env, store, DeleteMessageRequest{ChatJID: "chat@g.us", MessageID: "POLL1"}, waLog.Noop); status != http.StatusOK {
+		t.Fatalf("deleteMessage = %d %+v, want 200", status, resp)
+	}
+
+	if _, found, _ := store.GetPoll("POLL1", "chat@g.us"); found || len(votesOf(t, store, "POLL1")) != 0 || messageCount(t, store, "POLL1") != 0 {
+		t.Error("the message, the poll and its votes must all be removed")
+	}
+}
+
+func TestDeleteMessageRefusesWhatIsNotOurs(t *testing.T) { // DEL-02
+	store := newTestStore(t)
+	seedMessage(t, store, "THEIRS", false)
+	for name, c := range map[string]struct {
+		id     string
+		status int
+	}{
+		"someone else's message": {"THEIRS", http.StatusForbidden},
+		"unknown message":        {"NOPE", http.StatusNotFound},
+	} {
+		f, _, _ := revokingFake()
+		status, resp := deleteMessage(f.env, store, DeleteMessageRequest{ChatJID: "chat@g.us", MessageID: c.id}, waLog.Noop)
+		if status != c.status || resp.Success || len(f.sent) != 0 {
+			t.Errorf("%s: deleteMessage = %d %+v (sent %d), want %d and nothing sent", name, status, resp, len(f.sent), c.status)
+		}
+	}
+	if messageCount(t, store, "THEIRS") != 1 {
+		t.Error("someone else's message must stay")
+	}
+}
+
+func TestDeleteMessageFailureKeepsEverythingLocal(t *testing.T) { // DEL-03
+	store := newTestStore(t)
+	seedMessage(t, store, "POLL1", true)
+	storeSamplePollBy(t, store, "5511900000000", 0)
+	store.StorePollVote("POLL1", "chat@g.us", "alice", []string{"aa"}, time.Now())
+	f, _, _ := revokingFake()
+	f.err = errors.New("network down")
+
+	status, resp := deleteMessage(f.env, store, DeleteMessageRequest{ChatJID: "chat@g.us", MessageID: "POLL1"}, waLog.Noop)
+
+	if status != http.StatusInternalServerError || resp.Success {
+		t.Errorf("deleteMessage = %d %+v, want 500 failure", status, resp)
+	}
+	if _, found, _ := store.GetPoll("POLL1", "chat@g.us"); !found || len(votesOf(t, store, "POLL1")) != 1 || messageCount(t, store, "POLL1") != 1 {
+		t.Error("nothing local may be removed when the revoke fails")
 	}
 }
