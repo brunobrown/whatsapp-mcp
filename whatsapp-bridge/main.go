@@ -439,6 +439,9 @@ func extractTextContent(msg *waProto.Message) string {
 	if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
 		return extendedText.GetText()
 	}
+	if poll := pollCreationOf(msg); poll != nil {
+		return pollContentPrefix + poll.GetName()
+	}
 	if img := msg.GetImageMessage(); img != nil {
 		return img.GetCaption()
 	}
@@ -778,6 +781,10 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		}
 		return
 	}
+
+	recordPoll(messageStore, func(e *events.Message) (*waProto.PollVoteMessage, error) {
+		return client.DecryptPollVote(context.Background(), e)
+	}, msg, logger)
 
 	// Extract text content
 	content := extractTextContent(msg.Message)
