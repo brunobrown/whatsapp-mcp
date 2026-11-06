@@ -1909,3 +1909,56 @@ def vote_poll(chat_jid: str, message_id: str, options: List[str], override_token
 
     size = len(options) if isinstance(options, (list, tuple)) else 0
     return _guarded_send("poll_vote", chat_jid, size, override_token, send, preview if dry_run else None)
+
+
+def _find_message(message_id: str, chat_jid: str) -> Optional[dict]:
+    """The stored message `message_id` of the chat, as {chat_jid, text, is_from_me}."""
+    try:
+        conn = _connect()
+    except dbcrypto.DB_ERRORS as e:
+        logger.error("Database error: %s", e)
+        return None
+    try:
+        for candidate in _chat_candidates(chat_jid):
+            row = conn.execute("SELECT chat_jid, content, is_from_me FROM messages WHERE id = ? AND chat_jid = ?",
+                               (message_id, candidate)).fetchone()
+            if row:
+                return {"chat_jid": row[0], "text": row[1] or "", "is_from_me": bool(row[2])}
+    except dbcrypto.DB_ERRORS as e:
+        logger.error("Database error: %s", e)
+    finally:
+        conn.close()
+    return None
+
+
+def delete_message(chat_jid: str, message_id: str, override_token: Optional[str] = None,
+                   dry_run: bool = False) -> SendResult:
+    if not chat_jid:
+        return SendResult(False, "chat_jid must be provided")
+    if not message_id:
+        return SendResult(False, "message_id must be provided")
+
+    def checked(target: send_policy.Target) -> "Tuple[Optional[dict], Optional[SendResult]]":
+        found = _find_message(message_id, target.jid)
+        if found is None:
+            return None, SendResult(False, f"Message {message_id} was not found in {target.jid}. Nothing was deleted.",
+                                    error_code="MESSAGE_NOT_FOUND")
+        if not found["is_from_me"]:
+            return None, SendResult(False, f"Message {message_id} was not sent by this account; only your own messages "
+                                           "can be deleted. Nothing was deleted.", error_code="NOT_OWN_MESSAGE")
+        return found, None
+
+    def send(target: send_policy.Target) -> SendResult:
+        found, error = checked(target)
+        if error:
+            return error
+        return _post_send({"chat_jid": found["chat_jid"], "message_id": message_id}, "delete_message")
+
+    def preview(target: send_policy.Target) -> SendResult:
+        found, error = checked(target)
+        if error:
+            return error
+        return SendResult(True, "Dry run: nothing was deleted", preview={
+            "message_id": message_id, "chat_jid": target.jid, "chat_name": target.chat_name, "text": found["text"]})
+
+    return _guarded_send("delete", chat_jid, 0, override_token, send, preview if dry_run else None)
