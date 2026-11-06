@@ -1592,6 +1592,10 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 		return sendPoll(pollClient, messageStore, req, logger)
 	}))
 
+	mux.HandleFunc("/api/vote_poll", pollEndpoint(func(req VotePollRequest) (int, SendMessageResponse) {
+		return votePoll(pollClient, messageStore, req, logger)
+	}))
+
 	// Handler for listing the participants of a group
 	mux.HandleFunc("/api/group_participants", handleGroupParticipants(client, messageStore))
 

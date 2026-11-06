@@ -480,3 +480,121 @@ func TestPollEndpointRejectsWrongMethodAndBadBody(t *testing.T) { // SEND-01 (HT
 		t.Errorf("good body = %d %s, want 200 success", ok.Code, ok.Body.String())
 	}
 }
+
+// votingFake adds the vote builder to the fake client and records how it was called.
+func votingFake() (*fakePollClient, *types.MessageInfo, *[]string) {
+	f := newFakePollClient()
+	var info types.MessageInfo
+	var names []string
+	f.env.resolveSender = func(user string) types.JID { return types.JID{User: user, Server: types.DefaultUserServer} }
+	f.env.buildVote = func(i *types.MessageInfo, options []string) (*waE2E.Message, error) {
+		info, names = *i, options
+		return &waE2E.Message{PollUpdateMessage: &waE2E.PollUpdateMessage{}}, nil
+	}
+	return f, &info, &names
+}
+
+func storeSamplePollBy(t *testing.T, store *MessageStore, author string, selectable int) {
+	t.Helper()
+	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: author, Question: "Almoço?",
+		Options: []string{"Sim", "Não", "Talvez"}, SelectableCount: selectable}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVotePollStoresOurVoteWithTheHashesOfTheChosenOptions(t *testing.T) { // VOTE-01, VOTE-05
+	store := newTestStore(t)
+	storeSamplePollBy(t, store, "5511999990000", 0)
+	f, info, names := votingFake()
+
+	status, resp := votePoll(f.env, store, VotePollRequest{ChatJID: "chat@g.us", MessageID: "POLL1", Options: []string{"sim", "TALVEZ"}}, waLog.Noop)
+
+	if status != http.StatusOK || !resp.Success {
+		t.Fatalf("votePoll = %d %+v, want 200 success", status, resp)
+	}
+	if !reflect.DeepEqual(*names, []string{"Sim", "Talvez"}) {
+		t.Errorf("voted names = %v, want the poll's own spelling [Sim Talvez]", *names)
+	}
+	if info.ID != "POLL1" || info.Chat.String() != "chat@g.us" || info.Sender.User != "5511999990000" || info.IsFromMe || !info.IsGroup {
+		t.Errorf("poll info = %+v, want POLL1 in the group, by 5511999990000, not ours", info)
+	}
+	want := []string{hex.EncodeToString(sha("Sim")), hex.EncodeToString(sha("Talvez"))}
+	if got := votesOf(t, store, "POLL1")["5511900000000"].Hashes; !reflect.DeepEqual(got, want) {
+		t.Errorf("our stored vote = %v, want %v", got, want)
+	}
+	if len(f.sent) != 1 {
+		t.Errorf("%d messages sent, want 1", len(f.sent))
+	}
+}
+
+func TestVotePollInOurOwnPollMarksItAsFromMe(t *testing.T) { // VOTE-01
+	store := newTestStore(t)
+	storeSamplePollBy(t, store, "5511900000000", 0)
+	f, info, _ := votingFake()
+
+	votePoll(f.env, store, VotePollRequest{ChatJID: "chat@g.us", MessageID: "POLL1", Options: []string{"Sim"}}, waLog.Noop)
+
+	if !info.IsFromMe || info.Sender.User != "5511900000000" {
+		t.Errorf("poll info = %+v, want IsFromMe by us", info)
+	}
+}
+
+func TestVotePollWithNoOptionsRetractsTheVote(t *testing.T) { // VOTE-02
+	store := newTestStore(t)
+	storeSamplePollBy(t, store, "5511999990000", 0)
+	f, _, names := votingFake()
+	store.StorePollVote("POLL1", "chat@g.us", "5511900000000", []string{"aa"}, time.Date(2026, 11, 6, 11, 0, 0, 0, time.UTC))
+
+	status, resp := votePoll(f.env, store, VotePollRequest{ChatJID: "chat@g.us", MessageID: "POLL1", Options: []string{}}, waLog.Noop)
+
+	if status != http.StatusOK || !resp.Success || len(*names) != 0 {
+		t.Fatalf("votePoll = %d %+v names %v, want an empty vote sent", status, resp, *names)
+	}
+	vote, ok := votesOf(t, store, "POLL1")["5511900000000"]
+	if !ok || len(vote.Hashes) != 0 {
+		t.Errorf("our vote = %+v (present %v), want retracted", vote, ok)
+	}
+}
+
+func TestVotePollRefusesWhatItCannotVote(t *testing.T) { // VOTE-03, VOTE-04
+	for name, c := range map[string]struct {
+		selectable int
+		poll       string
+		options    []string
+		status     int
+	}{
+		"unknown option":             {0, "POLL1", []string{"Nunca"}, http.StatusBadRequest},
+		"two on a single answer":     {1, "POLL1", []string{"Sim", "Não"}, http.StatusBadRequest},
+		"the same option twice":      {0, "POLL1", []string{"Sim", "sim"}, http.StatusBadRequest},
+		"poll that is not in the db": {0, "OTHER", []string{"Sim"}, http.StatusNotFound},
+	} {
+		store := newTestStore(t)
+		storeSamplePollBy(t, store, "5511999990000", c.selectable)
+		f, _, _ := votingFake()
+
+		status, resp := votePoll(f.env, store, VotePollRequest{ChatJID: "chat@g.us", MessageID: c.poll, Options: c.options}, waLog.Noop)
+
+		if status != c.status || resp.Success || len(f.sent) != 0 {
+			t.Errorf("%s: votePoll = %d %+v (sent %d), want %d and nothing sent", name, status, resp, len(f.sent), c.status)
+		}
+		if n := len(votesOf(t, store, "POLL1")); n != 0 {
+			t.Errorf("%s: %d votes stored, want none", name, n)
+		}
+	}
+}
+
+func TestVotePollSendFailureStoresNoVote(t *testing.T) { // VOTE-05
+	store := newTestStore(t)
+	storeSamplePollBy(t, store, "5511999990000", 0)
+	f, _, _ := votingFake()
+	f.err = errors.New("network down")
+
+	status, resp := votePoll(f.env, store, VotePollRequest{ChatJID: "chat@g.us", MessageID: "POLL1", Options: []string{"Sim"}}, waLog.Noop)
+
+	if status != http.StatusInternalServerError || resp.Success {
+		t.Errorf("votePoll = %d %+v, want 500 failure", status, resp)
+	}
+	if n := len(votesOf(t, store, "POLL1")); n != 0 {
+		t.Errorf("%d votes stored after a failed send, want none", n)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -295,6 +296,10 @@ type pollEnv struct {
 	own       types.JID
 	connected func() bool
 	send      func(to types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error)
+	// buildVote makes the vote message for a poll (client.BuildPollVote); resolveSender gives the
+	// JID of a stored sender user (phone number or LID).
+	buildVote     func(poll *types.MessageInfo, options []string) (*waE2E.Message, error)
+	resolveSender func(user string) types.JID
 }
 
 func newPollEnv(client *whatsmeow.Client) pollEnv {
@@ -303,6 +308,10 @@ func newPollEnv(client *whatsmeow.Client) pollEnv {
 		send: func(to types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error) {
 			return client.SendMessage(context.Background(), to, msg)
 		},
+		buildVote: func(poll *types.MessageInfo, options []string) (*waE2E.Message, error) {
+			return client.BuildPollVote(context.Background(), poll, options)
+		},
+		resolveSender: func(user string) types.JID { return resolveSenderJID(client, user) },
 	}
 	if client != nil && client.Store != nil && client.Store.ID != nil {
 		env.own = *client.Store.ID
@@ -414,4 +423,88 @@ func sendPoll(env pollEnv, store *MessageStore, req SendPollRequest, logger waLo
 	}
 	res.Message = fmt.Sprintf("Poll sent to %s", req.Recipient)
 	return http.StatusOK, newSendResponse(res)
+}
+
+// VotePollRequest is the body of /api/vote_poll. An empty Options retracts the vote.
+type VotePollRequest struct {
+	ChatJID   string   `json:"chat_jid"`
+	MessageID string   `json:"message_id"`
+	Options   []string `json:"options"`
+}
+
+// chosenOptions maps the names asked for (any case) to the poll's own spelling, which is what the
+// vote is hashed from.
+func chosenOptions(poll Poll, asked []string) ([]string, error) {
+	if poll.SelectableCount == 1 && len(asked) > 1 {
+		return nil, errors.New("this poll accepts a single answer")
+	}
+	chosen := make([]string, 0, len(asked))
+	picked := map[string]bool{}
+	for _, name := range asked {
+		var match string
+		for _, option := range poll.Options {
+			if strings.EqualFold(strings.TrimSpace(option), strings.TrimSpace(name)) {
+				match = option
+				break
+			}
+		}
+		if match == "" {
+			return nil, fmt.Errorf("the poll has no option %q", name)
+		}
+		if picked[match] {
+			return nil, fmt.Errorf("the option %q was chosen twice", name)
+		}
+		picked[match] = true
+		chosen = append(chosen, match)
+	}
+	return chosen, nil
+}
+
+// votePoll votes in a poll we know, and records our vote.
+func votePoll(env pollEnv, store *MessageStore, req VotePollRequest, logger waLog.Logger) (int, SendMessageResponse) {
+	chat, err := types.ParseJID(req.ChatJID)
+	if err != nil || req.MessageID == "" {
+		return failure(http.StatusBadRequest, "chat_jid and message_id are required")
+	}
+	poll, found, err := store.GetPoll(req.MessageID, chat.String())
+	if err != nil {
+		return failure(http.StatusInternalServerError, "Error reading the poll: %v", err)
+	}
+	if !found {
+		return failure(http.StatusNotFound, "Poll %s was not found in %s", req.MessageID, req.ChatJID)
+	}
+	chosen, err := chosenOptions(poll, req.Options)
+	if err != nil {
+		return failure(http.StatusBadRequest, "Invalid vote: %v", err)
+	}
+	if !env.connected() {
+		return failure(http.StatusServiceUnavailable, "Not connected to WhatsApp")
+	}
+
+	author := env.resolveSender(poll.Author)
+	fromMe := poll.Author == env.own.User
+	if fromMe {
+		author = env.own
+	}
+	info := &types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: chat, Sender: author, IsFromMe: fromMe, IsGroup: chat.Server == types.GroupServer},
+		ID:            poll.ID,
+	}
+	vote, err := env.buildVote(info, chosen)
+	if err != nil {
+		return failure(http.StatusInternalServerError, "Error building the vote: %v", err)
+	}
+	resp, err := env.send(chat, vote)
+	if err != nil {
+		return failure(http.StatusInternalServerError, "Error sending the vote: %v", err)
+	}
+
+	hashes := make([]string, 0, len(chosen))
+	for _, hash := range whatsmeow.HashPollOptions(chosen) {
+		hashes = append(hashes, hex.EncodeToString(hash))
+	}
+	if _, err := store.StorePollVote(poll.ID, chat.String(), env.own.User, hashes, resp.Timestamp); err != nil {
+		logger.Warnf("The vote on poll %s was sent but could not be stored: %v", poll.ID, err)
+	}
+	return http.StatusOK, SendMessageResponse{Success: true, Message: "Vote sent", MessageID: resp.ID, ChatJID: chat.String()}
 }
