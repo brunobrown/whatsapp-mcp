@@ -106,6 +106,11 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	if _, err := db.Exec(pollSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create poll tables: %v", err)
+	}
+
 	if _, err := db.Exec(identitySchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create contacts_identity: %v", err)
