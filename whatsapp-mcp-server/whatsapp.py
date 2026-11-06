@@ -6,6 +6,7 @@ from typing import Callable, Optional, List, Tuple
 import os.path
 from pathlib import Path
 import requests
+import hashlib
 import json
 import audio
 import dbcrypto
@@ -1642,5 +1643,146 @@ def get_message_thread(
         return result
     except dbcrypto.DB_ERRORS as e:
         return _thread_error("UNKNOWN", f"Database error: {e}")
+    finally:
+        conn.close()
+
+
+def _poll_error(code: str, message: str) -> dict:
+    return {"success": False, "error_code": code, "message": message}
+
+
+def _has_poll_tables(cursor: sqlite3.Cursor) -> bool:
+    names = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    return {"polls", "poll_votes"} <= names
+
+
+def _chat_candidates(chat_jid: str) -> List[str]:
+    """The chat as given and, for a direct chat, the other addressing of the same person (phone or LID)."""
+    return [chat_jid] if chat_jid.endswith("@g.us") else _person_ids_and_jids(chat_jid)[1]
+
+
+def _own_sender(cursor: sqlite3.Cursor) -> Optional[str]:
+    """The id this account sends under, learned from its own stored messages."""
+    row = cursor.execute("SELECT sender FROM messages WHERE is_from_me = 1 LIMIT 1").fetchone()
+    return row[0] if row else None
+
+
+def _voter_label(voter: str, own: Optional[str]) -> str:
+    return "Me" if own and voter == own else sender_label(voter)
+
+
+def _tally(cursor: sqlite3.Cursor, poll_id: str, chat_jid: str, options: List[str], anonymous: bool) -> dict:
+    """Count the current choice of each person. Votes name options by SHA-256 of the option text."""
+    by_hash = {hashlib.sha256(text.encode()).hexdigest(): text for text in options}
+    voters = {text: [] for text in options}
+    own = None if anonymous else _own_sender(cursor)
+    total, unknown = 0, 0
+    rows = cursor.execute("SELECT voter, hashes_json FROM poll_votes WHERE poll_id = ? AND chat_jid = ? "
+                          "ORDER BY timestamp_ms, voter", (poll_id, chat_jid)).fetchall()
+    for voter, hashes_json in rows:
+        hashes = json.loads(hashes_json)
+        if not hashes:
+            continue  # a retracted vote
+        total += 1
+        label = None if anonymous else _voter_label(voter, own)
+        chosen_unknown = False
+        for digest in hashes:
+            text = by_hash.get(digest)
+            if text is None:
+                chosen_unknown = True
+            else:
+                voters[text].append(label)
+        unknown += chosen_unknown
+    counted = [{"text": text, "votes": len(voters[text]),
+                "percent": round(len(voters[text]) * 100 / total, 1) if total else 0.0,
+                "voters": [] if anonymous else voters[text]} for text in options]
+    return {"options": counted, "total_voters": total, "unknown_votes": unknown}
+
+
+def _poll_row_dict(cursor: sqlite3.Cursor, row) -> dict:
+    """Everything shown about one poll row: (id, chat_jid, author, question, options_json, selectable_count,
+    allow_add_option, hide_voter_names, chat name, created timestamp, created by us)."""
+    (poll_id, chat_jid, author, question, options_json, selectable, add_option, hide, chat_name, created, from_me) = row
+    anonymous = bool(hide)
+    return {
+        "message_id": poll_id,
+        "chat_jid": chat_jid,
+        "chat_name": chat_name,
+        "question": question,
+        "allow_multiple": selectable != 1,
+        "allow_add_option": bool(add_option),
+        "anonymous": anonymous,
+        "created_at": _aware(datetime.fromisoformat(created)).isoformat() if created else None,
+        "created_by": "Me" if from_me else sender_label(author),
+        **_tally(cursor, poll_id, chat_jid, json.loads(options_json), anonymous),
+    }
+
+
+_POLL_COLUMNS = ("polls.id, polls.chat_jid, polls.author, polls.question, polls.options_json, polls.selectable_count, "
+                 "polls.allow_add_option, polls.hide_voter_names, chats.name, messages.timestamp, messages.is_from_me")
+_POLL_JOIN = ("FROM polls LEFT JOIN chats ON chats.jid = polls.chat_jid "
+              "LEFT JOIN messages ON messages.id = polls.id AND messages.chat_jid = polls.chat_jid")
+
+
+def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> dict:
+    """The question, options and current votes of a poll."""
+    if not message_id:
+        return _poll_error("INVALID_ARGUMENT", "message_id is required")
+    try:
+        conn = _open_chats()
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
+        return _poll_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    try:
+        cursor = conn.cursor()
+        where, params = "polls.id = ?", [message_id]
+        if chat_jid:
+            candidates = _chat_candidates(chat_jid)
+            where += f" AND polls.chat_jid IN ({','.join('?' * len(candidates))})"
+            params += candidates
+        rows = cursor.execute(f"SELECT {_POLL_COLUMNS} {_POLL_JOIN} WHERE {where}", params).fetchall() \
+            if _has_poll_tables(cursor) else []
+        if not rows:
+            return _poll_error("POLL_NOT_FOUND", f"Poll {message_id} was not found" + (f" in {chat_jid}" if chat_jid else ""))
+        if len(rows) > 1:
+            return _poll_error("AMBIGUOUS_MESSAGE", f"Poll {message_id} exists in {len(rows)} chats; give chat_jid")
+        return {"success": True, **_poll_row_dict(cursor, rows[0])}
+    except dbcrypto.DB_ERRORS as e:
+        return _poll_error("UNKNOWN", f"Database error: {e}")
+    finally:
+        conn.close()
+
+
+def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> dict:
+    """The polls of a chat, newest first, with the votes of each option."""
+    if not chat_jid:
+        return _poll_error("INVALID_ARGUMENT", "chat_jid is required")
+    if limit < 1 or page < 0:
+        return _poll_error("INVALID_ARGUMENT", "limit must be at least 1 and page at least 0")
+    try:
+        conn = _open_chats()
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
+        return _poll_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    try:
+        cursor = conn.cursor()
+        if not _has_poll_tables(cursor):
+            return {"success": True, "chat_jid": chat_jid, "polls": [], "total": 0, "page": page, "limit": limit,
+                    "has_more": False}
+        candidates = _chat_candidates(chat_jid)
+        marks = ",".join("?" * len(candidates))
+        total = cursor.execute(f"SELECT COUNT(*) FROM polls WHERE chat_jid IN ({marks})", candidates).fetchone()[0]
+        rows = cursor.execute(
+            f"SELECT {_POLL_COLUMNS} {_POLL_JOIN} WHERE polls.chat_jid IN ({marks}) "
+            f"ORDER BY {_INSTANT} DESC, messages.rowid DESC LIMIT ? OFFSET ?",
+            (*candidates, limit, page * limit)).fetchall()
+        polls = []
+        for row in rows:
+            full = _poll_row_dict(cursor, row)
+            polls.append({"message_id": full["message_id"], "question": full["question"], "created_at": full["created_at"],
+                          "total_voters": full["total_voters"],
+                          "options": [{"text": o["text"], "votes": o["votes"]} for o in full["options"]]})
+        return {"success": True, "chat_jid": chat_jid, "polls": polls, "total": total, "page": page, "limit": limit,
+                "has_more": page * limit + len(polls) < total}
+    except dbcrypto.DB_ERRORS as e:
+        return _poll_error("UNKNOWN", f"Database error: {e}")
     finally:
         conn.close()
