@@ -1834,3 +1834,78 @@ def send_poll(recipient: str, question: str, options: List[str], allow_multiple:
 
     size = len(question) + sum(len(o) for o in options)
     return _guarded_send("poll", recipient, size, override_token, send, preview if dry_run else None)
+
+
+def _find_poll(message_id: str, chat_jid: str) -> Optional[dict]:
+    """The stored poll `message_id` of the chat, as {chat_jid, question, options, single}."""
+    try:
+        conn = _connect()
+    except dbcrypto.DB_ERRORS as e:
+        logger.error("Database error: %s", e)
+        return None
+    try:
+        if not _has_poll_tables(conn.cursor()):
+            return None
+        for candidate in _chat_candidates(chat_jid):
+            row = conn.execute("SELECT chat_jid, question, options_json, selectable_count FROM polls "
+                               "WHERE id = ? AND chat_jid = ?", (message_id, candidate)).fetchone()
+            if row:
+                return {"chat_jid": row[0], "question": row[1], "options": json.loads(row[2]), "single": row[3] == 1}
+    except dbcrypto.DB_ERRORS as e:
+        logger.error("Database error: %s", e)
+    finally:
+        conn.close()
+    return None
+
+
+def _chosen_options(poll: dict, asked) -> "Tuple[Optional[List[str]], Optional[str]]":
+    """The poll's own spelling of the options asked for (any case), or the reason they cannot be voted."""
+    if not isinstance(asked, (list, tuple)) or not all(isinstance(o, str) for o in asked):
+        return None, "options must be a list of option texts (an empty list retracts the vote)"
+    if poll["single"] and len(asked) > 1:
+        return None, "This poll accepts a single answer"
+    by_text = {o.strip().casefold(): o for o in poll["options"]}
+    chosen: List[str] = []
+    for name in asked:
+        text = by_text.get(name.strip().casefold())
+        if text is None:
+            return None, f"The poll has no option '{name}'. Options: {', '.join(poll['options'])}"
+        if text in chosen:
+            return None, f"The option '{name}' was chosen twice"
+        chosen.append(text)
+    return chosen, None
+
+
+def vote_poll(chat_jid: str, message_id: str, options: List[str], override_token: Optional[str] = None,
+              dry_run: bool = False) -> SendResult:
+    if not chat_jid:
+        return SendResult(False, "chat_jid must be provided")
+    if not message_id:
+        return SendResult(False, "message_id must be provided")
+
+    def checked(target: send_policy.Target) -> "Tuple[Optional[dict], Optional[List[str]], Optional[SendResult]]":
+        poll = _find_poll(message_id, target.jid)
+        if poll is None:
+            return None, None, SendResult(False, f"Poll {message_id} was not found in {target.jid}. Nothing was sent.",
+                                          error_code="POLL_NOT_FOUND")
+        chosen, problem = _chosen_options(poll, options)
+        if problem:
+            return None, None, SendResult(False, f"{problem}. Nothing was sent.", error_code="INVALID_VOTE")
+        return poll, chosen, None
+
+    def send(target: send_policy.Target) -> SendResult:
+        poll, chosen, error = checked(target)
+        if error:
+            return error
+        return _post_send({"chat_jid": poll["chat_jid"], "message_id": message_id, "options": chosen}, "vote_poll")
+
+    def preview(target: send_policy.Target) -> SendResult:
+        poll, chosen, error = checked(target)
+        if error:
+            return error
+        return SendResult(True, "Dry run: nothing was sent", preview={
+            "question": poll["question"], "options": chosen, "message_id": message_id,
+            "chat_jid": target.jid, "chat_name": target.chat_name})
+
+    size = len(options) if isinstance(options, (list, tuple)) else 0
+    return _guarded_send("poll_vote", chat_jid, size, override_token, send, preview if dry_run else None)

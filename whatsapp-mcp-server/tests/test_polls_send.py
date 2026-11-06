@@ -145,3 +145,72 @@ def test_a_real_poll_send_is_audited_without_the_text(db, post):  # SEND-06
     [line] = audit_lines()
     assert line["kind"] == "poll" and line["result"] == "sent" and line["message_id"] == "POLL1"
     assert "secreto" not in json.dumps(line) and "Sim" not in json.dumps(line)
+
+
+def test_vote_poll_posts_the_options_with_the_polls_own_spelling(db, post):  # VOTE-01
+    out = whatsapp.vote_poll("Teste", "POLL1", ["sim", "TALVEZ"])
+
+    assert out.success is True
+    assert post.call_args.args[0].endswith("/vote_poll")
+    assert sent(post) == {"chat_jid": GROUP, "message_id": "POLL1", "options": ["Sim", "Talvez"]}
+
+
+def test_vote_poll_with_no_options_retracts_the_vote(db, post):  # VOTE-02
+    out = whatsapp.vote_poll(GROUP, "POLL1", [])
+
+    assert out.success is True and sent(post)["options"] == []
+
+
+@pytest.mark.parametrize("poll, options", [
+    ("POLL1", ["Nunca"]),
+    ("POLL1", ["Sim", "sim"]),
+    ("MYPOLL", ["Sim", "Não"]),   # resposta única aceita um voto só
+    ("POLL1", "Sim"),
+])
+def test_invalid_votes_are_refused_before_anything_is_sent(db, post, poll, options):  # VOTE-03
+    out = whatsapp.vote_poll(GROUP, poll, options)
+
+    assert out.success is False and out.error_code == "INVALID_VOTE"
+    post.assert_not_called()
+
+
+def test_single_answer_poll_accepts_one_option(db, post):  # VOTE-03
+    assert whatsapp.vote_poll(GROUP, "MYPOLL", ["Não"]).success is True
+
+
+@pytest.mark.parametrize("message_id", ["NOPE", "TXT"])
+def test_vote_in_something_that_is_not_a_known_poll(db, post, message_id):  # VOTE-04
+    out = whatsapp.vote_poll(GROUP, message_id, ["Sim"])
+
+    assert out.success is False and out.error_code == "POLL_NOT_FOUND"
+    post.assert_not_called()
+
+
+def test_vote_dry_run_previews_without_touching_the_bridge(db, post):  # VOTE-06
+    out = whatsapp.vote_poll("Teste", "POLL1", ["sim"], dry_run=True)
+
+    post.assert_not_called()
+    assert out.success is True and out.preview == {
+        "question": "Almoço?", "options": ["Sim"], "chat_jid": GROUP, "chat_name": "Teste", "message_id": "POLL1"}
+    assert audit_lines() == []
+
+
+def test_vote_dry_run_still_validates_the_options(db, post):  # VOTE-06
+    out = whatsapp.vote_poll(GROUP, "POLL1", ["Nunca"], dry_run=True)
+    assert out.success is False and out.error_code == "INVALID_VOTE"
+
+
+def test_the_send_policy_blocks_a_vote(db, post):  # VOTE-06
+    block(GROUP)
+
+    out = whatsapp.vote_poll(GROUP, "POLL1", ["Sim"])
+
+    assert out.success is False and out.error_code == send_policy.BLOCKED
+    post.assert_not_called()
+
+
+def test_a_vote_is_audited_by_kind(db, post):  # VOTE-06
+    whatsapp.vote_poll(GROUP, "POLL1", ["Sim"])
+
+    [line] = audit_lines()
+    assert line["kind"] == "poll_vote" and line["result"] == "sent"
