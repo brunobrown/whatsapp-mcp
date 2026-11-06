@@ -2,8 +2,13 @@ package main
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"time"
+
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
 // pollSchema holds the polls we know and the votes we saw. A vote stores the hashes of the options
@@ -153,4 +158,79 @@ func (store *MessageStore) DeletePoll(id, chatJID string) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// pollContentPrefix marks the stored text of a poll message, so list_messages and the monitor
+// show the poll as what it is.
+const pollContentPrefix = "[enquete] "
+
+// pollCreationOf returns the poll creation inside msg. WhatsApp sends it in different fields
+// depending on the client and on how the poll accepts answers.
+func pollCreationOf(msg *waE2E.Message) *waE2E.PollCreationMessage {
+	if msg == nil {
+		return nil
+	}
+	for _, poll := range []*waE2E.PollCreationMessage{
+		msg.GetPollCreationMessage(), msg.GetPollCreationMessageV2(), msg.GetPollCreationMessageV3(),
+		msg.GetPollCreationMessageV5(), msg.GetPollCreationMessageV6(),
+	} {
+		if poll != nil {
+			return poll
+		}
+	}
+	return pollCreationOf(msg.GetPollCreationMessageV4().GetMessage())
+}
+
+// pollFromMessage reads the poll of a message, and reports whether it holds one.
+func pollFromMessage(chatJID, id string, msg *waE2E.Message) (Poll, bool) {
+	creation := pollCreationOf(msg)
+	if creation == nil {
+		return Poll{}, false
+	}
+	options := make([]string, 0, len(creation.GetOptions()))
+	for _, option := range creation.GetOptions() {
+		options = append(options, option.GetOptionName())
+	}
+	return Poll{
+		ID: id, ChatJID: chatJID, Question: creation.GetName(), Options: options,
+		SelectableCount: int(creation.GetSelectableOptionsCount()),
+		AllowAddOption:  creation.GetAllowAddOption(), HideVoterNames: creation.GetHideParticipantName(),
+	}, true
+}
+
+// pollVoteDecryptor decrypts the vote of a poll update message (client.DecryptPollVote).
+type pollVoteDecryptor func(*events.Message) (*waE2E.PollVoteMessage, error)
+
+// recordPoll stores the poll of a poll message, or the decrypted vote of a poll update. A vote that
+// cannot be decrypted (the bridge never saw the poll) is only logged.
+func recordPoll(store *MessageStore, decrypt pollVoteDecryptor, evt *events.Message, logger waLog.Logger) {
+	chatJID := evt.Info.Chat.String()
+	if poll, ok := pollFromMessage(chatJID, evt.Info.ID, evt.Message); ok {
+		if err := store.StorePoll(poll); err != nil {
+			logger.Warnf("Failed to store poll %s: %v", evt.Info.ID, err)
+		}
+		return
+	}
+
+	update := evt.Message.GetPollUpdateMessage()
+	pollID := update.GetPollCreationMessageKey().GetID()
+	if update == nil || pollID == "" {
+		return
+	}
+	vote, err := decrypt(evt)
+	if err != nil {
+		logger.Warnf("Could not read a vote on poll %s: %v", pollID, err)
+		return
+	}
+	hashes := make([]string, 0, len(vote.GetSelectedOptions()))
+	for _, hash := range vote.GetSelectedOptions() {
+		hashes = append(hashes, hex.EncodeToString(hash))
+	}
+	at := evt.Info.Timestamp
+	if ms := update.GetSenderTimestampMS(); ms > 0 {
+		at = time.UnixMilli(ms)
+	}
+	if _, err := store.StorePollVote(pollID, chatJID, evt.Info.Sender.User, hashes, at); err != nil {
+		logger.Warnf("Failed to store a vote on poll %s: %v", pollID, err)
+	}
 }
