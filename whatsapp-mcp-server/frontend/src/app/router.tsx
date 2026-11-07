@@ -10,6 +10,7 @@ import type { RouterHistory } from "@tanstack/react-router";
 import { ShellLayout } from "@/app/layouts/ShellLayout";
 import { SectionPage } from "@/features/sections/SectionPage";
 import { AuthPage } from "@/features/auth/AuthPage";
+import { ActivityPage } from "@/features/ops/ActivityPage";
 import { StatusPage } from "@/features/ops/StatusPage";
 import { ErrorState } from "@/components/feedback/feedback";
 import { buttonVariants } from "@/components/ui/button";
@@ -94,7 +95,7 @@ const shellRoute = createRoute({
 
 const sectionRoute = createRoute({ getParentRoute: () => shellRoute, path: "/s/$sectionId", component: SectionPage });
 const statusRoute = createRoute({ getParentRoute: () => shellRoute, path: "/status", component: StatusPage });
-const activityRoute = createRoute({ getParentRoute: () => shellRoute, path: "/activity" });
+const activityRoute = createRoute({ getParentRoute: () => shellRoute, path: "/activity", component: ActivityPage });
 const accountRoute = createRoute({ getParentRoute: () => shellRoute, path: "/account" });
 
 const routeTree = rootRoute.addChildren([

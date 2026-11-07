@@ -152,7 +152,7 @@ function ConnectionSection() {
     );
   } else body = <Connection status={query.data.status} />;
   return (
-    <section aria-labelledby="status-connection" className="flex flex-col gap-3">
+    <section className="flex flex-col gap-3">
       <h2 id="status-connection" className="m-0 text-base font-semibold">
         {t("status.connection")}
       </h2>
@@ -247,7 +247,7 @@ function CountersSection() {
   else if (isUnavailable(query.data)) body = <UnavailableNotice reason={query.data} />;
   else body = <Counters counters={query.data} />;
   return (
-    <section aria-labelledby="status-counters" className="flex flex-col gap-3">
+    <section className="flex flex-col gap-3">
       <h2 id="status-counters" className="m-0 text-base font-semibold">
         {t("status.counters")}
       </h2>
