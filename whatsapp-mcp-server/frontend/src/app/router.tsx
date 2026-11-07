@@ -7,6 +7,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import type { RouterHistory } from "@tanstack/react-router";
+import { ShellLayout } from "@/app/layouts/ShellLayout";
 import { ErrorState } from "@/components/feedback/feedback";
 import { buttonVariants } from "@/components/ui/button";
 import { useT } from "@/i18n/t";
@@ -80,20 +81,23 @@ const indexRoute = createRoute({
   },
 });
 
-const guarded = { beforeLoad: requireSession } as const;
+/** Everything behind the sign-in lives inside the two-pane shell. */
+const shellRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  id: "shell",
+  beforeLoad: requireSession,
+  component: ShellLayout,
+});
 
-const sectionRoute = createRoute({ getParentRoute: () => rootRoute, path: "/s/$sectionId", ...guarded });
-const statusRoute = createRoute({ getParentRoute: () => rootRoute, path: "/status", ...guarded });
-const activityRoute = createRoute({ getParentRoute: () => rootRoute, path: "/activity", ...guarded });
-const accountRoute = createRoute({ getParentRoute: () => rootRoute, path: "/account", ...guarded });
+const sectionRoute = createRoute({ getParentRoute: () => shellRoute, path: "/s/$sectionId" });
+const statusRoute = createRoute({ getParentRoute: () => shellRoute, path: "/status" });
+const activityRoute = createRoute({ getParentRoute: () => shellRoute, path: "/activity" });
+const accountRoute = createRoute({ getParentRoute: () => shellRoute, path: "/account" });
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
   indexRoute,
-  sectionRoute,
-  statusRoute,
-  activityRoute,
-  accountRoute,
+  shellRoute.addChildren([sectionRoute, statusRoute, activityRoute, accountRoute]),
 ]);
 
 export function createAppRouter(history?: RouterHistory) {
