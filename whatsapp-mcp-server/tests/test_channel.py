@@ -601,3 +601,40 @@ def test_the_notifier_never_reaches_a_sending_function(world, tmp_path, monkeypa
     tree = ast.parse(open(channel.__file__).read())
     imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
     assert "requests" not in imported and "send_policy" not in imported
+
+
+# ---- parse_config: the validation alone, from a dict (the UI validates before it writes) ----------------
+def test_parse_config_builds_the_configuration_from_a_dict():
+    cfg = channel.parse_config({"enabled": True, "profiles": [" ana "], "polls": ["ID1"], "include_excerpt": True,
+                                "excerpt_chars": 80, "batch_seconds": 0, "min_interval_seconds": 7,
+                                "max_batch": 5, "poll_interval_seconds": 0.5})
+
+    assert (cfg.enabled, cfg.error) == (True, None)
+    assert (cfg.profiles, cfg.polls, cfg.include_excerpt, cfg.excerpt_chars) == (["ana"], ["ID1"], True, 80)
+    assert (cfg.batch_seconds, cfg.min_interval_seconds, cfg.max_batch, cfg.poll_interval_seconds) == (0.0, 7.0, 5, 0.5)
+
+
+def test_parse_config_without_enabled_true_is_off_without_error():
+    assert channel.parse_config({"profiles": ["a"]}) == channel.Config()
+
+
+@pytest.mark.parametrize("raw, error", [
+    ([], "channel.json must be a JSON object"),
+    ({"enabled": True, "colour": 1}, "unknown key 'colour'"),
+    ({"enabled": True}, "list at least one profile or poll"),
+    ({"enabled": True, "profiles": "a"}, "profiles must be a list of up to 20 non-empty texts"),
+    ({"enabled": True, "profiles": ["a"], "include_excerpt": "yes"}, "include_excerpt must be true or false"),
+    ({"enabled": True, "profiles": ["a"], "excerpt_chars": 281}, "excerpt_chars must be a whole number from 1 to 280"),
+    ({"enabled": True, "profiles": ["a"], "max_batch": 0}, "max_batch must be a whole number from 1 to 100"),
+    ({"enabled": True, "profiles": ["a"], "batch_seconds": True}, "batch_seconds must be a number from 0 to 60"),
+])
+def test_parse_config_refuses_with_the_reason_and_turns_the_channel_off(raw, error):
+    cfg = channel.parse_config(raw)
+
+    assert (cfg.enabled, cfg.error) == (False, error)
+
+
+def test_load_config_returns_what_parse_config_returns(tmp_path):
+    raw = {"enabled": True, "profiles": ["a"], "max_batch": 0}
+
+    assert config_of(tmp_path, raw) == channel.parse_config(raw, "channel.json")
