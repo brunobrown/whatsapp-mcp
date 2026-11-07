@@ -1970,3 +1970,49 @@ def delete_message(chat_jid: str, message_id: str, override_token: Optional[str]
             "message_id": message_id, "chat_jid": target.jid, "chat_name": target.chat_name, "text": found["text"]})
 
     return _guarded_send("delete", chat_jid, 0, override_token, send, preview if dry_run else None)
+
+
+_MAX_EMOJI = 16
+
+
+def _emoji_problem(emoji) -> Optional[str]:
+    """Why this cannot be a reaction, or None. An empty emoji is allowed: it takes the reaction back."""
+    if not isinstance(emoji, str):
+        return "emoji must be text"
+    if len(emoji) > _MAX_EMOJI or any(ch.isspace() for ch in emoji):
+        return f"Use up to {_MAX_EMOJI} characters without spaces, or an empty emoji to take the reaction back"
+    return None
+
+
+def react_to_message(chat_jid: str, message_id: str, emoji: str, override_token: Optional[str] = None,
+                     dry_run: bool = False) -> SendResult:
+    if not chat_jid:
+        return SendResult(False, "chat_jid must be provided")
+    if not message_id:
+        return SendResult(False, "message_id must be provided")
+    problem = _emoji_problem(emoji)
+    if problem:
+        return SendResult(False, f"{problem}. Nothing was sent.", error_code="INVALID_EMOJI")
+
+    def known(target: send_policy.Target) -> "Tuple[Optional[dict], Optional[SendResult]]":
+        found = _find_message(message_id, target.jid)
+        if found is None:
+            return None, SendResult(False, f"Message {message_id} was not found in {target.jid}. Nothing was sent.",
+                                    error_code="MESSAGE_NOT_FOUND")
+        return found, None
+
+    def send(target: send_policy.Target) -> SendResult:
+        found, error = known(target)
+        if error:
+            return error
+        return _post_send({"chat_jid": found["chat_jid"], "message_id": message_id, "emoji": emoji}, "react")
+
+    def preview(target: send_policy.Target) -> SendResult:
+        found, error = known(target)
+        if error:
+            return error
+        return SendResult(True, "Dry run: nothing was sent", preview={
+            "message_id": message_id, "chat_jid": target.jid, "chat_name": target.chat_name,
+            "emoji": emoji, "text": found["text"]})
+
+    return _guarded_send("reaction", chat_jid, len(emoji), override_token, send, preview if dry_run else None)
