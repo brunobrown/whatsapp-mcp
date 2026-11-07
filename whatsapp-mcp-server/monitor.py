@@ -20,6 +20,7 @@ import dbcrypto
 import drafts
 import filemode
 import send_policy
+import taint
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.environ.get("WHATSAPP_MONITOR_CONFIG") or os.path.join(_HERE, "monitor_profiles.json")
@@ -907,7 +908,8 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         if limited:
             return refuse("blocked", RATE_LIMITED, limited)
 
-        result = whatsapp.send_message(jid, text, None, None, message.id, False)
+        with taint.monitor_reply_scope():       # what the monitor itself delivered does not block its own reply
+            result = whatsapp.send_message(jid, text, None, None, message.id, False)
         _audit(selected, jid, message, hit, mode, token_ok, "sent" if result.success else
                ("blocked" if result.error_code == send_policy.BLOCKED else "failed"), len(text),
                error_code=result.error_code, reply_id=result.message_id if result.success else None)

@@ -2,7 +2,7 @@
 from typing import Any, Dict, List, Optional
 
 # The features of this code (not of the configuration). Names are stable; add one when a feature ships.
-FEATURES: List[str] = ["poll_deadline_and_quiz", "poll_vote_watch", "webhooks", "message_monitor", "watch_cli", "pending_drafts", "metrics", "export_conversation", "deleted_messages", "poll_closed_event", "claude_channel"]
+FEATURES: List[str] = ["poll_deadline_and_quiz", "poll_vote_watch", "webhooks", "message_monitor", "watch_cli", "pending_drafts", "metrics", "export_conversation", "deleted_messages", "poll_closed_event", "claude_channel", "read_only_mode", "session_taint"]
 
 
 def describe(version: str, status: Dict[str, Any], channel: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
