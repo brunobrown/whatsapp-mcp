@@ -49,6 +49,11 @@ class Run:
         self.task = asyncio.ensure_future(runner(name, self.out, self.cursor_file, since, self.stop,
                                                  sleep=no_sleep, wait_seconds=0.02))
 
+    def ready(self, lines):
+        """Started AND the starting position fixed (the cursor file is written after the first look): a message
+        added before that moment would be history, not news."""
+        return any(ln.startswith("state=started") for ln in lines) and os.path.exists(self.cursor_file)
+
     @property
     def lines(self):
         return [ln for ln in self.out.getvalue().splitlines()]
@@ -78,7 +83,7 @@ def test_event_becomes_one_line_without_the_text(conn, tmp_path):  # WATCH-01
 
     async def go():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         add(conn, "M1", f"@{ME} SECRET-TEXT please", sender=ANA, chat=GROUP)
         await r.until(lambda ls: events(ls))
         status = await r.finish()
@@ -98,7 +103,7 @@ def test_filtered_messages_print_nothing(conn, tmp_path):  # WATCH-02
 
     async def go():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         add(conn, "DENIED", f"@{ME} hi", sender=ANA, chat=GROUP)             # denied sender
         add(conn, "NOCHAT", f"@{ME} hi", sender=BOB, chat="5511888880000@s.whatsapp.net")  # other chat
         add(conn, "NOISE", "no mention", sender=BOB, chat=GROUP)             # no trigger
@@ -138,7 +143,7 @@ def test_hostile_values_cannot_split_the_line_or_add_keys(conn, tmp_path):  # WA
 
     async def go():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         add(conn, nasty, f"@{ME} hi", sender=ANA, chat=GROUP)
         await r.until(lambda ls: events(ls))
         await r.finish()
@@ -158,7 +163,7 @@ def test_cursor_is_saved_0600_and_resumes_without_repeating(conn, tmp_path):  # 
 
     async def first():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         add(conn, "A", f"@{ME} one", sender=ANA, chat=GROUP)
         await r.until(lambda ls: events(ls))
         await r.finish()
@@ -206,7 +211,7 @@ def test_database_failure_is_reported_then_recovered_without_losing_events(conn,
 
     async def go():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         os.rename(db, hidden)
         await r.until(lambda ls: any(ln.startswith("state=error") for ln in ls))
         shutil.move(hidden, db)
@@ -228,7 +233,7 @@ def test_stop_signal_saves_the_cursor_and_exits_zero(conn, tmp_path):  # CUR-05
 
     async def go():
         r = Run(tmp_path)
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         status = await r.finish()
         return status, r.lines
 
@@ -277,7 +282,7 @@ def test_cursor_is_written_only_after_the_lines_are_printed(conn, tmp_path, monk
         r.task.cancel()
         r.task = asyncio.ensure_future(watch.watch_profile("p", r.out, r.cursor_file, None, r.stop, sleep=no_sleep,
                                                            wait_seconds=0.02))
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         add(conn, "A", f"@{ME} one", sender=ANA, chat=GROUP)
         await r.until(lambda ls: events(ls))
         await r.finish()
@@ -326,7 +331,7 @@ def test_since_now_ignores_the_saved_cursor_and_since_a_number_uses_it(conn, tmp
 
     async def from_now():
         r = Run(tmp_path, since="now")
-        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await r.until(r.ready)
         await asyncio.sleep(0.1)
         await r.finish()
         return events(r.lines)

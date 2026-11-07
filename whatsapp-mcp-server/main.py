@@ -12,6 +12,10 @@ import capabilities
 import drafts
 import metrics
 import channel
+import functools
+import inspect
+import server_mode
+import taint
 import export
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
@@ -80,6 +84,67 @@ def mark_untrusted(result):
         result["untrusted_content"] = True
     return result
 
+
+def _chats_in(obj, found=None):
+    """Chat ids found in a tool's answer: `chat_jid` keys, and `jid` of a chat that has a last message."""
+    found = set() if found is None else found
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "chat_jid" and isinstance(value, str) and value:
+                found.add(value)
+            elif key == "jid" and isinstance(value, str) and obj.get("last_message"):
+                found.add(value)
+            else:
+                _chats_in(value, found)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            _chats_in(item, found)
+    return found
+
+
+def _has_content(result) -> bool:
+    if result is None or result == "" or result == [] or result == {}:
+        return False
+    if isinstance(result, dict):
+        if result.get("success") is False:
+            return False
+        # a page with an empty list of events or messages handed over nothing
+        lists = [k for k in ("events", "messages") if k in result]
+        if lists and not any(result.get(k) for k in lists) and "question" not in result:
+            return False
+    return True
+
+
+def tainting(source: str = taint.GENERAL):
+    """Record, in the session taint, the chats whose content this read tool hands to the agent (see taint.py).
+    A chat the answer does not name falls back to the chat_jid argument, and then to every chat."""
+    def decorator(fn):
+        signature = inspect.signature(fn)
+
+        def note(args, kwargs, result):
+            if not _has_content(result):
+                return
+            chats = _chats_in(result)
+            if not chats:
+                bound = signature.bind_partial(*args, **kwargs).arguments
+                chats = {bound.get("chat_jid")} if bound.get("chat_jid") else {None}
+            taint.mark_many(chats, source)
+
+        if inspect.iscoroutinefunction(fn):
+            @functools.wraps(fn)
+            async def wrapper(*args, **kwargs):
+                result = await fn(*args, **kwargs)
+                note(args, kwargs, result)
+                return result
+        else:
+            @functools.wraps(fn)
+            def wrapper(*args, **kwargs):
+                result = fn(*args, **kwargs)
+                note(args, kwargs, result)
+                return result
+        return wrapper
+    return decorator
+
 # What a tool does to the world, so a client can ask for confirmation before the ones that write or destroy.
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 LOCAL_WRITES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
@@ -113,6 +178,7 @@ def search_contacts(query: str) -> List[Dict[str, Any]]:
     return plain(whatsapp_search_contacts(query))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def list_messages(
     after: Optional[str] = None,
     before: Optional[str] = None,
@@ -171,6 +237,7 @@ def list_messages(
     return messages
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def list_chats(
     query: Optional[str] = None,
     limit: int = 20,
@@ -196,6 +263,7 @@ def list_chats(
     ))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Dict[str, Any]]:
     """Get WhatsApp chat metadata by JID.
     
@@ -206,6 +274,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Optional[Dict[
     return plain(whatsapp_get_chat(chat_jid, include_last_message))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Dict[str, Any]]:
     """Get WhatsApp chat metadata by sender phone number.
     
@@ -215,6 +284,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Dict[str, A
     return plain(whatsapp_get_direct_chat_by_contact(sender_phone_number))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str, Any]]:
     """Get all WhatsApp chats involving the contact.
     
@@ -226,6 +296,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str
     return plain(whatsapp_get_contact_chats(jid, limit, page))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_last_interaction(jid: str) -> str:
     """Get most recent WhatsApp message involving the contact.
     
@@ -236,6 +307,7 @@ def get_last_interaction(jid: str) -> str:
     return message
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_message_context(
     message_id: str,
     before: int = 5,
@@ -385,6 +457,7 @@ def download_media_batch(
     return whatsapp_download_media_batch(chat_jid, after, before, types, max_size_mb, max_items, timeout_seconds)
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_message_thread(
     message_id: Optional[str] = None,
     chat_jid: Optional[str] = None,
@@ -455,6 +528,7 @@ def send_poll(
                                             closes_in_minutes))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
     """Read the current result of a poll the bridge has seen (sent by you or received).
 
@@ -473,6 +547,7 @@ def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[st
     return mark_untrusted(whatsapp_get_poll_results(message_id, chat_jid))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 async def watch_poll(message_id: str, chat_jid: Optional[str] = None, cursor: Union[int, str, None] = None,
                      wait_seconds: float = 0) -> Dict[str, Any]:
     """Wait for new votes in a poll and say who changed what. Call it in a loop, passing back the cursor.
@@ -497,6 +572,7 @@ async def watch_poll(message_id: str, chat_jid: Optional[str] = None, cursor: Un
     return mark_untrusted(await pollwatch.watch_poll(message_id, chat_jid, cursor, wait_seconds))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> Dict[str, Any]:
     """List the polls of a chat, newest first, with the votes of each option.
 
@@ -562,6 +638,7 @@ def react_to_message(
     return send_response(whatsapp_react_to_message(chat_jid, message_id, emoji, override_token, dry_run))
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_message_reactions(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
     """Read the reactions that stand on a message.
 
@@ -611,6 +688,7 @@ def get_monitor_profiles() -> Dict[str, Any]:
     return monitor.list_profiles()
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting(taint.MONITOR)
 async def monitor_messages(
     profile: Optional[str] = None,
     targets: Optional[List[str]] = None,
@@ -687,6 +765,7 @@ def monitor_reply(
     return monitor.monitor_reply(profile, chat_jid, message_id, text, approval_token, dry_run)
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     """List the participants of a WhatsApp group with their name, phone number, LID and admin status.
 
@@ -744,6 +823,7 @@ def get_metrics(window_hours: float = 24) -> Dict[str, Any]:
     return metrics.collect(window_hours, bridge_status=whatsapp_get_connection_status())
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def export_conversation(
     chat_jid: str,
     after: Optional[str] = None,
@@ -775,6 +855,7 @@ def export_conversation(
     return export.export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit)
 
 @mcp.tool(annotations=LOCAL_WRITES)
+@tainting()
 def save_conversation_export(
     chat_jid: str,
     save_as: str,
@@ -816,7 +897,7 @@ def get_connection_status() -> Dict[str, Any]:
         on now, e.g. webhooks). A client whose answer lacks these fields is talking to an older server: reconnect it.
     """
     status = whatsapp_get_connection_status()
-    return {**status, **capabilities.describe(VERSION, status, channel.status())}
+    return {**status, **capabilities.describe(VERSION, status, channel.status()), "mode": server_mode.current()}
 
 @mcp.tool(annotations=READ_ONLY)
 def get_webhook_status() -> Dict[str, Any]:
@@ -847,6 +928,9 @@ def test_webhook(name: str) -> Dict[str, Any]:
 
 def run() -> None:
     """Serve over stdio; with a valid, enabled channel.json also declare and feed the Claude Code channel."""
+    removed = server_mode.apply(mcp, [READ_ONLY, LOCAL_WRITES, DOWNLOADS])
+    if removed:
+        print(f"read-only mode: {len(removed)} tools that reach other people are not available", file=sys.stderr)
     cfg = channel.load_config()
     channel.set_status(cfg)
     if cfg.error:

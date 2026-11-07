@@ -35,3 +35,14 @@ def isolated_messages_db(tmp_path, monkeypatch):
 def isolated_drafts(tmp_path, monkeypatch):
     """No test writes the real pending-drafts file."""
     monkeypatch.setenv("WHATSAPP_MONITOR_DRAFTS", str(tmp_path / "monitor_drafts.json"))
+
+
+@pytest.fixture(autouse=True)
+def fresh_session(monkeypatch):
+    """Every test is a new session: nothing read yet, full mode, taint on."""
+    import taint
+    taint.reset()
+    monkeypatch.delenv("WHATSAPP_MCP_MODE", raising=False)
+    monkeypatch.delenv("WHATSAPP_SESSION_TAINT", raising=False)
+    yield
+    taint.reset()

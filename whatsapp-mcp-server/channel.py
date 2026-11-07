@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import localconfig
 import monitor
 import pollwatch
+import taint
 from eventline import clean
 
 logger = logging.getLogger(__name__)
@@ -405,6 +406,8 @@ async def notify_loop(cfg: Config, engine: Engine, send: Callable, initialized, 
                 if ready:
                     batch = engine.take()[:cfg.max_batch]
                     content, meta = describe(batch, cfg.include_excerpt, cfg.max_batch)
+                    if cfg.include_excerpt:      # the text of these chats reaches the agent: remember it
+                        taint.mark_many([e.chat for e in batch if e.excerpt], taint.MONITOR)
                     await send(content, meta)
                     last_sent = now
                     engine.emitted(batch)

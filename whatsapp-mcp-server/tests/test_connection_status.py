@@ -106,5 +106,5 @@ def test_tool_is_registered_and_returns_the_status(paths, monkeypatch):
     out = main.get_connection_status()
     # the bridge's fields are unchanged; server_version, features and enabled are added (CAP-01)
     assert {k: out[k] for k in ("connected", "bridge_reachable")} == {"connected": True, "bridge_reachable": True}
-    assert set(out) == {"connected", "bridge_reachable", "server_version", "features", "enabled", "channel"}
+    assert set(out) == {"connected", "bridge_reachable", "server_version", "features", "enabled", "channel", "mode"}
     assert "BRIDGE_UNREACHABLE" in main.get_connection_status.__doc__
