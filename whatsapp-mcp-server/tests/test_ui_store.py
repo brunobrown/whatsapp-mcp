@@ -250,3 +250,14 @@ def test_the_store_has_no_way_to_be_pointed_at_another_file():
     import inspect
     assert list(inspect.signature(ConfigStore.save).parameters) == ["self", "section", "values", "expected_version"]
     assert list(inspect.signature(ConfigStore.load).parameters) == ["self", "section"]
+
+
+def test_a_file_that_cannot_be_read_as_an_object_is_marked_unreadable_and_a_refused_one_is_not(tmp_path):  # CFG-09
+    path = tmp_path / "demo.json"
+    path.write_text("{broken")
+    assert ConfigStore().load(make_section(path)).unreadable is True
+    path.write_text("[1]")
+    assert ConfigStore().load(make_section(path)).unreadable is True
+    path.write_text('{"other": 1}')
+    assert ConfigStore().load(make_section(path, mode_must_be_set)).unreadable is False
+    assert ConfigStore().load(make_section(tmp_path / "absent.json")).unreadable is False

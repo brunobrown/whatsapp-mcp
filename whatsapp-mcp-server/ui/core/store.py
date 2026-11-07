@@ -27,6 +27,7 @@ class Loaded:
     errors: List[Problem] = field(default_factory=list)
     exists: bool = False
     warnings: List[str] = field(default_factory=list)
+    unreadable: bool = False      # the file exists but could not be read as an object: saving replaces it, so ask first
 
 
 @dataclass
@@ -65,7 +66,7 @@ class ConfigStore:
         path = self._path(section)
         data, problem = _read(path)
         if problem:
-            return Loaded({}, ABSENT, [Problem(None, problem)])
+            return Loaded({}, ABSENT, [Problem(None, problem)], unreadable=True)
         if data is None:
             return Loaded({}, ABSENT)
         loaded = Loaded({}, _version(data), exists=True)
@@ -76,9 +77,11 @@ class ConfigStore:
             parsed = json.loads(data.decode("utf-8"))
         except (ValueError, RecursionError):
             loaded.errors.append(Problem(None, "the file is not valid JSON"))
+            loaded.unreadable = True
             return loaded
         if not isinstance(parsed, dict):
             loaded.errors.append(Problem(None, "the file must contain a JSON object"))
+            loaded.unreadable = True
             return loaded
         loaded.values = parsed
         loaded.errors.extend(section.validate(parsed))

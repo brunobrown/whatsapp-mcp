@@ -28,6 +28,10 @@ class Draft:
     def dirty(self) -> bool:
         return any(self._differs(f.key) for f in self.section.fields)
 
+    def original(self, key: str) -> Any:
+        """What the field held when the form was loaded."""
+        return copy.deepcopy(self._original.get(key))
+
     def changes(self) -> Dict[str, Any]:
         return {f.key: copy.deepcopy(self.values.get(f.key)) for f in self.section.fields if self._differs(f.key)}
 

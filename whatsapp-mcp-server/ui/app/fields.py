@@ -4,59 +4,16 @@ Everything here is a function of its props: the value, the error, where it came 
 emits what it was given by the person (text, a boolean, a key, a list) and the form decides what it means; nothing
 here reads a file, changes a control that exists, or knows a business rule.
 """
-import math
-import re
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
 import flet as ft
 
+from ui.core.inputs import Parsed, from_raw, to_raw  # noqa: F401  (re-exported: the controls and their tests use them from here)
 from ui.core.registry import Field
 from ui.core.secrets import CLEAR
 
 MIN_TARGET = 48           # px: the least a touch target may measure
-_TEXT_KINDS = ("text", "int", "float", "list", "secret")
-_INTEGER = re.compile(r"[+-]?\d+")
-
-
-# ---- what a person typed ----------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Parsed:
-    value: Any
-    error: Optional[str] = None
-    text: Optional[str] = None      # what was typed, kept so the screen can show it back when it is not a value yet
-
-
-def from_raw(field: Field, raw: Any) -> Parsed:
-    """The value a control's raw output stands for, or why it is not one."""
-    if field.kind not in _TEXT_KINDS:
-        return Parsed(raw)
-    text = raw if isinstance(raw, str) else ""
-    if field.kind == "list":
-        return Parsed([line.strip() for line in text.splitlines() if line.strip()])
-    stripped = text if field.kind == "secret" else text.strip()
-    if stripped == "":
-        return Parsed(None)
-    if field.kind == "int":
-        return Parsed(int(stripped)) if _INTEGER.fullmatch(stripped) else Parsed(None, "deve ser um número inteiro", text)
-    if field.kind == "float":
-        try:
-            number = float(stripped.replace(",", "."))
-        except ValueError:
-            return Parsed(None, "deve ser um número", text)
-        return Parsed(number) if math.isfinite(number) else Parsed(None, "deve ser um número", text)
-    return Parsed(stripped)
-
-
-def to_raw(field: Field, value: Any) -> str:
-    """The text that shows a value in a text box."""
-    if value is None or isinstance(value, dict):
-        return ""
-    if field.kind == "list":
-        return "\n".join(value) if isinstance(value, list) else str(value)
-    if field.kind == "float" and isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f"{value:g}"
-    return str(value)
 
 
 # ---- the props of a field ---------------------------------------------------------------------------
