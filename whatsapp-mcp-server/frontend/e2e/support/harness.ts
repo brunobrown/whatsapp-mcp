@@ -133,6 +133,14 @@ export class Harness {
     writeFileSync(this.file(name), text);
   }
 
+  /** Puts the files the activity page reads where the interface looks for them (mode 0600, as the project writes them). */
+  seedActivity(data: { drafts?: object[]; send?: object[]; monitor?: object[] }): void {
+    const lines = (rows: object[]): string => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+    if (data.drafts) writeFileSync(this.file("monitor_drafts.json"), JSON.stringify(data.drafts), { mode: 0o600 });
+    if (data.send) writeFileSync(this.file("send_audit.log"), lines(data.send));
+    if (data.monitor) writeFileSync(this.file("monitor_audit.log"), lines(data.monitor));
+  }
+
   async start(): Promise<void> {
     assertPagesAreCurrent();
     await this.bridge.start();
