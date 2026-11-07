@@ -178,3 +178,74 @@ def test_over_real_http_on_loopback(receiver):  # HOOK-01, HOOK-02, HOOK-04
     finally:
         server.shutdown()
         server.server_close()
+
+
+def serve(receiver, host="127.0.0.1"):
+    server = wr.make_server(host, 0, receiver)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def raw_post(host, port, head, payload=b"", timeout=5):
+    import socket
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.sendall(head + b"\r\n\r\n" + payload)
+        data = s.recv(200)
+    return int(data.split(b" ")[1]) if data else None
+
+
+def test_http_layer_answers_400_and_413_for_length_problems(receiver):  # HOOK-07
+    r, out = receiver
+    server = serve(r)
+    try:
+        port = server.server_address[1]
+        base = b"POST /h HTTP/1.1\r\nHost: x\r\nContent-Length: "
+        assert raw_post("127.0.0.1", port, base + str(wr.MAX_BODY).encode()) == 413
+        assert raw_post("127.0.0.1", port, base + b"-1") == 400
+        assert raw_post("127.0.0.1", port, base + b"abc") == 400
+        assert out.getvalue() == ""
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_deeply_nested_json_is_400_not_a_dead_thread(receiver):  # HOOK-07
+    r, out = receiver
+    raw = b"[" * 60000
+    assert r.handle(signed(raw), raw) == 400 and out.getvalue() == ""
+
+
+def test_a_client_that_stops_sending_is_dropped_by_the_timeout(receiver, monkeypatch):  # HOOK-07
+    monkeypatch.setattr(wr, "READ_TIMEOUT_SECONDS", 0.3)
+    r, out = receiver
+    server = serve(r)
+    try:
+        port = server.server_address[1]
+        # promises 100 bytes, sends 3: the handler must give up instead of waiting for ever
+        assert raw_post("127.0.0.1", port, b"POST /h HTTP/1.1\r\nHost: x\r\nContent-Length: 100", b"abc", timeout=3) is None
+        assert out.getvalue() == ""
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_it_can_listen_on_ipv6_loopback(receiver):  # HOOK-05
+    r, out = receiver
+    try:
+        server = serve(r, "::1")
+    except OSError:
+        pytest.skip("this machine has no IPv6 loopback")
+    try:
+        body = body_of(chat_jid="c@g.us")
+        r.clock = __import__("time").time
+        stamp = str(int(r.clock()))
+        head = (b"POST /h HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\nX-Webhook-Timestamp: %s\r\n"
+                b"X-Webhook-Signature: %s" % (len(body), stamp.encode(), wr.sign(SECRET, stamp, body).encode()))
+        assert raw_post("::1", server.server_address[1], head, body) == 204
+        assert out.getvalue().count("event=message") == 1
+    finally:
+        server.shutdown()
+        server.server_close()

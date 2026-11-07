@@ -257,3 +257,146 @@ def test_main_requires_exactly_one_of_profile_or_poll():  # WATCH-03
         watch.main([])
     with pytest.raises(SystemExit):
         watch.main(["--profile", "a", "--poll", "b"])
+
+
+def test_cursor_is_written_only_after_the_lines_are_printed(conn, tmp_path, monkeypatch):  # CUR-01
+    write_config(p=profile_config())
+    order = []
+    real_write = watch.write_cursor
+    monkeypatch.setattr(watch, "write_cursor", lambda path, value: (order.append(("cursor", value)), real_write(path, value)))
+
+    class Out(io.StringIO):
+        def write(self, text):
+            if text.startswith("event="):
+                order.append(("line", text.split(" id=")[1].split(" ")[0]))
+            return super().write(text)
+
+    async def go():
+        r = Run(tmp_path)
+        r.out = Out()
+        r.task.cancel()
+        r.task = asyncio.ensure_future(watch.watch_profile("p", r.out, r.cursor_file, None, r.stop, sleep=no_sleep,
+                                                           wait_seconds=0.02))
+        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        add(conn, "A", f"@{ME} one", sender=ANA, chat=GROUP)
+        await r.until(lambda ls: events(ls))
+        await r.finish()
+
+    run(go())
+
+    assert order.index(("line", "A")) < order.index(("cursor", 1))
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o660, 0o644, 0o666])
+def test_any_access_for_group_or_others_refuses_the_cursor_file(conn, tmp_path, mode):  # CUR-03
+    write_config(p=profile_config())
+    path = tmp_path / "cursor"
+    path.write_text("1")
+    os.chmod(path, mode)
+
+    async def go():
+        r = Run(tmp_path, since="saved")
+        return await r.task, r.lines
+
+    assert run(go()) == (2, ["state=error code=CURSOR_FILE_OPEN"])
+
+
+@pytest.mark.parametrize("content,code", [("", "CURSOR_FILE_INVALID"), ("abc", "CURSOR_FILE_INVALID"),
+                                          ("-1", "CURSOR_FILE_INVALID"), ("1\n2", "CURSOR_FILE_INVALID")])
+def test_a_broken_cursor_file_is_an_error(conn, tmp_path, content, code):  # CUR-03
+    write_config(p=profile_config())
+    path = tmp_path / "cursor"
+    path.write_text(content)
+    os.chmod(path, 0o600)
+
+    async def go():
+        r = Run(tmp_path, since="saved")
+        return await r.task, r.lines
+
+    assert run(go()) == (2, [f"state=error code={code}"])
+
+
+def test_since_now_ignores_the_saved_cursor_and_since_a_number_uses_it(conn, tmp_path):  # CUR-02
+    write_config(p=profile_config())
+    add(conn, "OLD", f"@{ME} old", sender=ANA, chat=GROUP)
+    add(conn, "OLD2", f"@{ME} old2", sender=ANA, chat=GROUP, minute=56)
+    path = tmp_path / "cursor"
+    path.write_text("0")
+    os.chmod(path, 0o600)
+
+    async def from_now():
+        r = Run(tmp_path, since="now")
+        await r.until(lambda ls: any(ln.startswith("state=started") for ln in ls))
+        await asyncio.sleep(0.1)
+        await r.finish()
+        return events(r.lines)
+
+    async def from_number():
+        r = Run(tmp_path, since="1")
+        await r.until(lambda ls: events(ls))
+        await r.finish()
+        return events(r.lines)
+
+    assert run(from_now()) == []
+    (only,) = run(from_number())
+    assert "id=OLD2" in only
+
+
+def test_the_age_filter_of_the_profile_applies(conn, tmp_path):  # WATCH-02
+    write_config(p={"targets": ["me"], "max_event_age_minutes": 1})     # the fixture messages are from 2026-10-21
+    add(conn, "STALE", f"@{ME} old", sender=ANA, chat=GROUP)
+
+    async def go():
+        r = Run(tmp_path, since="0")
+        await asyncio.sleep(0.2)
+        await r.finish()
+        return events(r.lines)
+
+    assert run(go()) == []
+
+
+def test_retry_wait_doubles_up_to_thirty_seconds(conn, tmp_path):  # CUR-04
+    write_config(p=profile_config())
+    os.rename(whatsapp.MESSAGES_DB_PATH, whatsapp.MESSAGES_DB_PATH + ".gone")
+    waits = []
+
+    async def record(seconds):
+        waits.append(seconds)
+        if len(waits) == 8:
+            stop.set()
+
+    stop, out = asyncio.Event(), io.StringIO()
+
+    async def go():
+        return await watch.watch_profile("p", out, str(tmp_path / "c"), "now", stop, sleep=record, wait_seconds=0.02)
+
+    run(go())
+
+    assert waits == [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0, 30.0]
+    assert out.getvalue().count("state=error") == 8
+
+
+def test_a_real_sigterm_saves_the_cursor_and_exits_zero(conn, tmp_path):  # CUR-05
+    import signal
+    import subprocess
+    import time
+    write_config(p=profile_config())
+    add(conn, "OLD", "x")
+    env = {**os.environ, "WHATSAPP_MONITOR_CONFIG": monitor.CONFIG_PATH, "WHATSAPP_MESSAGES_DB": whatsapp.MESSAGES_DB_PATH,
+           "WHATSAPP_CONFIG_DIR": str(tmp_path / "cfg")}
+    code = ("import sys, monitor, whatsapp; whatsapp.MESSAGES_DB_PATH = sys.argv[1]; "
+            "monitor.own_number = lambda: %r; import watch; sys.exit(watch.main(['--profile','p','--cursor-file',sys.argv[2],"
+            "'--since','now','--wait','1']))" % ME)
+    cursor = str(tmp_path / "cur")
+    proc = subprocess.Popen([sys.executable, "-c", code, whatsapp.MESSAGES_DB_PATH, cursor], env=env,
+                            cwd=os.path.dirname(os.path.dirname(__file__)), stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().startswith("state=started")
+        time.sleep(0.3)
+        proc.send_signal(signal.SIGTERM)
+        rest = proc.stdout.read()
+        assert proc.wait(timeout=10) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert rest.strip().splitlines()[-1] == "state=stopped" and open(cursor).read() == "1"
