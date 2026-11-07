@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CheckboxGroup, RadioGroup, Select, Switch } from "@/components/ui/controls";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ListField } from "./ListField";
 import { SecretField } from "./SecretField";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
@@ -155,7 +156,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
       .join(" ") || undefined;
   const wiring: Wiring = { id: base, describedBy, invalid: Boolean(error), locked };
 
-  const known = ["bool", "int", "float", "text", "choice", "multichoice", "secret"].includes(field.kind);
+  const known = ["bool", "int", "float", "text", "choice", "multichoice", "secret", "list"].includes(field.kind);
   const asksFirst = field.kind === "bool" || field.kind === "choice";
 
   const commit = (next: EditorValue): void => {
@@ -191,6 +192,19 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
         />
       </div>
     );
+  } else if (field.kind === "list") {
+    control = (
+      <ListField
+        label={field.label}
+        value={value}
+        id={base}
+        describedBy={describedBy}
+        invalid={Boolean(error)}
+        disabled={locked}
+        maxItems={field.max_items}
+        onChange={commit}
+      />
+    );
   } else if (field.kind === "multichoice") {
     control = (
       <CheckboxGroup
@@ -219,7 +233,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
     control = <Control field={field} value={value} wiring={wiring} commit={commit} />;
   }
 
-  const labelled = known && field.kind !== "multichoice" && field.kind !== "secret" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
+  const labelled = known && field.kind !== "multichoice" && field.kind !== "secret" && field.kind !== "list" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
   const inline = field.kind === "bool";
 
   return (
@@ -229,7 +243,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
           {field.label}
         </label>
       ) : null}
-      {!known || field.kind === "secret" ? (
+      {!known || field.kind === "secret" || field.kind === "list" ? (
         <p id={`${base}-label`} className="m-0 font-medium">
           {field.label}
         </p>
