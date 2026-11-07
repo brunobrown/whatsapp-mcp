@@ -24,6 +24,7 @@ class AppState:
     section_id: Optional[str] = None
     data: Dict[str, Dict[str, Any]] = field(default_factory=dict)      # masked values by section id
     restart: List[str] = field(default_factory=list)                    # "bridge" and/or "server": what must restart
+    dirty: bool = False                                                 # the open form has changes that were not saved
     idle: IdleClock = field(default_factory=IdleClock, repr=False)
 
     def _require(self) -> None:
@@ -39,6 +40,12 @@ class AppState:
         self.section_id = None
         self.data = {}
         self.restart = []
+        self.dirty = False
+
+    def set_dirty(self, dirty: bool) -> None:
+        if self.authenticated:
+            self.dirty = dirty
+            self.idle.touch()
 
     def check_idle(self) -> bool:
         """End the session if it lapsed; True when it did."""

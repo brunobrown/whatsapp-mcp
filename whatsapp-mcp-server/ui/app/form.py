@@ -32,8 +32,9 @@ class FormActions:
     """What the buttons and the controls of a form do."""
 
     def __init__(self, flow: FormFlow, notify: Callable[[Notice], Any], ask: Callable[[Confirm], Any], refresh: Callable[[], Any],
-                 note_restart: Callable[[str], Any]):
-        self.flow, self._notify, self._ask, self._refresh, self._note_restart = flow, notify, ask, refresh, note_restart
+                 note_restart: Callable[[str], Any], dirty_changed: Callable[[bool], Any] = lambda dirty: None):
+        self.flow, self._notify, self._ask, self._note_restart = flow, notify, ask, note_restart
+        self._redraw, self._dirty_changed = refresh, dirty_changed
         self.conflict = False
         self.general: List[str] = []
         self.restarts: List[str] = []
@@ -41,6 +42,11 @@ class FormActions:
     @property
     def section(self) -> Section:
         return self.flow.section
+
+    def _refresh(self) -> None:
+        """Draw again, and tell the shell whether the form has unsaved changes (it asks before leaving)."""
+        self._dirty_changed(self.flow.dirty)
+        self._redraw()
 
     def _file_name(self) -> str:
         storage = self.section.storage
@@ -202,12 +208,13 @@ def confirm_dialog(confirm: Confirm, close: Callable[[], None]) -> ft.AlertDialo
 
 # ---- the component --------------------------------------------------------------------------------------
 @ft.component
-def SectionForm(section: Section, make_flow: Callable[[Section], FormFlow], notify: Callable[[Notice], Any], note_restart: Callable[[str], Any]):
+def SectionForm(section: Section, make_flow: Callable[[Section], FormFlow], notify: Callable[[Notice], Any], note_restart: Callable[[str], Any],
+                dirty_changed: Callable[[bool], Any] = lambda dirty: None):
     loaded, set_loaded = ft.use_state(False)
     _tick, set_tick = ft.use_state(0)
     asking, set_asking = ft.use_state(None)
     flow, _ = ft.use_state(lambda: make_flow(section))
-    actions, _ = ft.use_state(lambda: FormActions(flow, notify, set_asking, lambda: set_tick(lambda t: t + 1), note_restart))
+    actions, _ = ft.use_state(lambda: FormActions(flow, notify, set_asking, lambda: set_tick(lambda t: t + 1), note_restart, dirty_changed))
 
     async def load() -> None:
         await asyncio.to_thread(flow.load)
@@ -215,6 +222,6 @@ def SectionForm(section: Section, make_flow: Callable[[Section], FormFlow], noti
             notify(Notice.bridge_down())
         set_loaded(True)
 
-    ft.use_effect(load, [section.id])
+    ft.use_effect(load, [section.id], cleanup=lambda: dirty_changed(False))
     ft.use_dialog(confirm_dialog(asking, close=lambda: set_asking(None)) if asking else None)
     return form_view(flow, actions) if loaded else loading_view(section.title)

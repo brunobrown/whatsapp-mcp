@@ -135,3 +135,18 @@ def test_a_restart_notice_is_kept_once_per_process_and_cleared_on_sign_out(state
     assert sorted(state.restart) == ["bridge", "server"]
     state.sign_out()
     assert list(state.restart) == []
+
+
+def test_the_state_knows_whether_the_open_form_has_unsaved_changes(state):  # CFG-06
+    state.sign_in()
+    assert state.dirty is False
+    state.set_dirty(True)
+    assert state.dirty is True
+    state.sign_out()
+    assert state.dirty is False
+
+
+def test_the_unsaved_mark_cannot_be_set_without_a_session(state):  # CFG-06
+    state.set_dirty(True)
+
+    assert state.dirty is False

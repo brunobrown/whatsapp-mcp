@@ -342,3 +342,15 @@ def test_the_form_view_is_a_function_of_the_flow_with_no_imperative_calls():  # 
     source = open(form_module.__file__, encoding="utf-8").read()
 
     assert ".update(" not in source and "page.add" not in source
+
+
+def test_the_form_tells_the_shell_when_it_gets_or_loses_unsaved_changes(path):  # CFG-06
+    flow = FormFlow(policy(path), ConfigStore(), EnvLayer(environ={}))
+    flow.load()
+    marks = []
+    actions = FormActions(flow, notify=lambda n: None, ask=lambda c: None, refresh=lambda: None, note_restart=lambda s: None, dirty_changed=marks.append)
+
+    actions.change("size")("3")
+    click(buttons(form_view(flow, actions), "Salvar")[0])
+
+    assert marks == [True, False]
