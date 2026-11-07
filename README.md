@@ -651,6 +651,11 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_MONITOR_CONFIG` | MCP server | `whatsapp-mcp-server/monitor_profiles.json` | Path of the monitoring profiles |
 | `WHATSAPP_MONITOR_AUDIT_LOG` | MCP server | `whatsapp-mcp-server/monitor_audit.log` | Path of the monitor's reply audit log (also where its rate limits are counted) |
 | `WHATSAPP_OWN_NUMBER` | MCP server | the number the bridge reports | The account's number for the `"me"` target, when the bridge is not running |
+| `WHATSAPP_UI` | bridge | on | `off`, `false` or `0` stop the bridge from starting the web interface |
+| `WHATSAPP_UI_HOST` | bridge, web interface | `127.0.0.1` | The address the web interface listens on. Outside loopback it also needs `WHATSAPP_UI_ALLOW_REMOTE=true` |
+| `WHATSAPP_UI_PORT` | bridge, web interface | `8765` | The port of the web interface (1024 to 65535) |
+| `WHATSAPP_UI_ALLOW_REMOTE` | bridge, web interface | off | `true` lets the interface listen outside loopback. It has a password but no TLS: put a reverse proxy with HTTPS in front. Only the environment of the process sets it, never the interface itself |
+| `WHATSAPP_UI_COMMAND` | bridge | `uv run --directory ../whatsapp-mcp-server --group ui python -m ui` | The command the bridge runs for the interface, split at spaces (no quoting) |
 
 The bridge also needs to be **restarted after updating it** for new behaviour to apply: recording of file name, MIME type, forwarded and reply information, automatic download, mentions and replies, polls and votes, deleting messages, the status endpoint and the log all live in the bridge.
 

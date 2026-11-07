@@ -147,7 +147,8 @@ class EnvKeys:
 
 @dataclass(frozen=True)
 class ReadOnly:
-    """Shown, never written."""
+    """Shown, never written. values gives what to show, by field key (never a secret)."""
+    values: Callable[[], Dict[str, Any]] = lambda: {}
 
 
 @dataclass(frozen=True)
