@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import main  # noqa: E402
+import whatsapp  # noqa: E402
 import pollwatch  # noqa: E402
 from test_polls_read import A, B, add_poll, conn, vote  # noqa: E402,F401
 
@@ -161,3 +162,19 @@ def test_the_longest_wait_is_accepted_and_a_negative_integer_cursor_is_not(conn)
     assert watch("P1", A, cursor="0", wait_seconds=55, sleep=lambda s: asyncio.sleep(0),
                  clock=iter([0.0, 56.0]).__next__)["success"] is True
     assert watch("P1", A, cursor=-1)["error_code"] == "INVALID_ARGUMENT"
+
+
+PHONE_CHAT, LID_CHAT = "5511999990000@s.whatsapp.net", "5511999990000@lid"
+
+
+def test_direct_chat_poll_is_watched_and_listed_by_either_addressing(conn):  # DM-06
+    conn.execute("INSERT INTO chats VALUES (?, 'Carol', NULL)", (PHONE_CHAT,))
+    add_poll(conn, chat=PHONE_CHAT, author="carol")
+    vote(conn, "carol", ["Yes"], chat=PHONE_CHAT, at=1500)
+    for chat in (PHONE_CHAT, LID_CHAT):
+        r = watch("P1", chat, cursor="1000")
+        assert r["success"] is True
+        assert [(c["voter"], c["options"]) for c in r["changes"]] == [("carol", ["Yes"])]
+        assert r["results"]["chat_jid"] == PHONE_CHAT
+        listed = whatsapp.list_polls(chat)
+        assert listed["total"] == 1 and listed["polls"][0]["options"][0] == {"text": "Yes", "votes": 1}
