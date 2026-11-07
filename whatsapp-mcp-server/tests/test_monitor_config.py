@@ -134,7 +134,7 @@ def test_listing_never_shows_the_token(config):  # CFG-04
     assert out["success"] is True and "secret-12345" not in json.dumps(out)
     assert out["profiles"] == [{
         "name": "support", "enabled": True, "targets": ["me", "5511955550000"], "aliases": [], "allow_own_alias": False,
-        "auto_chats": [], "triggers": ["mention", "direct"],
+        "cross_chat_replies": False, "auto_chats": [], "triggers": ["mention", "direct"],
         "chats": ["120363000000000099@g.us"], "senders": {"allow": ["5511911112222"], "deny": []}, "topics": ["deploy"],
         "mode": "auto", "auto_senders": ["5511911112222"],
         "limits": {"replies_per_chat_per_hour": 6, "replies_per_sender_per_hour": 4, "cooldown_seconds": 5,

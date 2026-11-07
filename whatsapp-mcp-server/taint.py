@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 ENV = "WHATSAPP_SESSION_TAINT"
 BLOCKED = "SEND_BLOCKED_BY_SESSION_TAINT"
 ALL = "*"
-GENERAL, MONITOR = "general", "monitor"
+GENERAL, MONITOR, LOOSE = "general", "monitor", "loose"
 
 _lock = threading.Lock()
 _read = {GENERAL: set(), MONITOR: set()}
@@ -57,9 +57,10 @@ def snapshot() -> dict:
 
 
 @contextlib.contextmanager
-def monitor_reply_scope():
-    """Inside this block a send is a monitor_reply: reads that came from the monitor do not count."""
-    token = _scope.set(MONITOR)
+def monitor_reply_scope(cross_chat_replies: bool = False):
+    """Inside this block a send is a monitor_reply. Only when its profile accepts cross-chat replies do the
+    reads that came from the monitor stop counting."""
+    token = _scope.set(LOOSE if cross_chat_replies else GENERAL)
     try:
         yield
     finally:
@@ -90,7 +91,7 @@ def check(dest_jid: str, same_chat: Callable[[str, str], bool], policy_path: str
         return None
     with _lock:
         seen: Set[str] = set(_read[GENERAL])
-        if _scope.get() != MONITOR:
+        if _scope.get() != LOOSE:
             seen |= _read[MONITOR]
     others = sorted(c for c in seen if c == ALL or not (c == dest_jid or same_chat(c, dest_jid)))
     if not others:

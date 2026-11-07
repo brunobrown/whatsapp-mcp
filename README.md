@@ -292,6 +292,7 @@ Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-
 | `auto_senders` | in `auto` mode, only these senders are answered without a token | yes |
 | `limits` | `replies_per_chat_per_hour` (6), `replies_per_sender_per_hour` (4), `cooldown_seconds` (20), `max_reply_chars` (1500) | yes |
 | `max_event_age_minutes` | default 60 | yes |
+| `cross_chat_replies` | default `false`. See [Protecting an agent](#protecting-an-agent-from-prompt-injection): `true` lets a reply follow monitor reads of the profile's other chats | yes |
 | `instructions` | what to answer, tone, what never to reveal | **no, guidance only** |
 
 The server cannot judge what a reply *says*. Topic and tone live in `instructions`, which the agent receives with every batch of events, and in `topics`, which only filters what the agent sees. Do not rely on `instructions` to keep a secret.
@@ -695,7 +696,7 @@ An agent that reads private data, reads text written by strangers and can send m
 **Session taint** (on by default). The server remembers, for the life of the process (one client session), every chat whose content it handed to the agent. A send is allowed only if every chat read is the destination itself: answering where you read is fine, carrying what you read in one chat to another is blocked with `SEND_BLOCKED_BY_SESSION_TAINT`, before anything reaches the bridge. Reading two chats blocks sending to either; a read that does not say which chat it came from counts as all of them. There is no tool to clear it: restarting the server ends the session, so the agent cannot erase its own mark.
 - A single send can be released with the send policy's `override_token` (a deliberate speed bump like the rest, not a security boundary; the release is audited as an override). The monitor's `approval_token` does not release it.
 - `dry_run` is never blocked.
-- `monitor_reply` looks only at what the agent read outside the monitor, because the profile's chats, senders and limits already scope what the monitor delivers; ordinary sends do count what the monitor delivered (and the excerpt of a channel notice).
+- `monitor_reply` is held to the same rule: after the monitor delivered messages of two chats, a reply to either is blocked, because text in one chat could make the reply carry what the other said. The reply is allowed when the monitor delivered only the chat being answered (a profile limited to one chat, or `chats` with one entry). A profile that covers several chats and must keep answering can accept the risk with `"cross_chat_replies": true`: then what the monitor itself delivered from the profile's other chats is ignored for its replies (reads made with the ordinary tools, and ordinary sends, still count).
 - `WHATSAPP_SESSION_TAINT=off`, or `"session_taint": "off"` in `send_policy.json`, turns it off; the environment variable wins. Any other value means on.
 - It covers the readers that return other people's text (`list_messages`, `get_message_context`, `get_message_thread`, `list_chats`, `get_chat`, `get_contact_chats`, `get_direct_chat_by_contact`, `get_last_interaction`, the poll and reaction readers, `export_conversation`, `save_conversation_export`, `monitor_messages`). It does not cover what you paste into the conversation yourself, nor a client with several servers: the other servers' tools are outside it.
 

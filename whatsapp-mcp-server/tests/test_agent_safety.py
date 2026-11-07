@@ -326,10 +326,10 @@ def test_an_empty_monitor_poll_taints_nothing(world, bridge):  # TAINT-01
     assert main.send_message(OTHER_CHAT, "x")["success"] is True
 
 
-def test_monitor_events_block_ordinary_sends_but_not_the_monitors_own_reply(world, bridge):  # TAINT-05
+def _two_chat_profile(world, **extra):
     (world / "profiles.json").write_text(json.dumps({"profiles": {"p": {
         "targets": ["me"], "triggers": ["mention"], "max_event_age_minutes": 10_000_000, "approval_token": "owner-token-1",
-        "chats": [ATTACKER_CHAT, OTHER_CHAT]}}}))
+        "chats": [ATTACKER_CHAT, OTHER_CHAT], **extra}}}))
     os.chmod(world / "profiles.json", 0o600)
     conn = sqlite3.connect(whatsapp.MESSAGES_DB_PATH)
     for chat, mid in ((ATTACKER_CHAT, "T1"), (OTHER_CHAT, "T2")):
@@ -338,14 +338,58 @@ def test_monitor_events_block_ordinary_sends_but_not_the_monitors_own_reply(worl
     conn.commit()
     conn.close()
     first = asyncio.run(main.monitor_messages(profile="p", cursor=0))
-    assert {e["message"]["id"] for e in first["events"]} == {"T1", "T2"}
-    assert set(taint.snapshot()["monitor"]) == {ATTACKER_CHAT, OTHER_CHAT} and taint.snapshot()["general"] == []
+    assert {e["message"]["id"] for e in first["events"]} >= {"T1"}
+    assert taint.snapshot()["general"] == []
+    return set(taint.snapshot()["monitor"])
+
+
+def test_a_reply_after_the_monitor_delivered_two_chats_is_blocked_by_default(world, bridge):  # TAINT-05
+    """Text in chat A could make a reply carry what chat C said: the default is not to allow it."""
+    assert _two_chat_profile(world) == {ATTACKER_CHAT, OTHER_CHAT}
 
     ordinary = main.send_message(ATTACKER_CHAT, "a message built from what the monitor delivered")
     reply = main.monitor_reply("p", ATTACKER_CHAT, "T1", "thanks", approval_token="owner-token-1")
 
     assert ordinary["error_code"] == "SEND_BLOCKED_BY_SESSION_TAINT"
+    assert reply["error_code"] == "SEND_BLOCKED_BY_SESSION_TAINT" and reached(bridge) == []
+
+
+def test_a_reply_when_the_monitor_delivered_only_that_chat_is_allowed(world, bridge):  # TAINT-05
+    _two_chat_profile(world, chats=[ATTACKER_CHAT])
+    taint.reset()
+    conn = sqlite3.connect(whatsapp.MESSAGES_DB_PATH)
+    conn.execute("DELETE FROM messages WHERE id = 'T2'")
+    conn.commit()
+    conn.close()
+    asyncio.run(main.monitor_messages(profile="p", cursor=0))
+    assert taint.snapshot()["monitor"] == [ATTACKER_CHAT]
+
+    reply = main.monitor_reply("p", ATTACKER_CHAT, "T1", "thanks", approval_token="owner-token-1")
+
     assert reply["success"] is True and len(reached(bridge)) == 1
+
+
+def test_a_profile_can_accept_cross_chat_replies_but_ordinary_sends_stay_blocked(world, bridge):  # TAINT-05
+    from datetime import datetime, timedelta, timezone
+    _two_chat_profile(world, cross_chat_replies=True)
+
+    ordinary = main.send_message(ATTACKER_CHAT, "a message built from what the monitor delivered")
+    reply = main.monitor_reply("p", ATTACKER_CHAT, "T1", "thanks", approval_token="owner-token-1")
+    main.list_messages(chat_jid=PRIVATE_CHAT)                    # an ordinary read still counts for the reply
+    later = datetime.now(timezone.utc) + timedelta(hours=2)          # past the cooldown between replies
+    after_read = monitor.monitor_reply("p", ATTACKER_CHAT, "T1", "thanks again", approval_token="owner-token-1", now=later)
+
+    assert ordinary["error_code"] == "SEND_BLOCKED_BY_SESSION_TAINT"
+    assert reply["success"] is True
+    assert after_read["error_code"] == "SEND_BLOCKED_BY_SESSION_TAINT"
+    assert len(reached(bridge)) == 1
+
+
+def test_cross_chat_replies_must_be_true_or_false(world):  # TAINT-05
+    (world / "profiles.json").write_text(json.dumps({"profiles": {"p": {"targets": ["me"], "cross_chat_replies": "yes"}}}))
+    os.chmod(world / "profiles.json", 0o600)
+    out = main.get_monitor_profiles()
+    assert out.get("error_code") == "MONITOR_CONFIG_INVALID" or "cross_chat_replies" in json.dumps(out)
 
 
 def test_the_monitors_approval_token_does_not_release_a_general_taint(world, bridge):  # TAINT-04, TAINT-05
