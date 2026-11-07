@@ -225,3 +225,19 @@ def test_voters_are_listed_in_the_order_they_voted_not_by_id(conn):  # RES-02
     vote(conn, "5555", ["Sim"], at=3)
 
     assert opt(whatsapp.get_poll_results("P1", A), "Sim")["voters"] == ["9999", "1111", "5555"]
+
+
+def test_a_vote_for_an_added_option_moves_from_unknown_to_that_option(conn):  # ED-05
+    add_poll(conn, options=("Sim", "Não"))
+    vote(conn, "5511111111111", [], raw=[h("Talvez")])   # voted for an option added after the poll
+    vote(conn, "5522222222222", ["Sim"], at=2)
+
+    before = whatsapp.get_poll_results("P1", A)
+    assert before["unknown_votes"] == 1 and [o["text"] for o in before["options"]] == ["Sim", "Não"]
+
+    conn.execute("UPDATE polls SET options_json = ? WHERE id = 'P1'", (json.dumps(["Sim", "Não", "Talvez"]),))
+    conn.commit()
+    after = whatsapp.get_poll_results("P1", A)
+
+    assert after["unknown_votes"] == 0 and after["total_voters"] == 2
+    assert (opt(after, "Talvez")["votes"], opt(after, "Talvez")["voters"]) == (1, ["5511111111111"])

@@ -570,3 +570,9 @@ func deleteMessage(env pollEnv, store *MessageStore, req DeleteMessageRequest, l
 	}
 	return http.StatusOK, SendMessageResponse{Success: true, Message: "Message deleted", MessageID: req.MessageID, ChatJID: chat.String()}
 }
+
+// jsonOptions is how the options of a poll are stored.
+func jsonOptions(options []string) (string, error) {
+	encoded, err := json.Marshal(options)
+	return string(encoded), err
+}
