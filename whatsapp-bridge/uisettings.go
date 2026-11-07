@@ -113,3 +113,11 @@ func applyUISettingsAtStart(logf func(format string, args ...any)) {
 		logf("%s: ignored keys: %v", uiSettingsFile, res.IgnoredKeys)
 	}
 }
+
+// applyStartupSettings applies the file and then reads again what the package read before main ran:
+// the auto-download settings and whether message text goes to the log.
+func applyStartupSettings(logf func(format string, args ...any)) {
+	applyUISettingsAtStart(logf)
+	autoDownloadCfg = loadAutoDownloadConfig(os.Getenv)
+	includeTextInLog = logMessagesEnabled()
+}

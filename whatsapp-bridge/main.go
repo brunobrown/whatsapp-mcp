@@ -1786,11 +1786,10 @@ func main() {
 		defer logFile.Close()
 		defer stop()
 	}
-	// Variables the web interface saved fill the ones the environment lacks; what was read when the
-	// package was initialised is read again with them.
+	// Variables the web interface saved fill the ones the environment lacks; what the package read
+	// before main ran is read again with them.
 	startupEnv := os.Environ() // what the web interface is started with: before the file is applied
-	applyUISettingsAtStart(func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
-	autoDownloadCfg = loadAutoDownloadConfig(os.Getenv)
+	applyStartupSettings(func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
 	state := newBridgeState(time.Now)
 
 	// Set up logger

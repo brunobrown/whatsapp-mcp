@@ -160,3 +160,43 @@ func TestStartupAppliesTheFileToTheProcessEnvironment(t *testing.T) {
 		t.Fatalf("auto-download limit = %d bytes", got)
 	}
 }
+
+// Some settings are read once, when the package is initialised, which is before main applies the file.
+// applyStartupSettings reads them again, so a value the interface saved reaches them.
+func TestStartupSettingsReachTheValuesReadAtInitialisation(t *testing.T) {
+	dir := writeUISettings(t, `{"env":{"WHATSAPP_AUTO_DOWNLOAD_MAX_MB":"50","WHATSAPP_LOG_MESSAGES":"true"}}`, 0o600)
+	t.Setenv("WHATSAPP_CONFIG_DIR", dir)
+	for _, name := range []string{"WHATSAPP_AUTO_DOWNLOAD_MAX_MB", "WHATSAPP_LOG_MESSAGES"} {
+		os.Unsetenv(name)
+	}
+	previousDownload, previousLog := autoDownloadCfg, includeTextInLog
+	t.Cleanup(func() {
+		autoDownloadCfg, includeTextInLog = previousDownload, previousLog
+		os.Unsetenv("WHATSAPP_AUTO_DOWNLOAD_MAX_MB")
+		os.Unsetenv("WHATSAPP_LOG_MESSAGES")
+	})
+	autoDownloadCfg, includeTextInLog = loadAutoDownloadConfig(func(string) string { return "" }), false
+
+	applyStartupSettings(func(string, ...any) {})
+
+	if autoDownloadCfg.MaxBytes != 50<<20 {
+		t.Errorf("auto-download limit = %d bytes, want 50 MB", autoDownloadCfg.MaxBytes)
+	}
+	if !includeTextInLog {
+		t.Error("WHATSAPP_LOG_MESSAGES from the file did not reach includeTextInLog")
+	}
+}
+
+func TestStartupSettingsDoNotOverrideTheEnvironment(t *testing.T) {
+	dir := writeUISettings(t, `{"env":{"WHATSAPP_LOG_MESSAGES":"true"}}`, 0o600)
+	t.Setenv("WHATSAPP_CONFIG_DIR", dir)
+	t.Setenv("WHATSAPP_LOG_MESSAGES", "false")
+	previous := includeTextInLog
+	t.Cleanup(func() { includeTextInLog = previous })
+
+	applyStartupSettings(func(string, ...any) {})
+
+	if includeTextInLog {
+		t.Error("the file overrode the environment")
+	}
+}
