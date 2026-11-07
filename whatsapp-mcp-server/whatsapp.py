@@ -2016,3 +2016,51 @@ def react_to_message(chat_jid: str, message_id: str, emoji: str, override_token:
             "emoji": emoji, "text": found["text"]})
 
     return _guarded_send("reaction", chat_jid, len(emoji), override_token, send, preview if dry_run else None)
+
+
+def get_message_reactions(message_id: str, chat_jid: Optional[str] = None) -> dict:
+    """The reactions that stand on a message, who made each, and how many of each emoji."""
+    if not message_id:
+        return _poll_error("INVALID_ARGUMENT", "message_id is required")
+    try:
+        conn = _open_chats()
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
+        return _poll_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    try:
+        cursor = conn.cursor()
+        where, params = "messages.id = ?", [message_id]
+        if chat_jid:
+            candidates = _chat_candidates(chat_jid)
+            where += f" AND messages.chat_jid IN ({','.join('?' * len(candidates))})"
+            params += candidates
+        rows = cursor.execute(
+            f"SELECT messages.chat_jid, chats.name FROM messages LEFT JOIN chats ON chats.jid = messages.chat_jid WHERE {where}",
+            params).fetchall()
+        if not rows:
+            return _poll_error("MESSAGE_NOT_FOUND", f"Message {message_id} was not found" + (f" in {chat_jid}" if chat_jid else ""))
+        if len(rows) > 1:
+            return _poll_error("AMBIGUOUS_MESSAGE", f"Message {message_id} exists in {len(rows)} chats; give chat_jid")
+        found_chat, chat_name = rows[0]
+
+        reactions: List[dict] = []
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "reactions" in tables:
+            own = _own_sender(cursor)
+            for reactor, emoji, at in cursor.execute(
+                    "SELECT reactor, emoji, timestamp_ms FROM reactions WHERE target_id = ? AND chat_jid = ? AND emoji != '' "
+                    "ORDER BY timestamp_ms, reactor", (message_id, found_chat)).fetchall():
+                reactions.append({
+                    "reactor": reactor,
+                    "reactor_name": _voter_label(reactor, own),
+                    "emoji": emoji,
+                    "timestamp": datetime.fromtimestamp(at / 1000, tz=timezone.utc).isoformat(),
+                })
+        counts: dict = {}
+        for reaction in reactions:
+            counts[reaction["emoji"]] = counts.get(reaction["emoji"], 0) + 1
+        return {"success": True, "message_id": message_id, "chat_jid": found_chat, "chat_name": chat_name,
+                "total": len(reactions), "reactions": reactions, "counts": counts}
+    except dbcrypto.DB_ERRORS as e:
+        return _poll_error("UNKNOWN", f"Database error: {e}")
+    finally:
+        conn.close()
