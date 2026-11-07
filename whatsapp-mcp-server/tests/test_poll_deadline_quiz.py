@@ -103,3 +103,17 @@ def test_the_export_masks_the_right_answer_when_anonymizing(conn):  # POLLX-10
 
     (poll,) = out["polls"]
     assert poll["correct_answer"] == "Call [number]" and "5511987654321" not in json.dumps(out)
+
+
+@pytest.mark.parametrize("ends", [2**62, -2**62, 9223372036854775807, -1, 0, 1000, "soon", 1e300])
+def test_an_absurd_deadline_does_not_break_reading_the_chat(conn, ends):  # POLLX-12
+    add_poll(conn, "BAD")
+    add_poll(conn, "GOOD")
+    extras(conn, "BAD", ends_ms=ends)
+    extras(conn, "GOOD", ends_ms=1_700_000_000_000)
+
+    bad, listing = whatsapp.get_poll_results("BAD", A), whatsapp.list_polls(A)
+
+    assert bad["success"] is True and bad["closes_at"] is None and bad["closed"] is False
+    assert listing["success"] is True and {p["message_id"] for p in listing["polls"]} == {"BAD", "GOOD"}
+    assert export.export_conversation(A)["success"] is True

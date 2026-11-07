@@ -1745,6 +1745,20 @@ def _tally(cursor: sqlite3.Cursor, poll_id: str, chat_jid: str, options: List[st
     return {"options": counted, "total_voters": total, "unknown_votes": unknown}
 
 
+_POLL_END_RANGE_MS = (946684800000, 32503680000000)    # 2000-01-01 .. 3000-01-01; anything else is not a deadline
+
+
+def _poll_end_iso(ends_ms) -> Optional[str]:
+    """A poll's deadline as UTC ISO text. The value comes from whoever sent the poll: one that cannot be shown as
+    a date (huge, negative, not a number) reads as no deadline instead of breaking every read of the chat."""
+    if isinstance(ends_ms, bool) or not isinstance(ends_ms, (int, float)) or not _POLL_END_RANGE_MS[0] <= ends_ms <= _POLL_END_RANGE_MS[1]:
+        return None
+    try:
+        return datetime.fromtimestamp(ends_ms / 1000, tz=timezone.utc).isoformat()
+    except (OverflowError, ValueError, OSError):
+        return None
+
+
 def _poll_row_dict(cursor: sqlite3.Cursor, row) -> dict:
     """Everything shown about one poll row: (id, chat_jid, author, question, options_json, selectable_count,
     allow_add_option, hide_voter_names, chat name, created timestamp, created by us)."""
@@ -1766,8 +1780,8 @@ def _poll_row_dict(cursor: sqlite3.Cursor, row) -> dict:
         "anonymous": anonymous,
         "created_at": _aware(datetime.fromisoformat(created)).isoformat() if created else None,
         "created_by": "Me" if from_me else sender_label(author),
-        "closes_at": datetime.fromtimestamp(ends_ms / 1000, tz=timezone.utc).isoformat() if ends_ms else None,
-        "closed": bool(ends_ms and time.time() * 1000 >= ends_ms),
+        "closes_at": _poll_end_iso(ends_ms),
+        "closed": bool(_poll_end_iso(ends_ms) and time.time() * 1000 >= ends_ms),
         "quiz": bool(quiz),
         # the right answer is shown only for a quiz this account created
         "correct_answer": correct if own_quiz else None,

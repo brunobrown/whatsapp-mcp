@@ -204,7 +204,7 @@ func pollFromMessage(chatJID, id, author string, msg *waE2E.Message) (Poll, bool
 		ID: id, ChatJID: chatJID, Author: author, Question: creation.GetName(), Options: options,
 		SelectableCount: int(creation.GetSelectableOptionsCount()),
 		AllowAddOption:  creation.GetAllowAddOption(), HideVoterNames: creation.GetHideParticipantName(),
-		EndsAtMs: creation.GetEndTime(), Quiz: creation.GetPollType() == waE2E.PollType_QUIZ,
+		EndsAtMs: sanePollEnd(creation.GetEndTime(), time.Now()), Quiz: creation.GetPollType() == waE2E.PollType_QUIZ,
 		CorrectAnswer: creation.GetCorrectAnswer().GetOptionName(),
 	}, true
 }
@@ -669,4 +669,18 @@ func deleteMessage(env pollEnv, store *MessageStore, req DeleteMessageRequest, l
 func jsonOptions(options []string) (string, error) {
 	encoded, err := json.Marshal(options)
 	return string(encoded), err
+}
+
+// maxPollEndAhead is how far in the future a received poll's deadline may be. The field comes from whoever
+// sent the poll, so a nonsense value (negative, or so large that it cannot be shown as a date) is dropped.
+const maxPollEndAhead = 10 * 365 * 24 * time.Hour
+
+// sanePollEnd returns endMs when it is a plausible deadline (after 2000-01-01 and not more than maxPollEndAhead
+// from now), else 0, which means "no deadline".
+func sanePollEnd(endMs int64, now time.Time) int64 {
+	const year2000Ms = 946684800000
+	if endMs < year2000Ms || endMs > now.Add(maxPollEndAhead).UnixMilli() {
+		return 0
+	}
+	return endMs
 }

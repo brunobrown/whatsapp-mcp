@@ -174,3 +174,26 @@ func TestPollColumnsMigrationIsIdempotent(t *testing.T) { // POLLX-06
 		t.Errorf("the poll changed: %+v %v", p, ok)
 	}
 }
+
+func TestAnAbsurdDeadlineInAReceivedPollIsDropped(t *testing.T) { // POLLX-12
+	now := time.Now()
+	for name, ms := range map[string]int64{"negative": -5, "tiny": 1000, "huge": 9223372036854775807,
+		"far future": now.Add(11 * 365 * 24 * time.Hour).UnixMilli()} {
+		if got := sanePollEnd(ms, now); got != 0 {
+			t.Errorf("%s (%d) -> %d, want 0", name, ms, got)
+		}
+	}
+	for name, ms := range map[string]int64{"in a minute": now.Add(time.Minute).UnixMilli(), "yesterday": now.Add(-24 * time.Hour).UnixMilli(),
+		"in nine years": now.Add(9 * 365 * 24 * time.Hour).UnixMilli()} {
+		if got := sanePollEnd(ms, now); got != ms {
+			t.Errorf("%s (%d) -> %d, want it kept", name, ms, got)
+		}
+	}
+	store := newTestStore(t)
+	msg := creationMessage("Q?", []string{"A", "B"}, 0)
+	msg.PollCreationMessage.EndTime = ptrInt64(9223372036854775807)
+	handleMessage(nil, store, pollEvent("chat@g.us", alice, "P9", msg, now), waLog.Noop)
+	if got := readExtras(t, store, "P9"); got.endsMs != 0 {
+		t.Errorf("ends_at_ms = %d, want 0 for an absurd deadline", got.endsMs)
+	}
+}
