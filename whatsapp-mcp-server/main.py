@@ -22,6 +22,8 @@ from whatsapp import (
     download_media as whatsapp_download_media,
     get_group_participants as whatsapp_get_group_participants,
     get_connection_status as whatsapp_get_connection_status,
+    get_webhook_status as whatsapp_get_webhook_status,
+    test_webhook as whatsapp_test_webhook,
     download_media_batch as whatsapp_download_media_batch,
     get_message_thread as whatsapp_get_message_thread,
     send_poll as whatsapp_send_poll,
@@ -709,6 +711,33 @@ def get_connection_status() -> Dict[str, Any]:
         last_message_at (newest stored message) and last_log_at (last write to the bridge log)
     """
     return whatsapp_get_connection_status()
+
+@mcp.tool(annotations=READ_ONLY)
+def get_webhook_status() -> Dict[str, Any]:
+    """Show the bridge's webhooks: whether they are on and, per endpoint, how the deliveries are going.
+
+    Returns:
+        success and webhooks: enabled, error (why the file was refused, when it was) and endpoints, each with name,
+        delivered, failed, dropped (events lost because its queue was full), queued, last_error and last_success_at.
+        The address and the secret of an endpoint are never shown. Webhooks are off unless webhooks.json exists
+        in the bridge's configuration directory.
+        Errors: success=false with error_code BRIDGE_UNREACHABLE or BRIDGE_UNAUTHORIZED
+    """
+    return whatsapp_get_webhook_status()
+
+@mcp.tool(annotations=WRITES)
+def test_webhook(name: str) -> Dict[str, Any]:
+    """Send one signed ping to a webhook endpoint and report what it answered, to check the address and the signature.
+
+    Args:
+        name: The name of an endpoint of webhooks.json
+
+    Returns:
+        success (the endpoint answered 2xx), name, status (the HTTP code, 0 if it did not answer), latency_ms and error.
+        The ping is sent once and does not count in the delivery counters.
+        Errors: success=false with error_code ENDPOINT_NOT_FOUND, INVALID_ARGUMENT, BRIDGE_UNREACHABLE or BRIDGE_UNAUTHORIZED
+    """
+    return whatsapp_test_webhook(name)
 
 if __name__ == "__main__":
     # Initialize and run the server

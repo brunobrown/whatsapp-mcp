@@ -38,6 +38,7 @@ type bridgeState struct {
 	lastMessage      time.Time
 	lastConnected    time.Time
 	lastDisconnected time.Time
+	webhooks         func() webhookStatus
 }
 
 func newBridgeState(now func() time.Time) *bridgeState {
@@ -90,17 +91,18 @@ func bridgeVersion() string {
 }
 
 type statusResponse struct {
-	Connected           bool       `json:"connected"`
-	LoggedIn            bool       `json:"logged_in"`
-	Phone               string     `json:"phone"`
-	Version             string     `json:"version"`
-	StartedAt           time.Time  `json:"started_at"`
-	UptimeSeconds       int64      `json:"uptime_seconds"`
-	LastEventAt         *time.Time `json:"last_event_at"`
-	LastMessageAt       *time.Time `json:"last_message_at"`
-	LastConnectedAt     *time.Time `json:"last_connected_at"`
-	LastDisconnectedAt  *time.Time `json:"last_disconnected_at"`
-	PendingMediaRetries int        `json:"pending_media_retries"`
+	Connected           bool          `json:"connected"`
+	LoggedIn            bool          `json:"logged_in"`
+	Phone               string        `json:"phone"`
+	Version             string        `json:"version"`
+	StartedAt           time.Time     `json:"started_at"`
+	UptimeSeconds       int64         `json:"uptime_seconds"`
+	LastEventAt         *time.Time    `json:"last_event_at"`
+	LastMessageAt       *time.Time    `json:"last_message_at"`
+	LastConnectedAt     *time.Time    `json:"last_connected_at"`
+	LastDisconnectedAt  *time.Time    `json:"last_disconnected_at"`
+	PendingMediaRetries int           `json:"pending_media_retries"`
+	Webhooks            webhookStatus `json:"webhooks"`
 }
 
 func orNil(t time.Time) *time.Time {
@@ -114,7 +116,12 @@ func orNil(t time.Time) *time.Time {
 func (s *bridgeState) snapshot(src connectionSource, pending int, version string) statusResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	hooks := webhookStatus{Endpoints: []webhookEndpointStatus{}}
+	if s.webhooks != nil {
+		hooks = s.webhooks()
+	}
 	return statusResponse{
+		Webhooks:            hooks,
 		Connected:           src.IsConnected(),
 		LoggedIn:            src.IsLoggedIn(),
 		Phone:               src.Phone(),
