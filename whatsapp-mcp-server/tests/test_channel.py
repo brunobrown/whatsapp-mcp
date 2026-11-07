@@ -172,14 +172,51 @@ def test_denied_sender_other_chat_and_noise_are_never_queued(world, tmp_path):  
     assert e.pending == []
 
 
-@pytest.mark.parametrize("body", ["{not json", {"profiles": {"support": {"targets": ["me"], "enabled": False}}}, {"profiles": {}}])
-def test_a_profile_that_cannot_be_used_yields_nothing_even_for_old_matches(world, tmp_path, body):  # CHAN-04
+AGE = 10_000_000      # the fixture messages are old: without this the age filter, not the check under test, would hide them
+
+
+@pytest.mark.parametrize("body", ["{not json", {"profiles": {"support": {"targets": ["me"], "enabled": False, "max_event_age_minutes": AGE}}},
+                                  {"profiles": {}}])
+def test_a_profile_that_cannot_be_used_yields_nothing_even_for_a_matching_message(world, tmp_path, body):  # CHAN-04
     e = engine(tmp_path)
     run(e.poll())
     add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    # control: the very same message does fire the profile while it is usable
+    probe = engine(tmp_path)
+    probe.scan["profiles"]["support"] = 0
+    run(probe.poll())
+    assert [p.ref for p in probe.pending] == ["M1"]
+
     (tmp_path / "profiles.json").write_text(body if isinstance(body, str) else json.dumps(body))
+    e.scan["profiles"]["support"] = 0
     run(e.poll())
     assert e.pending == []
+
+
+def test_senders_allow_limits_who_can_be_announced(world, tmp_path):  # CHAN-04
+    (tmp_path / "profiles.json").write_text(json.dumps({"profiles": {"support": {
+        "targets": ["me"], "max_event_age_minutes": AGE, "senders": {"allow": [ANA]}}}}))
+    e = engine(tmp_path)
+    run(e.poll())
+    add(world, "FROM_BOB", f"@{ME} hi", sender=BOB, chat=GROUP)
+    add(world, "FROM_ANA", f"@{ME} hi", sender=ANA, chat=GROUP, minute=56)
+    run(e.poll())
+    assert [p.ref for p in e.pending] == ["FROM_ANA"]
+
+
+def test_a_profile_that_comes_back_does_not_replay_what_arrived_meanwhile(world, tmp_path):  # CHAN-04
+    e = engine(tmp_path)
+    run(e.poll())
+    good = (tmp_path / "profiles.json").read_text()
+    (tmp_path / "profiles.json").write_text(json.dumps({"profiles": {"support": {"targets": ["me"], "enabled": False}}}))
+    run(e.poll())
+    add(world, "WHILE_OFF", f"@{ME} hi", sender=ANA, chat=GROUP)
+    (tmp_path / "profiles.json").write_text(good)
+    run(e.poll())
+    assert e.pending == []
+    add(world, "AFTER", f"@{ME} hi", sender=ANA, chat=GROUP, minute=56)
+    run(e.poll())
+    assert [p.ref for p in e.pending] == ["AFTER"]
 
 
 def test_the_age_limit_of_the_profile_applies(world, tmp_path):  # CHAN-04
@@ -364,3 +401,203 @@ def test_two_notices_are_at_least_min_interval_apart(): # CHAN-10
 def test_nothing_is_sent_without_events(): # CHAN-03
     cfg = channel.Config(enabled=True, profiles=["p"], batch_seconds=0, min_interval_seconds=0, poll_interval_seconds=1)
     assert drive(cfg, lambda tick, e: None, 20) == []
+
+
+# ---- robustness of the state and of the loop -----------------------------------------------------------------
+@pytest.mark.parametrize("state", [
+    {"polls": {"P1": 5}}, {"polls": {"P1": {}}}, {"polls": {"P1": {"cursor": "x"}}}, {"profiles": {"support": "7"}},
+    {"profiles": {"support": -3}}, {"profiles": [1]}, {"polls": []}, {"seen": "abc"}, {"seen": [1, None]}, [],
+    {"profiles": {"support": True}}])
+def test_a_damaged_state_file_never_stops_the_engine(world, tmp_path, state):  # CHAN-09
+    write(tmp_path / "state.json", state)
+    e = engine(tmp_path)                                     # must not raise
+    run(e.poll())
+    add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    run(e.poll())
+    assert [p.ref for p in e.pending] == ["M1"]
+
+
+def test_a_stored_position_ahead_of_the_messages_restarts_at_the_end(world, tmp_path):  # CHAN-09
+    write(tmp_path / "state.json", {"profiles": {"support": 9999}, "polls": {}, "seen": []})
+    e = engine(tmp_path)
+    run(e.poll())
+    assert e.pending == [] and e.scan["profiles"]["support"] == 0
+    add(world, "NEW", f"@{ME} hi", sender=ANA, chat=GROUP)
+    run(e.poll())
+    assert [p.ref for p in e.pending] == ["NEW"]
+
+
+def test_one_unreadable_poll_does_not_hold_back_the_profiles(world, tmp_path, monkeypatch):  # CHAN-04
+    cfg = channel.Config(enabled=True, profiles=["support"], polls=["P1"])
+    e = channel.Engine(cfg, str(tmp_path / "state.json"))
+    run(e.poll())
+
+    async def boom(*a, **k):
+        raise KeyError("closed")
+    monkeypatch.setattr(channel.pollwatch, "watch_poll", boom)
+    add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    run(e.poll())
+    assert [p.ref for p in e.pending] == ["M1"]
+
+
+def test_a_poll_reaching_its_deadline_is_announced_once(poll_world, tmp_path):  # CHAN-11
+    import time
+    polls.add_poll(poll_world)
+    poll_world.execute("ALTER TABLE polls ADD COLUMN ends_at_ms INTEGER")
+    poll_world.execute("UPDATE polls SET ends_at_ms = ?", (int((time.time() + 3600) * 1000),))
+    poll_world.commit()
+    e = poll_engine(tmp_path)
+    run(e.poll())
+    assert e.pending == []
+    poll_world.execute("UPDATE polls SET ends_at_ms = ?", (int((time.time() - 5) * 1000),))
+    poll_world.commit()
+    run(e.poll())
+    run(e.poll())
+
+    (event,) = e.pending
+    assert (event.kind, event.ref, event.chat) == ("poll_closed", "P1", polls.A)
+    e.emitted(e.take())
+    again = poll_engine(tmp_path)
+    run(again.poll())
+    assert again.pending == []
+
+
+# ---- the order of delivery -----------------------------------------------------------------------------
+def test_a_failing_send_leaves_the_event_pending_and_the_state_untouched(world, tmp_path):  # CHAN-09
+    import anyio
+    cfg = channel.Config(enabled=True, profiles=["support"], batch_seconds=0, min_interval_seconds=0, poll_interval_seconds=0.01)
+    e = channel.Engine(cfg, str(tmp_path / "state.json"))
+    run(e.poll())
+    add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    attempts = []
+
+    async def send(content, meta):
+        attempts.append(meta)
+        raise BrokenPipeError
+
+    async def sleep(seconds):
+        if len(attempts) >= 1:
+            raise StopIteration
+        await asyncio.sleep(0)
+
+    async def go():
+        ready = anyio.Event()
+        ready.set()
+        try:
+            await channel.notify_loop(cfg, e, send, ready, sleep=sleep)
+        except (StopIteration, RuntimeError):
+            pass
+
+    anyio.run(go)
+
+    assert len(attempts) == 1 and [p.ref for p in e.pending] == ["M1"]
+    assert e.state["seen"] == [] and json.load(open(tmp_path / "state.json"))["profiles"]["support"] == 0
+    again = channel.Engine(cfg, str(tmp_path / "state.json"))
+    run(again.poll())
+    assert [p.ref for p in again.pending] == ["M1"]                     # still to be announced after a restart
+
+
+def test_the_state_is_written_only_after_the_send_succeeds(world, tmp_path):  # CHAN-09
+    import anyio
+    cfg = channel.Config(enabled=True, profiles=["support"], batch_seconds=0, min_interval_seconds=0, poll_interval_seconds=0.01)
+    e = channel.Engine(cfg, str(tmp_path / "state.json"))
+    run(e.poll())
+    add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    seen_at_send = []
+
+    async def send(content, meta):
+        seen_at_send.append(json.load(open(tmp_path / "state.json"))["seen"])
+
+    async def sleep(seconds):
+        if seen_at_send:
+            raise StopIteration
+        await asyncio.sleep(0)
+
+    async def go():
+        ready = anyio.Event()
+        ready.set()
+        try:
+            await channel.notify_loop(cfg, e, send, ready, sleep=sleep)
+        except (StopIteration, RuntimeError):
+            pass
+
+    anyio.run(go)
+
+    assert seen_at_send == [[]]                                          # nothing recorded while sending
+    assert json.load(open(tmp_path / "state.json"))["seen"] == [f"m:support:{GROUP}:M1"]
+
+
+def test_the_loop_survives_an_engine_error_and_keeps_going(): # CHAN-03
+    import anyio
+    cfg = channel.Config(enabled=True, profiles=["p"], batch_seconds=0, min_interval_seconds=0, poll_interval_seconds=1)
+    calls, sent = [], []
+
+    class Flaky:
+        pending = []
+
+        async def poll(self):
+            calls.append(1)
+            if len(calls) == 1:
+                raise ValueError("database hiccup")
+            if len(calls) == 2:
+                self.pending = [message("M1")]
+
+        def take(self):
+            return list(self.pending)
+
+        def emitted(self, events):
+            self.pending = []
+
+        def idle_commit(self):
+            pass
+
+    async def send(content, meta):
+        sent.append(meta)
+
+    async def sleep(seconds):
+        if sent:
+            raise StopIteration
+
+    async def go():
+        ready = anyio.Event()
+        ready.set()
+        try:
+            await channel.notify_loop(cfg, Flaky(), send, ready, sleep=sleep)
+        except (StopIteration, RuntimeError):
+            pass
+
+    anyio.run(go)
+    assert len(calls) >= 2 and sent and sent[0]["message_id"] == "M1"
+
+
+def test_no_more_than_max_batch_events_go_in_one_send(): # CHAN-10
+    cfg = channel.Config(enabled=True, profiles=["p"], batch_seconds=0, min_interval_seconds=100, poll_interval_seconds=1, max_batch=2)
+
+    def feed(tick, e):
+        if tick == 0:
+            e.pending.extend(message(f"M{n}") for n in range(5))
+
+    sent = drive(cfg, feed, 3)
+    assert len(sent) == 1 and sent[0][2]["count"] == "2"
+
+
+# ---- nothing here can act ------------------------------------------------------------------------------
+def test_the_notifier_never_reaches_a_sending_function(world, tmp_path, monkeypatch):  # CHAN-14
+    import requests
+
+    def forbidden(*a, **k):
+        raise AssertionError("the channel must never send, vote, react or delete")
+    monkeypatch.setattr(whatsapp, "send_message", forbidden)
+    monkeypatch.setattr(whatsapp, "delete_message", forbidden, raising=False)
+    monkeypatch.setattr(requests, "post", forbidden)
+    e = engine(tmp_path)
+    run(e.poll())
+    add(world, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+    run(e.poll())
+    channel.describe(e.take(), True, 20)
+    e.emitted(e.take())
+
+    import ast
+    tree = ast.parse(open(channel.__file__).read())
+    imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
+    assert "requests" not in imported and "send_policy" not in imported

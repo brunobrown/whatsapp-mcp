@@ -40,7 +40,7 @@ CONFIG_FILE = "channel.json"
 STATE_FILE = "channel_state.json"
 SEEN_LIMIT = 500
 SCAN_LIMIT = 100
-MAX_META_VALUE = 200
+MAX_META_VALUE = 120      # eventline.clean cuts values here already
 _META_KEY = re.compile(r"[A-Za-z0-9_]+")
 _KEYS = {"enabled", "profiles", "polls", "include_excerpt", "excerpt_chars", "batch_seconds",
          "min_interval_seconds", "max_batch", "poll_interval_seconds"}
@@ -174,7 +174,7 @@ def _meta(**pairs) -> Dict[str, str]:
     for key, value in pairs.items():
         if value is None or value == "" or not _META_KEY.fullmatch(key):
             continue
-        out[key] = clean(value)[:MAX_META_VALUE]
+        out[key] = clean(value)
     return out
 
 
@@ -243,9 +243,16 @@ class Engine:
         if not isinstance(raw, dict):
             return blank
         out = dict(blank)
-        for key in ("profiles", "polls"):
-            if isinstance(raw.get(key), dict):
-                out[key] = raw[key]
+        profiles = raw.get("profiles")
+        if isinstance(profiles, dict):
+            out["profiles"] = {k: v for k, v in profiles.items()
+                               if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and v >= 0}
+        polls = raw.get("polls")
+        if isinstance(polls, dict):
+            for k, v in polls.items():
+                cursor = v.get("cursor") if isinstance(v, dict) else None
+                if isinstance(k, str) and isinstance(cursor, int) and not isinstance(cursor, bool) and cursor >= 0:
+                    out["polls"][k] = {"cursor": cursor, "closed": bool(v.get("closed"))}
         if isinstance(raw.get("seen"), list):
             out["seen"] = [s for s in raw["seen"] if isinstance(s, str)][-SEEN_LIMIT:]
         return out
@@ -276,18 +283,31 @@ class Engine:
         for name in self.cfg.profiles:
             await self._poll_profile(name)
         for poll_id in self.cfg.polls:
-            await self._poll_poll(poll_id)
+            try:
+                await self._poll_poll(poll_id)
+            except Exception as e:        # one bad poll must not hold back the profiles' notices
+                self._warn_once(f"pollerr:{poll_id}", f"could not read poll {poll_id!r}: {type(e).__name__}")
 
     async def _poll_profile(self, name: str) -> None:
         profile, problem = monitor.get_profile(name)
         if problem:                                  # missing, disabled or invalid: nothing from it may go out
             self._warn_once(f"profile:{name}", f"profile {name!r} cannot be used ({problem.get('error_code')}); no events from it")
+            # forget the position: when the profile comes back it starts at the end instead of replaying what arrived
+            self.scan["profiles"].pop(name, None)
+            self.state["profiles"].pop(name, None)
+            self.pending = [p for p in self.pending if p.profile != name]
             return
         self._warned.discard(f"profile:{name}")
         try:
             if name not in self.scan["profiles"]:    # first time: start at the end, do not replay history
                 self.scan["profiles"][name] = await asyncio.to_thread(monitor.current_cursor)
                 self.state["profiles"][name] = self.scan["profiles"][name]
+                await asyncio.to_thread(self._save)
+                return
+            newest = await asyncio.to_thread(monitor.current_cursor)
+            if self.scan["profiles"][name] > newest:     # the database was recreated or restored: start again at the end
+                self._warn_once(f"ahead:{name}", f"the stored position of profile {name!r} is ahead of the messages; restarting at the end")
+                self.scan["profiles"][name] = self.state["profiles"][name] = newest
                 await asyncio.to_thread(self._save)
                 return
             result = await asyncio.to_thread(monitor.scan, profile, self.scan["profiles"][name], SCAN_LIMIT)
@@ -315,6 +335,8 @@ class Engine:
         self._warned.discard(f"poll:{poll_id}")
         results = answer["results"]
         closed = bool(results.get("closed"))
+        if known is not None and not isinstance(known.get("cursor"), int):
+            known = None
         if known is None:                            # first time: remember where it is, announce nothing
             self.scan["polls"][poll_id] = {"cursor": int(answer["cursor"]), "closed": closed}
             self.state["polls"][poll_id] = dict(self.scan["polls"][poll_id])
@@ -384,8 +406,8 @@ async def notify_loop(cfg: Config, engine: Engine, send: Callable, initialized, 
                     batch = engine.take()[:cfg.max_batch]
                     content, meta = describe(batch, cfg.include_excerpt, cfg.max_batch)
                     await send(content, meta)
-                    engine.emitted(batch)
                     last_sent = now
+                    engine.emitted(batch)
                     first_pending = now if engine.pending else None
         except anyio.get_cancelled_exc_class():
             raise

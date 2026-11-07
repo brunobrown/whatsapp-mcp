@@ -99,6 +99,7 @@ def conn(tmp_path, monkeypatch):
 def profiles(tmp_path, **profile):
     (tmp_path / "profiles.json").write_text(json.dumps({"profiles": {"support": {
         "targets": ["me"], "max_event_age_minutes": 10_000_000, **profile}}}))
+    os.chmod(tmp_path / "profiles.json", 0o600)
 
 
 @pytest.fixture
@@ -157,6 +158,33 @@ def test_an_allowed_event_arrives_as_metadata_only(conn, tmp_path, clients):  # 
     assert "untrusted_content" not in note["meta"]
 
 
+def test_nothing_is_sent_before_the_client_says_initialized(conn, tmp_path, clients):  # CHAN-03
+    profiles(tmp_path)
+    c = start(tmp_path, clients, FAST)
+    c.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}})
+    time.sleep(0.6)
+    add(conn, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
+
+    assert c.channel_notes(2.0) == []                  # initialized not sent yet
+    c.send(method="notifications/initialized")
+    notes = c.channel_notes(5)
+    # the first look happens after initialized, so a message that arrived earlier is history, not news
+    assert notes == []
+
+
+def test_a_permission_request_from_the_client_is_ignored(conn, tmp_path, clients):  # CHAN-13
+    profiles(tmp_path)
+    c = start(tmp_path, clients, FAST)
+    c.handshake()
+    c.send(method="notifications/claude/channel/permission_request", params={"request_id": "r1", "tool_name": "send_message"})
+    time.sleep(0.3)
+    answer = c.request("tools/list")
+
+    assert "tools" in answer["result"]                                 # the server is alive and unchanged
+    assert c.channel_notes(1.0) == []
+    assert c.proc.poll() is None
+
+
 def test_filtered_events_send_nothing(conn, tmp_path, clients):  # CHAN-04
     profiles(tmp_path, chats=[GROUP], senders={"deny": [ANA]})
     c = start(tmp_path, clients, FAST)
@@ -170,11 +198,21 @@ def test_filtered_events_send_nothing(conn, tmp_path, clients):  # CHAN-04
 
 
 def test_old_events_and_a_disabled_profile_send_nothing(conn, tmp_path, clients):  # CHAN-04
-    profiles(tmp_path, max_event_age_minutes=1, enabled=False)
+    profiles(tmp_path, max_event_age_minutes=1)
     c = start(tmp_path, clients, FAST)
     c.handshake()
     time.sleep(0.6)
     add(conn, "STALE", f"@{ME} hi", sender=ANA, chat=GROUP)       # the fixture dates are far in the past
+
+    assert c.channel_notes(2.5) == []
+
+
+def test_a_disabled_profile_sends_nothing_though_the_message_would_match(conn, tmp_path, clients):  # CHAN-04
+    profiles(tmp_path, enabled=False)                            # a recent-enough age window: only "enabled" hides it
+    c = start(tmp_path, clients, FAST)
+    c.handshake()
+    time.sleep(0.6)
+    add(conn, "M1", f"@{ME} hi", sender=ANA, chat=GROUP)
 
     assert c.channel_notes(2.5) == []
 
