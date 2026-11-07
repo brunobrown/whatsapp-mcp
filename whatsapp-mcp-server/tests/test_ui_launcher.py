@@ -29,6 +29,11 @@ def test_launcher_uses_port_from_environment():  # UI-04
     assert launcher.resolve({"WHATSAPP_UI_PORT": "9123"}).port == 9123
 
 
+@pytest.mark.parametrize("port, expected", [("1024", 1024), ("65535", 65535), (" 9000 ", 9000)])
+def test_the_first_and_last_usable_ports_are_accepted(port, expected):  # UI-04 (1024 to 65535)
+    assert launcher.resolve({"WHATSAPP_UI_PORT": port}).port == expected
+
+
 @pytest.mark.parametrize("port", ["abc", "0", "80", "1023", "65536", "-1", "8765.5"])
 def test_a_port_that_is_not_usable_is_refused_not_replaced_by_the_default(port):  # UI-04
     with pytest.raises(launcher.LaunchError, match="WHATSAPP_UI_PORT"):
