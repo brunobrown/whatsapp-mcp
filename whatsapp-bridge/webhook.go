@@ -134,6 +134,9 @@ func parseWebhookConfig(data []byte, restPort int) (*webhookConfig, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, errors.New("webhooks.json is not valid: " + redactJSONError(err))
 	}
+	if _, err := dec.Token(); err != io.EOF { // nothing may follow the object
+		return nil, errors.New("webhooks.json is not valid: unexpected data after the JSON object")
+	}
 	if f.Enabled != nil && !*f.Enabled {
 		return &webhookConfig{Disabled: true}, nil
 	}

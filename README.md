@@ -418,7 +418,7 @@ MCP cannot push events to an agent, so by default the agent asks (`monitor_messa
 | `name`, `url`, `secret`, `events` | Required. `events` lists names from the table below, or `["*"]` for all. The secret has at least 32 bytes (use random ASCII, such as the output of `openssl rand -hex 32`) |
 | `chats` | Optional. Only events of these chats (a JID or its number); events without a chat, like `connection`, always pass. **Use it together with `include_content`** |
 | `include_content` | Default `false`: the event carries ids, type, chat, sender, time and `content_length`, **not** the text, the question or the option names, the emoji or the file name. `true` adds them and marks the event `untrusted_content` |
-| `include_own` | Default `false`: what this account sends is not delivered, so an agent does not answer itself |
+| `include_own` | Default `false`: what this account does from another device (your phone) is not delivered, so an agent does not answer itself. What the bridge sends through the MCP tools (`send_message`, `send_poll`, `vote_poll`, `react_to_message`) never becomes an event, with or without this option: WhatsApp does not echo it back to the bridge |
 | `allow_private_network` | Default `false`. See the destination rules |
 | `"enabled": false` (top level) | Turns everything off |
 
