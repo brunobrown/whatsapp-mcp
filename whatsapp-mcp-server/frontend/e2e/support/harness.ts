@@ -68,7 +68,7 @@ function assertPagesAreCurrent(): void {
 }
 
 /** The command that runs the interface's Python: the project's venv when there is one, else uv. */
-function pythonCommand(): { command: string; args: string[] } {
+export function pythonCommand(): { command: string; args: string[] } {
   const override = process.env["WHATSAPP_E2E_PYTHON"];
   if (override) return { command: override, args: [] };
   const venv = join(SERVER_DIR, ".venv", "bin", "python");
@@ -77,7 +77,7 @@ function pythonCommand(): { command: string; args: string[] } {
 }
 
 /** The environment of the interface process: nothing from the developer's own WHATSAPP_* leaks in. */
-function cleanEnvironment(): NodeJS.ProcessEnv {
+export function cleanEnvironment(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (!name.startsWith("WHATSAPP_") && !name.startsWith("E2E_")) env[name] = value;
