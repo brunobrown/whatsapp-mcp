@@ -358,6 +358,38 @@ type SendPollRequest struct {
 	AllowMultiple  *bool    `json:"allow_multiple,omitempty"`
 	AllowAddOption bool     `json:"allow_add_option,omitempty"`
 	HideVoterNames bool     `json:"hide_voter_names,omitempty"`
+	// QuizAnswer makes the poll a quiz whose right answer is that option; ClosesInMinutes closes it after that time.
+	QuizAnswer      string `json:"quiz_answer,omitempty"`
+	ClosesInMinutes int    `json:"closes_in_minutes,omitempty"`
+}
+
+const maxPollClosesInMinutes = 7 * 24 * 60 // our own ceiling, not WhatsApp's
+
+// quizOption is the option QuizAnswer names (ignoring case and edge spaces), in the spelling of the poll.
+func quizOption(req SendPollRequest) (string, error) {
+	want := strings.ToLower(strings.TrimSpace(req.QuizAnswer))
+	for _, option := range req.Options {
+		if strings.ToLower(strings.TrimSpace(option)) == want && want != "" {
+			return option, nil
+		}
+	}
+	return "", fmt.Errorf("the quiz answer %q is not one of the options", req.QuizAnswer)
+}
+
+// validatePollExtras checks the quiz answer and the deadline.
+func validatePollExtras(req SendPollRequest) error {
+	if req.QuizAnswer != "" {
+		if _, err := quizOption(req); err != nil {
+			return err
+		}
+		if req.AllowAddOption {
+			return errors.New("a quiz cannot let people add options")
+		}
+	}
+	if req.ClosesInMinutes < 0 || req.ClosesInMinutes > maxPollClosesInMinutes {
+		return fmt.Errorf("closes_in_minutes must be from 1 to %d", maxPollClosesInMinutes)
+	}
+	return nil
 }
 
 // buildPollMessage makes the poll creation message. The message secret is what lets the votes be
@@ -380,6 +412,15 @@ func buildPollMessage(req SendPollRequest) *waE2E.Message {
 	if req.HideVoterNames {
 		creation.HideParticipantName = proto.Bool(true)
 	}
+	if answer, err := quizOption(req); err == nil && req.QuizAnswer != "" {
+		creation.PollType = waE2E.PollType_QUIZ.Enum()
+		creation.CorrectAnswer = &waE2E.PollCreationMessage_Option{OptionName: proto.String(answer)}
+		creation.SelectableOptionsCount = proto.Uint32(1)
+	}
+	if req.ClosesInMinutes > 0 {
+		// milliseconds: seconds made the app show "Poll ended" at once (checked in the group on 2026-11-07)
+		creation.EndTime = proto.Int64(time.Now().Add(time.Duration(req.ClosesInMinutes) * time.Minute).UnixMilli())
+	}
 	secret := make([]byte, 32)
 	rand.Read(secret)
 	return &waE2E.Message{
@@ -398,6 +439,9 @@ func sendPoll(env pollEnv, store *MessageStore, req SendPollRequest, logger waLo
 		return failure(http.StatusBadRequest, "Recipient is required")
 	}
 	if err := validatePoll(req.Question, req.Options); err != nil {
+		return failure(http.StatusBadRequest, "Invalid poll: %v", err)
+	}
+	if err := validatePollExtras(req); err != nil {
 		return failure(http.StatusBadRequest, "Invalid poll: %v", err)
 	}
 	if !env.connected() {

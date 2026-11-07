@@ -856,3 +856,98 @@ func TestDeleteMessageAlsoRemovesTheDownloadedFile(t *testing.T) { // DEL-01
 		t.Error("both messages must be gone from the database")
 	}
 }
+
+func TestSendPollQuizSendsTheCorrectAnswerAndASingleChoice(t *testing.T) { // QUIZ-01
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	status, resp := sendPoll(f.env, store, SendPollRequest{
+		Recipient: "chat@g.us", Question: "Capital?", Options: []string{"Brasília", "Rio"}, QuizAnswer: "  brasília ",
+	}, waLog.Noop)
+
+	if status != http.StatusOK || !resp.Success {
+		t.Fatalf("sendPoll = %d %+v, want 200 success", status, resp)
+	}
+	creation := f.sent[0].GetPollCreationMessage()
+	if creation.GetPollType() != waE2E.PollType_QUIZ {
+		t.Errorf("pollType = %v, want QUIZ", creation.GetPollType())
+	}
+	if got := creation.GetCorrectAnswer().GetOptionName(); got != "Brasília" {
+		t.Errorf("correct answer = %q, want the spelling of the option (Brasília)", got)
+	}
+	if creation.GetSelectableOptionsCount() != 1 {
+		t.Errorf("selectable = %d, want 1: a quiz takes one answer", creation.GetSelectableOptionsCount())
+	}
+}
+
+func TestSendPollQuizIsSingleChoiceEvenWhenMultipleIsAsked(t *testing.T) { // QUIZ-03
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	sendPoll(f.env, store, SendPollRequest{
+		Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}, QuizAnswer: "A", AllowMultiple: boolPtr(true),
+	}, waLog.Noop)
+
+	if got := f.sent[0].GetPollCreationMessage().GetSelectableOptionsCount(); got != 1 {
+		t.Errorf("selectable = %d, want 1", got)
+	}
+}
+
+func TestSendPollDeadlineIsInMillisecondsFromTheBridgeClock(t *testing.T) { // END-01
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	before := time.Now()
+	sendPoll(f.env, store, SendPollRequest{
+		Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}, ClosesInMinutes: 30,
+	}, waLog.Noop)
+	after := time.Now()
+
+	end := f.sent[0].GetPollCreationMessage().GetEndTime()
+	low, high := before.Add(30*time.Minute).UnixMilli(), after.Add(30*time.Minute).UnixMilli()
+	if end < low || end > high {
+		t.Errorf("endTime = %d, want between %d and %d (milliseconds, now + 30 min)", end, low, high)
+	}
+	if f.sent[0].GetPollCreationMessage().GetPollType() != waE2E.PollType_POLL {
+		t.Error("a poll with a deadline is not a quiz")
+	}
+}
+
+func TestSendPollWithoutQuizOrDeadlineLeavesTheFieldsOut(t *testing.T) { // COMPAT-01
+	store := newTestStore(t)
+	f := newFakePollClient()
+
+	sendPoll(f.env, store, SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}, waLog.Noop)
+
+	creation := f.sent[0].GetPollCreationMessage()
+	if creation.PollType != nil || creation.CorrectAnswer != nil || creation.EndTime != nil {
+		t.Errorf("message = %+v, want no pollType, correctAnswer or endTime", creation)
+	}
+}
+
+func TestSendPollRefusesABadQuizOrDeadlineBeforeSending(t *testing.T) { // BRIDGE-01
+	store := newTestStore(t)
+	base := SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"A", "B"}}
+	for name, mutate := range map[string]func(*SendPollRequest){
+		"answer not among the options": func(r *SendPollRequest) { r.QuizAnswer = "C" },
+		"quiz that lets people add":    func(r *SendPollRequest) { r.QuizAnswer = "A"; r.AllowAddOption = true },
+		"negative deadline":            func(r *SendPollRequest) { r.ClosesInMinutes = -1 },
+		"deadline over seven days":     func(r *SendPollRequest) { r.ClosesInMinutes = 10081 },
+	} {
+		req := base
+		mutate(&req)
+		f := newFakePollClient()
+		status, resp := sendPoll(f.env, store, req, waLog.Noop)
+		if status != http.StatusBadRequest || resp.Success || len(f.sent) != 0 {
+			t.Errorf("%s: sendPoll = %d %+v (sent %d), want 400 and nothing sent", name, status, resp, len(f.sent))
+		}
+	}
+	for name, minutes := range map[string]int{"one minute": 1, "seven days": 10080} {
+		req := base
+		req.ClosesInMinutes = minutes
+		f := newFakePollClient()
+		if status, _ := sendPoll(f.env, store, req, waLog.Noop); status != http.StatusOK {
+			t.Errorf("%s: status = %d, want 200 (limit is inclusive)", name, status)
+		}
+	}
+}
