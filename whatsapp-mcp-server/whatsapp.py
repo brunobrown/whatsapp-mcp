@@ -1287,6 +1287,43 @@ def get_connection_status() -> dict:
     return {**status, "bridge_reachable": True}
 
 
+def _bridge_error(code: str, message: str) -> dict:
+    return {"success": False, "error_code": code, "message": message}
+
+
+def get_webhook_status() -> dict:
+    """The bridge's webhooks: enabled, the reason it is off if the file was refused, and per endpoint the counters."""
+    status = get_connection_status()
+    if status.get("bridge_reachable") is False:
+        return _bridge_error(status.get("error_code", "BRIDGE_UNREACHABLE"), status.get("message", ""))
+    if status.get("error_code"):
+        return _bridge_error(status["error_code"], status.get("message", ""))
+    hooks = status.get("webhooks")
+    if not isinstance(hooks, dict):  # a bridge from before webhooks existed
+        hooks = {"enabled": False, "endpoints": []}
+    return {"success": True, "webhooks": hooks}
+
+
+def test_webhook(name: str) -> dict:
+    """Send one signed ping to the named endpoint and report the answer of the first attempt."""
+    if not isinstance(name, str) or not name.strip():
+        return _bridge_error("INVALID_ARGUMENT", "name must be the name of an endpoint of webhooks.json")
+    try:
+        response = requests.post(f"{WHATSAPP_API_BASE_URL}/webhooks/test", json={"name": name},
+                                 headers=localconfig.auth_headers(), timeout=_STATUS_TIMEOUT_SECONDS * 2)
+    except requests.RequestException as e:
+        return _bridge_error("BRIDGE_UNREACHABLE", f"Could not reach the WhatsApp bridge: {e}")
+    if _refused(response):
+        return _bridge_error(localconfig.BRIDGE_UNAUTHORIZED, localconfig.UNAUTHORIZED_HINT)
+    try:
+        body = response.json()
+        if response.status_code not in (200, 404) or not isinstance(body, dict):
+            raise ValueError
+    except ValueError:
+        return _bridge_error("UNKNOWN", f"The bridge answered HTTP {response.status_code} with an unexpected body")
+    return body
+
+
 _BATCH_TYPES = ("image", "video", "audio", "document")  # what the bridge can download
 _BATCH_MAX_ITEMS = 200
 

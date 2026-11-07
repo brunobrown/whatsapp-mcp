@@ -70,6 +70,8 @@ def arguments(files):
         "monitor_messages": {"targets": ["5511999990000"]},
         "get_group_participants": {"chat_jid": GROUP},
         "get_connection_status": {},
+        "get_webhook_status": {},
+        "test_webhook": {"name": "local"},
         "send_message": {"recipient": GROUP, "message": "hi"},
         "send_file": {"recipient": GROUP, "media_path": files["doc"]},
         "send_audio_message": {"recipient": GROUP, "media_path": files["audio"]},
