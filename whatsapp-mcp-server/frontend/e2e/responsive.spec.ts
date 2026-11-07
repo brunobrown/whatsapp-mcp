@@ -99,6 +99,8 @@ test("MIG-07 a full edit and save is done by keyboard alone, every stop with a v
   await expect(page.getByRole("link", { name: "Skip to the content" })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page.locator("#content")).toBeFocused();
+  // The section loads after the shell: a Tab pressed before its fields exist would leave the page.
+  await expect(page.getByRole("radio", { name: "allowlist" })).toBeVisible();
   // Mode: the arrow keys choose inside the group.
   await page.keyboard.press("Tab");
   const mode = await focused(page);
