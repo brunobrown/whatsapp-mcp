@@ -24,6 +24,7 @@ import { useEffect, useRef } from "react";
 import { ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useSessionWatch } from "@/features/auth/useSessionWatch";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
 import { useMediaQuery, WIDE_QUERY } from "@/lib/useMediaQuery";
@@ -203,6 +204,7 @@ function DetailPane({ active, showBack, onBack }: { active: SectionSummary | und
  */
 export function ShellLayout() {
   const t = useT();
+  useSessionWatch();
   const wide = useMediaQuery(WIDE_QUERY);
   const pane = useUiStore((state) => state.mobilePane);
   const setPane = useUiStore((state) => state.setMobilePane);

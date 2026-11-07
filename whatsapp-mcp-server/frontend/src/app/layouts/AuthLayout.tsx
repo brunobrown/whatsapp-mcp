@@ -6,8 +6,8 @@ export function AuthLayout({ title, intro, children }: { title: string; intro?: 
   const t = useT();
   return (
     <div className="min-h-dvh w-full overflow-x-hidden bg-surface">
-      <div className="h-52 bg-accent-solid px-6 pt-8 text-on-accent sm:h-56">
-        <p className="m-0 mx-auto max-w-md text-sm font-medium tracking-wide uppercase">{t("app.name")}</p>
+      <div className="h-52 bg-accent-solid px-4 pt-8 text-on-accent sm:h-56">
+        <p className="m-0 mx-auto max-w-md px-6 text-sm font-medium tracking-wide uppercase">{t("app.name")}</p>
       </div>
       <main className="mx-auto -mt-28 w-full max-w-md px-4 pb-10 sm:-mt-32">
         <div className="rounded-card border border-line bg-panel p-6 shadow-sm sm:p-8">

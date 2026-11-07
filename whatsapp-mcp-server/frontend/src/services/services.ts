@@ -128,7 +128,7 @@ const opsPolling = {
 } as const;
 
 export function useSession() {
-  return useQuery({ queryKey: keys.session, queryFn: () => sessionService.get(), retry: false, staleTime: 0 });
+  return useQuery({ queryKey: keys.session, queryFn: () => sessionService.get(), retry: false, staleTime: 30_000 });
 }
 
 export function useSections() {
