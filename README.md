@@ -467,6 +467,51 @@ class Hook(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 ```
 
+### Waking an agent on an event
+
+MCP is request and response: the server cannot interrupt an idle session. Two commands in `whatsapp-mcp-server/` print **one line per event** for a tool that wakes the agent on each line. Both use the same shape and never print message text, names, questions or options (those come from other people; the agent reads them with the read tools, which mark them untrusted):
+
+```
+event=message profile=support chat=120363000000000000@g.us sender=5511999990000 id=3EB0ABC trigger=mention mode=draft ts=2026-11-07T10:00:00-03:00
+event=poll_vote poll=3EB0DEF chat=120363000000000000@g.us options=1 retracted=false
+state=error code=DIRECTORY_UNAVAILABLE
+```
+
+Values are cut to letters, digits and `@ . : + , _ -`, so a hostile value cannot add a space, a line break or a key. Lines that start with `state=` are diagnostics (`started`, `error`, `recovered`, `stopped`) and also go to stdout.
+
+**`watch.py`** follows a monitor profile (the profile's chats, senders, triggers and maximum age decide what becomes a line; a disabled or invalid profile prints `state=error` and exits with status 2) or the votes of a poll:
+
+```bash
+uv run watch.py --profile support               # new events only; resumes from the saved position
+uv run watch.py --profile support --since now    # ignore what the saved position says
+uv run watch.py --profile support --since 1234   # from an explicit cursor
+uv run watch.py --poll <message_id>              # one line per vote change
+```
+
+The position is kept in `watch_profile_<name>.cursor` (or `watch_poll_<id>.cursor`) in the configuration directory, mode 0600; the command refuses a file other users can read (`CURSOR_FILE_OPEN`). Without `--since`, a first run starts at the end, so history is not replayed. If the database cannot be read it prints `state=error`, retries with a growing wait (2 s up to 30 s) and prints `state=recovered`; no event is lost, because the position only moves after the lines are printed. SIGINT and SIGTERM save the position, print `state=stopped` and exit 0. `watch` never sends, votes or reacts: an answer still goes through `monitor_reply` and the send policy.
+
+**`webhook_receiver.py`** receives the bridge's [webhooks](#webhooks), checks the HMAC-SHA256 signature in constant time, refuses a timestamp more than 5 minutes off, deduplicates by `event_id` and prints the same kind of line. It listens on loopback only and refuses to start without a secret of at least 32 bytes or with the example value:
+
+```bash
+WEBHOOK_SECRET=<the endpoint's secret> python3 webhook_receiver.py --port 9000
+# or: python3 webhook_receiver.py --secret-file ~/.config/whatsapp-mcp/hook.secret   (mode 0600)
+```
+
+**With Claude Code's `Monitor` tool**: ask the agent to start `uv run --directory /path/to/whatsapp-mcp/whatsapp-mcp-server watch.py --profile support` as a monitor. Each line wakes the session; the agent then reads the message with `get_message_context` and answers through `monitor_reply`. A monitor has a time limit (5 minutes by default, at most 30) and is not restarted by `--resume`, so ask the agent to start it again when it ends; the saved position makes that safe.
+
+**With a hook and `asyncRewake`**: a hook command with `"asyncRewake": true` runs in the background and, if it exits with code 2, wakes Claude with its output. Use it for a one-shot "wake me at the next event". `watch.py` is a long-running command, so for this use the receiver or a small wrapper that exits 2 after the first line.
+
+Which path to use:
+
+| Path | Needs | Good for | Limits |
+| ---- | ----- | -------- | ------ |
+| `Monitor` + `watch.py` | An open Claude Code session | A stream of events inside the session | Time limit per monitor; ends with the session |
+| Session cron (`/loop`, `CronCreate`) | An open session | Polling every minute or more | Minimum 1 minute; expires after 7 days |
+| Cloud routines | No open session | Scheduled work | Cannot reach a bridge on your machine |
+| Webhook + `webhook_receiver.py` | A program of yours running | Feeding another system or a wrapper | Not an agent by itself |
+
+The Claude Code facts above (limits of `Monitor`, `asyncRewake`) come from its documentation of 2026-11-07; check it before relying on them.
+
 ### Checking the bridge
 
 `get_connection_status` (or `GET http://127.0.0.1:8080/api/status`) returns `connected`, `logged_in`, `phone`, `version`, `started_at`, `uptime_seconds`, `last_event_at`, `last_message_at`, `last_connected_at`, `last_disconnected_at` (all in UTC, `null` if it has not happened since the bridge started) and `pending_media_retries`. If the bridge does not answer, the tool returns `connected=false`, `bridge_reachable=false`, `error_code=BRIDGE_UNREACHABLE`, the time of the newest stored message (`last_message_at`) and the last write to the bridge log (`last_log_at`).
