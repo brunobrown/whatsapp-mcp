@@ -42,6 +42,9 @@ beforeEach(() => {
   server.use(
     http.get("*/api/session", () => HttpResponse.json({ state: "authenticated", csrf: "c", idle_remaining: 900 })),
     http.get("*/api/sections", () => HttpResponse.json(sections)),
+    // /status now renders the status page, which asks the bridge; these tests are about the shell around it.
+    http.get("*/api/ops/status", () => HttpResponse.json({ unavailable: "unreachable", message: "x" })),
+    http.get("*/api/ops/counters", () => HttpResponse.json({ unavailable: "unreachable", message: "x" })),
   );
 });
 afterEach(() => {
