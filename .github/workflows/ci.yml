@@ -55,7 +55,7 @@ jobs:
       - name: Install
         run: uv sync --locked
       - name: Test
-        run: uv run pytest -q
+        run: uv run pytest -q --cov=ui --cov-fail-under=97
 
   frontend:
     name: Web interface
