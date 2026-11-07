@@ -533,3 +533,14 @@ def test_audit_bounds_chat_name_and_invalid_recipient_message(db, post, monkeypa
     out = main.send_message("a@b@" + "x" * 5000, "hi")
 
     assert len(out["message"]) < 600
+
+
+@pytest.mark.parametrize("placeholder", ["replace-with-your-own-value", "troque-por-um-valor-so-seu"])
+def test_a_placeholder_override_token_never_releases_a_blocked_send(db, post, placeholder):  # POLICY-16
+    # the value copied from an example file is public: sending it back must not release a blocked send
+    write_policy(None, mode="denylist", deny=[CLIENT], override_token=placeholder)
+
+    out = main.send_message(CLIENT, "hi", override_token=placeholder)
+
+    assert out["success"] is False and out["error_code"] == send_policy.BLOCKED
+    post.assert_not_called()

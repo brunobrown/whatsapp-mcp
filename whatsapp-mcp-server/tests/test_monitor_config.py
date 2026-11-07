@@ -162,11 +162,11 @@ EXAMPLE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.exam
 
 
 def test_the_example_file_is_valid_once_the_placeholder_token_is_replaced(config, monkeypatch):
-    config(open(EXAMPLE).read().replace("troque-por-um-valor-so-seu", "my-real-token"))
+    config(open(EXAMPLE).read().replace("replace-with-your-own-value", "my-real-token"))
 
     out = monitor.list_profiles()
 
-    assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["suporte-software", "acompanhar-numero", "assistant"]
+    assert out["success"] is True and [p["name"] for p in out["profiles"]] == ["software-support", "follow-number", "assistant"]
 
 
 def test_the_example_file_is_refused_until_the_placeholder_token_is_changed(monkeypatch):  # CFG-03
@@ -182,3 +182,13 @@ def test_weak_or_mistyped_approval_tokens_are_refused(config, token):  # CFG-03
     config(profile(approval_token=token))
 
     assert monitor.list_profiles()["error_code"] == "MONITOR_CONFIG_INVALID"
+
+
+@pytest.mark.parametrize("placeholder", ["replace-with-your-own-value", "troque-por-um-valor-so-seu"])
+def test_every_example_placeholder_token_is_refused_even_the_one_of_earlier_versions(config, placeholder):  # CFG-03
+    # an install that copied an older example file still has its placeholder as the "real" token
+    config(profile(approval_token=placeholder))
+
+    out = monitor.list_profiles()
+
+    assert out["error_code"] == "MONITOR_CONFIG_INVALID" and "placeholder" in out["message"]
