@@ -106,6 +106,11 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	if _, err := db.Exec(reactionSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create reactions table: %v", err)
+	}
+
 	if _, err := db.Exec(pollSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create poll tables: %v", err)
@@ -795,6 +800,9 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 	// Encrypted envelopes (edits of a message, an option added to a poll, an edited poll question)
 	// change what is stored; they are not messages themselves.
 	if recordSecretEdit(messageStore, own, decrypt.secret, msg, logger) {
+		return
+	}
+	if recordReaction(messageStore, own, msg, logger) {
 		return
 	}
 	if !recordPoll(messageStore, own, decrypt.vote, msg, logger) {
@@ -1632,6 +1640,9 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 		return votePoll(pollClient, messageStore, req, logger)
 	}))
 
+	mux.HandleFunc("/api/react", pollEndpoint(func(req ReactRequest) (int, SendMessageResponse) {
+		return reactToMessage(pollClient, messageStore, req, logger)
+	}))
 	mux.HandleFunc("/api/delete_message", pollEndpoint(func(req DeleteMessageRequest) (int, SendMessageResponse) {
 		return deleteMessage(pollClient, messageStore, req, logger)
 	}))

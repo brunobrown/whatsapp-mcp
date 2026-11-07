@@ -290,6 +290,7 @@ type pollEnv struct {
 	// JID of a stored sender user (phone number or LID).
 	buildVote     func(poll *types.MessageInfo, options []string) (*waE2E.Message, error)
 	buildRevoke   func(chat types.JID, id string) *waE2E.Message
+	buildReaction func(chat, sender types.JID, id, emoji string) *waE2E.Message
 	resolveSender func(user string) types.JID
 }
 
@@ -301,6 +302,9 @@ func newPollEnv(client *whatsmeow.Client) pollEnv {
 		},
 		buildVote: func(poll *types.MessageInfo, options []string) (*waE2E.Message, error) {
 			return client.BuildPollVote(context.Background(), poll, options)
+		},
+		buildReaction: func(chat, sender types.JID, id, emoji string) *waE2E.Message {
+			return client.BuildReaction(chat, sender, id, emoji)
 		},
 		buildRevoke: func(chat types.JID, id string) *waE2E.Message {
 			return client.BuildRevoke(chat, types.EmptyJID, id) // an empty sender revokes our own message
