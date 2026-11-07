@@ -158,11 +158,11 @@ function SectionForm({ sectionId }: { sectionId: string }) {
                     focusField(field.key);
                   }}
                 >
-                  {t("section.summary.item", {
-                    label: labelOf(field),
-                    message: errors[field.key] ?? errors[errorKeys.find((key) => ownerOf(key) === field.key) ?? ""] ?? "",
-                  })}
+                  {labelOf(field)}
                 </button>
+                {t("section.summary.message", {
+                  message: errors[field.key] ?? errors[errorKeys.find((key) => ownerOf(key) === field.key) ?? ""] ?? "",
+                })}
               </li>
             ))}
           </ul>

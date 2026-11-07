@@ -340,7 +340,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
               }}
             >
               <RotateCcw aria-hidden="true" />
-              {t("field.restore")}
+              {t("field.restoreButton")}
             </Button>
           ) : null}
         </div>

@@ -172,6 +172,15 @@ describe("the default beside a value that is no longer it (CFG-01)", () => {
   });
 });
 
+describe("label in name (WCAG 2.5.3)", () => {
+  it("the restore button's accessible name contains the text it shows", () => {
+    render(<Harness schema={field({ label: "Mode" })} initial="x" state={own} onRestore={vi.fn()} />);
+    const button = screen.getByRole("button", { name: "Restore the default of Mode" });
+    expect(button.textContent).toBe("Restore the default");
+    expect(button.getAttribute("aria-label")).toContain(button.textContent);
+  });
+});
+
 describe("help, origin and errors", () => {
   it("links the help text to the control", () => {
     render(<Harness schema={field({ help: "Where files go." })} initial="" />);

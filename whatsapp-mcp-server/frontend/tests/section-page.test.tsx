@@ -247,7 +247,10 @@ describe("saving", () => {
       expect(field("Name")).toHaveFocus();
     });
     expect(field("Limit")).toHaveValue("5z");
-    await userEvent.click(within(summary).getByRole("button", { name: "Go to Limit" }));
+    const goToLimit = within(summary).getByRole("button", { name: "Go to Limit" });
+    expect(goToLimit.getAttribute("aria-label")).toContain(goToLimit.textContent);
+    expect(summary).toHaveTextContent("Limit: must be a whole number");
+    await userEvent.click(goToLimit);
     expect(field("Limit")).toHaveFocus();
   });
 
