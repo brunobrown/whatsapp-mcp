@@ -36,7 +36,7 @@ export default defineConfig(
     rules: { "no-restricted-syntax": literalTextRule },
   },
   {
-    files: ["*.config.ts"],
+    files: ["*.config.ts", "e2e/**/*.ts"],
     languageOptions: { globals: { ...globals.node } },
   },
 );
