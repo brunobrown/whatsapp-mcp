@@ -765,6 +765,7 @@ def monitor_reply(
     return monitor.monitor_reply(profile, chat_jid, message_id, text, approval_token, dry_run)
 
 @mcp.tool(annotations=READ_ONLY)
+@tainting()
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     """List the participants of a WhatsApp group with their name, phone number, LID and admin status.
 

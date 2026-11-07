@@ -302,6 +302,7 @@ def test_a_person_under_phone_and_lid_is_one_chat(world, bridge):  # TAINT-03
     ("get_poll_results", {"message_id": "POLL1", "chat_jid": ATTACKER_CHAT}), ("list_polls", {"chat_jid": ATTACKER_CHAT}),
     ("get_message_reactions", {"message_id": "PRIV1", "chat_jid": PRIVATE_CHAT}),
     ("export_conversation", {"chat_jid": PRIVATE_CHAT}),
+    ("save_conversation_export", {"chat_jid": PRIVATE_CHAT, "save_as": "taint-check"}),
 ])
 def test_every_reader_that_hands_over_other_peoples_text_taints_the_session(world, bridge, reader, args):  # TAINT-01, INJ-02
     out = getattr(main, reader)(**args)
@@ -523,3 +524,51 @@ def test_metrics_do_not_carry_the_malicious_text(world):  # INJ-03
 def test_every_event_line_value_is_in_the_safe_alphabet():  # INJ-03
     for payload in PAYLOADS:
         assert "\n" not in eventline.clean(payload) and " " not in eventline.clean(payload)
+
+
+def test_the_participants_of_a_group_taint_that_group(world, bridge):  # TAINT-01, INJ-02
+    reply = mock.Mock()
+    reply.status_code = 200
+    reply.json.return_value = {"success": True, "participants": [{"jid": "5511900000001@s.whatsapp.net", "name": "Someone"}]}
+    reply.text = "{}"
+    with mock.patch("whatsapp.requests.post", return_value=reply):
+        out = main.get_group_participants(PRIVATE_CHAT)
+    assert out
+    assert main.send_message(OTHER_CHAT, "x")["error_code"] == "SEND_BLOCKED_BY_SESSION_TAINT"
+
+
+@pytest.mark.parametrize("destination", [PRIVATE_CHAT.upper(), PRIVATE_CHAT.replace("@g.us", "@G.US"), "Private group",
+                                         " " + PRIVATE_CHAT + " "])
+def test_another_way_of_writing_the_destination_does_not_get_around_the_taint(world, bridge, destination):  # TAINT-02
+    main.list_messages(chat_jid=OTHER_CHAT)
+    out = main.send_message(destination, "x")
+    assert out["success"] is False and out["error_code"] in ("SEND_BLOCKED_BY_SESSION_TAINT", "RECIPIENT_INVALID",
+                                                             "RECIPIENT_NOT_FOUND")
+    assert reached(bridge) == []
+
+
+def test_the_chat_name_of_the_chat_that_was_read_is_the_same_chat(world, bridge):  # TAINT-03
+    main.list_messages(chat_jid=PRIVATE_CHAT)
+    assert main.send_message("Private group", "x")["success"] is True
+
+
+def test_the_webhook_ping_and_the_monitor_reply_refuse_directly_in_read_only(world, bridge, monkeypatch):  # RO-04
+    monkeypatch.setenv("WHATSAPP_MCP_MODE", "read_only")
+    assert main.test_webhook("any")["error_code"] == "READ_ONLY_MODE"
+    (world / "profiles.json").write_text(json.dumps({"profiles": {"p": {"targets": ["me"], "approval_token": "owner-token-1"}}}))
+    os.chmod(world / "profiles.json", 0o600)
+    out = main.monitor_reply("p", ATTACKER_CHAT, "ATK0", "x", approval_token="owner-token-1")
+    assert out["success"] is False and bridge == []
+
+
+def test_no_registered_tool_changes_the_taint(world, bridge):  # TAINT-08
+    """Whatever the name, calling a tool with harmless arguments never lowers what the session has read."""
+    main.list_messages(chat_jid=PRIVATE_CHAT)
+    before = taint.snapshot()
+    safe = {"get_monitor_profiles": {}, "get_metrics": {}, "list_pending_drafts": {}, "get_webhook_status": {},
+            "discard_pending_draft": {"draft_id": "d_none"}, "get_connection_status": {}}
+    for name, args in safe.items():
+        getattr(main, name)(**args)
+    for name in (t.name for t in asyncio.run(main.mcp.list_tools())):
+        for state, items in taint.snapshot().items():
+            assert set(before[state]) <= set(items), name

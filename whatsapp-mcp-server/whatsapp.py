@@ -1329,6 +1329,8 @@ def get_webhook_status() -> dict:
 
 def test_webhook(name: str) -> dict:
     """Send one signed ping to the named endpoint and report the answer of the first attempt."""
+    if server_mode.is_read_only():       # the ping leaves for another system: not from a read-only server
+        return _bridge_error(server_mode.READ_ONLY_MODE, server_mode.HINT)
     if not isinstance(name, str) or not name.strip():
         return _bridge_error("INVALID_ARGUMENT", "name must be the name of an endpoint of webhooks.json")
     try:
