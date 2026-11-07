@@ -149,6 +149,10 @@ class Section:
     validate: Callable[[Dict[str, Any]], List[Problem]]
     description: str = ""
     restart: Optional[str] = None             # None, "bridge" or "server": which process must restart for a change to apply
+    # The form holds flat values by field key; the file may be shaped otherwise. decode: file -> form values;
+    # encode: (form values, the file as it was) -> the file to write. Both are the identity by default.
+    decode: Callable[[Dict[str, Any]], Dict[str, Any]] = lambda file_values: file_values
+    encode: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]] = lambda form_values, previous: form_values
 
     def __post_init__(self):
         if not _ID.fullmatch(self.id or ""):
