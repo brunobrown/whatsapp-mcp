@@ -66,6 +66,13 @@ class Field:
         if self.id_key is not None and self.id_key not in keys:
             raise ValueError(f"field {self.key!r}: id_key {self.id_key!r} is not one of its fields")
 
+    def sub(self, key: str) -> "Field":
+        """The field of a record by its key."""
+        for f in self.fields:
+            if f.key == key:
+                return f
+        raise KeyError(key)
+
     def check(self, value: Any) -> Optional[str]:
         """Why value is not acceptable for this field (in Portuguese, never repeating the value), or None."""
         if value is None:
