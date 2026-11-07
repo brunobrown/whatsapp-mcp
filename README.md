@@ -8,7 +8,7 @@ It connects to your **personal WhatsApp account** directly through the WhatsApp 
 
 > This repository is a fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) (MIT, by Luke Harries), which provided the first version: the Go bridge, the Python MCP server and the basic tools. This fork adds, among other things, encryption of the stored data, a local API token, a send policy with an audit log, real mentions and replies, polls, reactions, deletion, media auto-download, monitoring with auto-reply guardrails, webhooks, a Claude Code channel and a long list of fixes. See [What this fork adds](#what-this-fork-adds).
 
-> **Caution:** as with many MCP servers, this one is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): an agent that reads private data, reads text written by strangers and can send messages can be tricked by that text (prompt injection) into leaking data. Read [Security of your data](#security-of-your-data) and the [security guide for agents](docs/security-guide.md) before letting an agent answer on its own.
+> **Caution:** as with many MCP servers, this one is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): an agent that reads private data, reads text written by strangers and can send messages can be tricked by that text (prompt injection) into leaking data. Read [Security of your data](#security-of-your-data), [Protecting an agent from prompt injection](#protecting-an-agent-from-prompt-injection) and the [security guide for agents](docs/security-guide.md) before letting an agent answer on its own. For an agent that only needs to read, run the server in read-only mode.
 
 ## Contents
 
@@ -25,7 +25,7 @@ It connects to your **personal WhatsApp account** directly through the WhatsApp 
 | **Reading** | Dates with a time zone, structured output, pagination, replies linked into threads, captions, file name/type/size/forwarded information, real names behind phone numbers and LIDs, group participants, `list_chats` with the real last message, conversation export with optional anonymization |
 | **Sending** | A [send policy](#send-policy) (allow or deny lists, override token, audit log), real @mentions, replies, `dry_run`, polls (single or multiple choice, anonymous, quiz, deadline), reactions, deletion for everyone, voice messages |
 | **Media** | Automatic download on arrival (so links do not expire), real error codes, batch download, optional retention |
-| **Agents** | [Monitoring and auto-reply](#monitoring-and-auto-reply) with profiles, approval token, rate limits and audit; pending drafts; [webhooks](#webhooks) with an optional durable queue; a [Claude Code channel](#claude-code-channel-research-preview); a [`watch` command and a webhook receiver](#waking-an-agent-on-an-event) for Claude Code's `Monitor`; [metrics](#metrics) |
+| **Agents** | A [read-only mode](#protecting-an-agent-from-prompt-injection) and a session taint that stops what was read in one chat from being sent to another; [Monitoring and auto-reply](#monitoring-and-auto-reply) with profiles, approval token, rate limits and audit; pending drafts; [webhooks](#webhooks) with an optional durable queue; a [Claude Code channel](#claude-code-channel-research-preview); a [`watch` command and a webhook receiver](#waking-an-agent-on-an-event) for Claude Code's `Monitor`; [metrics](#metrics) |
 | **Operation** | `get_connection_status` (version, features, uptime, last events), a rotating log, `make run` and a hardened `systemd --user` unit, CI for Go and Python |
 
 ## Installation
@@ -292,6 +292,7 @@ Copy `whatsapp-mcp-server/monitor.example.json` to `monitor_profiles.json` (git-
 | `auto_senders` | in `auto` mode, only these senders are answered without a token | yes |
 | `limits` | `replies_per_chat_per_hour` (6), `replies_per_sender_per_hour` (4), `cooldown_seconds` (20), `max_reply_chars` (1500) | yes |
 | `max_event_age_minutes` | default 60 | yes |
+| `cross_chat_replies` | default `false`. See [Protecting an agent](#protecting-an-agent-from-prompt-injection): `true` lets a reply follow monitor reads of the profile's other chats | yes |
 | `instructions` | what to answer, tone, what never to reveal | **no, guidance only** |
 
 The server cannot judge what a reply *says*. Topic and tone live in `instructions`, which the agent receives with every batch of events, and in `topics`, which only filters what the agent sees. Do not rely on `instructions` to keep a secret.
@@ -637,6 +638,8 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_CHANNEL_CONFIG` | MCP server | `<config dir>/channel.json` | Path of the [channel](#claude-code-channel-research-preview) configuration. No file means off |
 | `WHATSAPP_CHANNEL_STATE` | MCP server | `<config dir>/channel_state.json` | Where the channel keeps its position and the ids it announced |
 | `WEBHOOK_SECRET` | `webhook_receiver.py` | - | The endpoint's secret for the reference receiver (or `--secret-file`) |
+| `WHATSAPP_MCP_MODE` | MCP server | `full` | `read_only` removes every tool that reaches other people; an unknown value means `read_only` (see [Protecting an agent](#protecting-an-agent-from-prompt-injection)) |
+| `WHATSAPP_SESSION_TAINT` | MCP server | `block` | `off` stops blocking a send to a chat other than the ones the session has read |
 | `WHATSAPP_DB_ENCRYPTION` | bridge | `on` | `on` encrypts the databases (and migrates plaintext ones at start); `off` keeps them in plain SQLite |
 | `WHATSAPP_DB_KEY` | bridge, MCP server | - | The master key of the databases, 64 hexadecimal characters; wins over the key file |
 | `WHATSAPP_DB_KEY_FILE` | bridge, MCP server | `<config dir>/db.key` | A file with the master key (it must exist) |
@@ -656,7 +659,7 @@ The bridge also needs to be **restarted after updating it** for new behaviour to
 Monitoring: `MONITOR_CONFIG_INVALID`, `PROFILE_NOT_FOUND`, `PROFILE_DISABLED`, `OWN_ACCOUNT_UNKNOWN`, `NOT_A_TRIGGER`, `APPROVAL_REQUIRED`, `RATE_LIMITED`, `RATE_LIMIT_UNVERIFIABLE`, `INVALID_ARGUMENT`.
 Reactions: `INVALID_EMOJI`, `MESSAGE_NOT_FOUND`, `AMBIGUOUS_MESSAGE`, `INVALID_ARGUMENT`.
 Polls: `INVALID_POLL`, `INVALID_VOTE`, `POLL_NOT_FOUND`, `AMBIGUOUS_MESSAGE`, `MESSAGE_NOT_FOUND`, `NOT_OWN_MESSAGE`, `INVALID_ARGUMENT`.
-Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
+Sending: `SEND_BLOCKED_BY_POLICY`, `SEND_BLOCKED_BY_SESSION_TAINT`, `READ_ONLY_MODE`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
 Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
 Status: `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
 Webhooks: `ENDPOINT_NOT_FOUND`, `INVALID_ARGUMENT`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
@@ -679,6 +682,27 @@ Everything the bridge stores is yours and stays on your machine. These are the p
 | What the log reveals | The log says who, when and what kind of message, never its text (`WHATSAPP_LOG_MESSAGES=true` turns the text on for debugging) |
 
 **Not protected:** downloaded media (images, audio, documents) and `bridge.log` are plain files, private to your user (`0600`) but not encrypted: use disk encryption (LUKS, FileVault, BitLocker) and `WHATSAPP_MEDIA_RETENTION_DAYS`. Malware running **as you** can read the key as the bridge does. The database is decrypted in memory while the bridge runs. Disk encryption is still the base layer, and this does not replace it.
+
+### Protecting an agent from prompt injection
+
+An agent that reads private data, reads text written by strangers and can send messages can be tricked by that text into passing the data on. Filters on the prompt do not close that hole; taking away one of the three legs does. Two measures do it here, and a test suite attacks them.
+
+**Read-only mode** (`WHATSAPP_MCP_MODE=read_only`). The server does not register the tools that reach other people (`send_message`, `send_file`, `send_audio_message`, `send_poll`, `vote_poll`, `react_to_message`, `delete_message`, `monitor_reply`, `test_webhook`), and the send path itself refuses with `READ_ONLY_MODE` as a second layer. It keeps reading, local files (drafts, exports) and media downloads. Give an agent that only has to read, summarize or search this instance: it has no way out. An unknown value of the variable means read-only, so a typo cannot open permissions. `get_connection_status` reports the `mode`. In an MCP client configuration:
+
+```json
+"env": { "WHATSAPP_MCP_MODE": "read_only" }
+```
+
+**Session taint** (on by default). The server remembers, for the life of the process (one client session), every chat whose content it handed to the agent. A send is allowed only if every chat read is the destination itself: answering where you read is fine, carrying what you read in one chat to another is blocked with `SEND_BLOCKED_BY_SESSION_TAINT`, before anything reaches the bridge. Reading two chats blocks sending to either; a read that does not say which chat it came from counts as all of them. There is no tool to clear it: restarting the server ends the session, so the agent cannot erase its own mark.
+- A single send can be released with the send policy's `override_token` (a deliberate speed bump like the rest, not a security boundary; the release is audited as an override). The monitor's `approval_token` does not release it.
+- `dry_run` is never blocked.
+- `monitor_reply` is held to the same rule: after the monitor delivered messages of two chats, a reply to either is blocked, because text in one chat could make the reply carry what the other said. The reply is allowed when the monitor delivered only the chat being answered (a profile limited to one chat, or `chats` with one entry). A profile that covers several chats and must keep answering can accept the risk with `"cross_chat_replies": true`: then what the monitor itself delivered from the profile's other chats is ignored for its replies (reads made with the ordinary tools, and ordinary sends, still count).
+- `WHATSAPP_SESSION_TAINT=off`, or `"session_taint": "off"` in `send_policy.json`, turns it off; the environment variable wins. Any other value means on.
+- It covers the readers that return other people's text (`list_messages`, `get_message_context`, `get_message_thread`, `list_chats`, `get_chat`, `get_contact_chats`, `get_direct_chat_by_contact`, `get_last_interaction`, `get_group_participants`, the poll and reaction readers, `export_conversation`, `save_conversation_export`, `monitor_messages`). It does not cover `search_contacts`, which returns names (address-book and push names, the latter written by the contact) and is how an agent finds a recipient: marking every chat for it would block the ordinary "look up, then send" flow, so treat a name it returns as untrusted text. It does not cover what you paste into the conversation yourself, nor a client with several servers: the other servers' tools are outside it.
+
+**Tested.** `tests/test_agent_safety.py` plays a naive agent against a corpus of malicious messages (instruction override, fake system notice, a closing channel tag, requests to vote, react, delete or send files, an RTL override, a fake approval token, SQL-looking text): after it reads them, every outbound tool must fail without reaching the bridge; every reader must taint the session; the notices, `watch.py` lines and metrics must not carry the text.
+
+**What this does not do.** It does not stop an agent from being persuaded to say something wrong in the chat it was asked to answer, and it is not approval by a human: for that, keep `draft` mode and your client's permission prompt, and see the [security guide](docs/security-guide.md). Approval outside the agent's reach (a confirmation in the client's interface, or a second channel) and a quarantine model that reads untrusted text for the agent are possible next steps and are not implemented.
 
 ### The database key
 

@@ -222,6 +222,15 @@ def evaluate(target: Target, override_token: Optional[str], directory: Directory
     return decision
 
 
+def override_valid(override_token: Optional[str]) -> bool:
+    """Whether override_token is the policy's override token (a placeholder from the example file never is)."""
+    policy, problem = _load()
+    configured = policy.get("override_token") if policy and not problem else None
+    if not override_token or not isinstance(configured, str) or configured in PLACEHOLDER_TOKENS:
+        return False
+    return hmac.compare_digest(override_token.encode(), configured.encode())
+
+
 def audit(kind: str, recipient: str, target: Optional[Target], size: int, result: str,
           rule: str = "", override: bool = False, message_id: Optional[str] = None) -> None:
     """Append one JSON line per send attempt. Never the message text, never a token."""

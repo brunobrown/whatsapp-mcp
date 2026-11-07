@@ -20,6 +20,7 @@ import dbcrypto
 import drafts
 import filemode
 import send_policy
+import taint
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.environ.get("WHATSAPP_MONITOR_CONFIG") or os.path.join(_HERE, "monitor_profiles.json")
@@ -45,7 +46,7 @@ DEFAULT_LIMITS = {
 DEFAULT_MAX_EVENT_AGE_MINUTES = 60
 _PROFILE_KEYS = {"enabled", "targets", "triggers", "chats", "senders", "topics", "mode", "auto_senders",
                  "approval_token", "limits", "max_event_age_minutes", "instructions", "aliases", "allow_own_alias",
-                 "auto_chats"}
+                 "auto_chats", "cross_chat_replies"}
 _PHONE_FORMAT = re.compile(r"\+?[0-9 ().\-]+", re.ASCII)
 
 
@@ -56,6 +57,7 @@ class Profile:
     targets: List[str] = field(default_factory=list)          # "me" or the digits of a phone / LID
     aliases: List[str] = field(default_factory=list)          # names that call the agent, lower-cased
     allow_own_alias: bool = False                             # the account's own messages may call the agent by name
+    cross_chat_replies: bool = False                          # a reply may follow reads of other chats of this profile (see taint.py)
     auto_chats: List[str] = field(default_factory=list)       # in auto mode, anyone in these chats is answered without a token
     triggers: List[str] = field(default_factory=lambda: list(DEFAULT_TRIGGERS))
     chats: List[str] = field(default_factory=list)            # canonical JIDs; empty = every chat
@@ -164,6 +166,11 @@ def _parse_profile(name: str, raw) -> Profile:
         if raw["allow_own_alias"] and (not profile.aliases or "alias" not in profile.triggers):
             raise _Invalid(f"{where}.allow_own_alias needs aliases and the alias trigger")
         profile.allow_own_alias = raw["allow_own_alias"]
+
+    if "cross_chat_replies" in raw:
+        if not isinstance(raw["cross_chat_replies"], bool):
+            raise _Invalid(f"{where}.cross_chat_replies must be true or false")
+        profile.cross_chat_replies = raw["cross_chat_replies"]
 
     if "chats" in raw:
         for chat in _list_of_strings(raw["chats"], f"{where}.chats"):
@@ -277,6 +284,7 @@ def describe(profile: Profile) -> dict:
         "targets": profile.targets,
         "aliases": profile.aliases,
         "allow_own_alias": profile.allow_own_alias,
+        "cross_chat_replies": profile.cross_chat_replies,
         "auto_chats": profile.auto_chats,
         "triggers": profile.triggers,
         "chats": profile.chats,
@@ -907,7 +915,8 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         if limited:
             return refuse("blocked", RATE_LIMITED, limited)
 
-        result = whatsapp.send_message(jid, text, None, None, message.id, False)
+        with taint.monitor_reply_scope(selected.cross_chat_replies):   # unless the profile accepts it, what the monitor delivered from other chats counts
+            result = whatsapp.send_message(jid, text, None, None, message.id, False)
         _audit(selected, jid, message, hit, mode, token_ok, "sent" if result.success else
                ("blocked" if result.error_code == send_policy.BLOCKED else "failed"), len(text),
                error_code=result.error_code, reply_id=result.message_id if result.success else None)

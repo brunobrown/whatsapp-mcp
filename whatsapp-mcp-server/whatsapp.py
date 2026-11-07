@@ -12,7 +12,9 @@ import json
 import audio
 import dbcrypto
 import localconfig
+import server_mode
 import send_policy
+import taint
 import logging
 import re
 
@@ -941,11 +943,21 @@ SEND_DIRECTORY = send_policy.Directory(
 )
 
 
+def _same_chat(a: str, b: str) -> bool:
+    """Two chat ids of the same person (phone and LID) are one chat."""
+    try:
+        return bool(set(sender_ids(a)) & set(sender_ids(b)))
+    except Exception:       # a directory problem must not open the check: different chats then
+        return False
+
+
 def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional[str],
                   send: "Callable[[send_policy.Target], SendResult]",
                   preview: "Optional[Callable[[send_policy.Target], SendResult]]" = None) -> SendResult:
     """Resolve the destination, apply the send policy, then send (or only preview) and audit the attempt."""
     dry_run = preview is not None  # a dry run sends nothing, so nothing of it is audited
+    if server_mode.is_read_only():  # no way out of a read-only server, even if a send function is called directly
+        return SendResult(False, server_mode.HINT, error_code=server_mode.READ_ONLY_MODE)
     target = send_policy.resolve_target(recipient, SEND_DIRECTORY)
     if not target.ok:
         if not dry_run:
@@ -961,9 +973,19 @@ def _guarded_send(kind: str, recipient: str, size: int, override_token: Optional
     if preview is not None:
         return preview(target)
 
+    # What was read in this session must not be carried to another chat (see taint.py)
+    reason = taint.check(target.jid, _same_chat, send_policy.POLICY_PATH)
+    taint_override = False
+    if reason:
+        if not send_policy.override_valid(override_token):
+            send_policy.audit(kind, recipient, target, size, "blocked", rule="session taint")
+            return SendResult(False, f"Blocked: {reason}", error_code=taint.BLOCKED)
+        taint_override = True
+
     result = send(target)
     send_policy.audit(kind, recipient, target, size, "sent" if result.success else "failed",
-                      rule=decision.rule, override=decision.override, message_id=result.message_id)
+                      rule=decision.rule or ("session taint" if taint_override else ""),
+                      override=decision.override or taint_override, message_id=result.message_id)
     return result
 
 
@@ -1307,6 +1329,8 @@ def get_webhook_status() -> dict:
 
 def test_webhook(name: str) -> dict:
     """Send one signed ping to the named endpoint and report the answer of the first attempt."""
+    if server_mode.is_read_only():       # the ping leaves for another system: not from a read-only server
+        return _bridge_error(server_mode.READ_ONLY_MODE, server_mode.HINT)
     if not isinstance(name, str) or not name.strip():
         return _bridge_error("INVALID_ARGUMENT", "name must be the name of an endpoint of webhooks.json")
     try:
