@@ -21,7 +21,7 @@ def test_each_vote_change_is_a_line_without_voter_or_options(conn, tmp_path):  #
         task = asyncio.ensure_future(watch.watch_poll_votes("P1", out, str(tmp_path / "c"), "now", stop,
                                                            sleep=nap, wait_seconds=0.02))
         for _ in range(500):
-            if "state=started" in out.getvalue():
+            if "state=started" in out.getvalue() and os.path.exists(tmp_path / "c"):   # the starting point is fixed
                 break
             await asyncio.sleep(0.01)
         vote(conn, "bob", ["No", "Maybe"], at=2000)
