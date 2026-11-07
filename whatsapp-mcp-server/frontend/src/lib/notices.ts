@@ -6,6 +6,8 @@ import type { Notice } from "@/stores/ui";
 /** Each global notice kind and the catalog key of its fixed sentence. */
 const NOTICE_TEXTS = {
   saved: "notice.saved",
+  saveFailed: "notice.saveFailed",
+  bridgeUnavailable: "notice.bridgeUnavailable",
   refused: "notice.refused",
   connectionLost: "notice.connectionLost",
   sessionWarning: "notice.sessionWarning",

@@ -24,6 +24,8 @@ export const en = {
   "format.days": "{days} d",
   "format.daysHours": "{days} d {hours} h",
   "notice.saved": "Changes saved.",
+  "notice.saveFailed": "The changes could not be saved.",
+  "notice.bridgeUnavailable": "The bridge status is unavailable.",
   "notice.refused": "Request refused. Reload the page.",
   "notice.connectionLost": "The interface lost its connection.",
   "notice.sessionWarning": "Your session ends in {minutes} min because of inactivity.",
@@ -233,6 +235,7 @@ export const en = {
   "account.session": "This session",
   "account.session.intro": "Signing out ends this session on this browser.",
   "account.signOut": "Sign out of the interface",
+  "form.saveFailed": "The changes could not be saved",
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
 } as const;

@@ -40,7 +40,12 @@ export function useSaveSection(id: string) {
   return useMutation({
     mutationFn: (request: SaveRequest) => sectionsService.save(id, request),
     onSuccess: async (outcome: SaveOutcome) => {
-      if (!outcome.ok) return;
+      if (!outcome.ok) {
+        // A refusal with no field to blame (a file that cannot be written, a check that could not run) is a global event.
+        const unexplained = !outcome.conflict && !outcome.needs_confirmation && Object.keys(outcome.errors).length === 0;
+        if (unexplained && outcome.general.length > 0) raiseNotice("saveFailed");
+        return;
+      }
       if (outcome.restarts.length > 0) useUiStore.getState().addRestart(outcome.restarts);
       if (!outcome.unchanged) raiseNotice("saved");
       await client.invalidateQueries({ queryKey: keys.section(id) });

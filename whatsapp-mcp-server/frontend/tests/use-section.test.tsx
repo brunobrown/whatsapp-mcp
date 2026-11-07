@@ -281,6 +281,48 @@ describe("saving", () => {
     expect(result.current.saved).toBe(true);
   });
 
+  it("a save refused with no field to blame (a file that cannot be written) raises one global notice", async () => {
+    server.use(
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json(
+          { ...okOutcome, ok: false, restarts: [], general: ["the file could not be written (Permission denied)"] },
+          { status: 422 },
+        ),
+      ),
+    );
+    const { result } = await mount();
+    act(() => {
+      result.current.setField("name", "beta");
+    });
+    await act(async () => {
+      await result.current.save();
+    });
+    await act(async () => {
+      await result.current.save();
+    });
+    expect(useUiStore.getState().notices.map((notice) => notice.text)).toEqual(["The changes could not be saved."]);
+  });
+
+  it("a refusal that names a field, or a conflict, raises no global notice", async () => {
+    server.use(
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json({ ...okOutcome, ok: false, restarts: [], errors: { limit: "must be a whole number" } }, { status: 422 }),
+      ),
+    );
+    const { result } = await mount();
+    act(() => {
+      result.current.setField("limit", "x");
+    });
+    await act(async () => {
+      await result.current.save();
+    });
+    server.use(http.put("*/api/sections/s", () => HttpResponse.json({ ...okOutcome, ok: false, conflict: true }, { status: 409 })));
+    await act(async () => {
+      await result.current.save();
+    });
+    expect(useUiStore.getState().notices).toEqual([]);
+  });
+
   it("a save that changed nothing records no restart", async () => {
     server.use(http.put("*/api/sections/s", () => HttpResponse.json({ ...okOutcome, unchanged: true, restarts: [] })));
     const { result } = await mount();

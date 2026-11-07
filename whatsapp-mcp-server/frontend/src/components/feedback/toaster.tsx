@@ -11,6 +11,8 @@ type Tone = "success" | "warning" | "error";
 const TONES: Record<NoticeKind, Tone> = {
   saved: "success",
   sessionWarning: "warning",
+  saveFailed: "error",
+  bridgeUnavailable: "warning",
   refused: "error",
   connectionLost: "error",
   sessionEnded: "error",

@@ -207,6 +207,24 @@ describe("saving", () => {
     });
   });
 
+  it("a refusal that is not about a field says the changes could not be saved, not that a field needs attention", async () => {
+    server.use(
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json(
+          { ...okOutcome, ok: false, restarts: [], errors: {}, general: ["the file could not be written (Permission denied)"] },
+          { status: 422 },
+        ),
+      ),
+    );
+    await mount();
+    await userEvent.type(field("Name"), "x");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const summary = await screen.findByRole("alert");
+    expect(summary).toHaveTextContent("The changes could not be saved");
+    expect(summary).toHaveTextContent("the file could not be written (Permission denied)");
+    expect(summary).not.toHaveTextContent("needs attention");
+  });
+
   it("shows the server's errors next to the fields, summarises them and focuses the first", async () => {
     server.use(
       http.put("*/api/sections/s", () =>

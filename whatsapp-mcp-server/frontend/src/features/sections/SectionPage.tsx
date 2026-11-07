@@ -143,7 +143,7 @@ function SectionForm({ sectionId }: { sectionId: string }) {
       ) : null}
 
       {showSummary ? (
-        <Banner kind="error" title={t("form.errorCount", { count: Math.max(failing.length, 1) })}>
+        <Banner kind="error" title={failing.length > 0 ? t("form.errorCount", { count: failing.length }) : t("form.saveFailed")}>
           <ul className="m-0 flex list-none flex-col gap-1 p-0">
             {general.map((message) => (
               <li key={message}>{message}</li>

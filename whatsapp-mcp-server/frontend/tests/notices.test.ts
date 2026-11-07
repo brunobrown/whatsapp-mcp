@@ -13,6 +13,8 @@ describe("notice texts", () => {
   it.each([
     ["saved", "Changes saved."],
     ["refused", "Request refused. Reload the page."],
+    ["saveFailed", "The changes could not be saved."],
+    ["bridgeUnavailable", "The bridge status is unavailable."],
     ["connectionLost", "The interface lost its connection."],
     ["sessionEnded", "Your session ended because of inactivity."],
   ] as const)("%s reads %s", (kind, text) => {
