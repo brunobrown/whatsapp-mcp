@@ -282,7 +282,7 @@ func recordPoll(store *MessageStore, own string, decrypt pollVoteDecryptor, evt 
 		logger.Warnf("Failed to store a vote on poll %s: %v", pollID, err)
 	} else if stored {
 		if poll, found, _ := store.GetPoll(pollID, voteChat); found {
-			store.webhooks.Emit(pollVoteWebhookEvent(poll, who, hashes, at, evt.Info.IsFromMe))
+			store.webhooks.Emit(pollVoteWebhookEvent(poll, who, hashes, at, evt.Info.IsFromMe, evt.Info.ID))
 		}
 	}
 	return true

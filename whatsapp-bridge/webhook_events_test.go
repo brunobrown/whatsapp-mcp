@@ -298,3 +298,30 @@ func TestMessageHandlingWorksWithoutAnyWebhooks(t *testing.T) { // HOOK-01
 		t.Errorf("content = %q", row.content)
 	}
 }
+
+func TestTheEventIDOfAVoteCarriesNothingAboutTheVoter(t *testing.T) { // HOOK-23 (anonymous polls)
+	poll := Poll{ID: "POLL1", ChatJID: "chat@g.us", Question: "Q", Options: []string{"A", "B"}, HideVoterNames: true}
+	at := time.Now()
+	alice := pollVoteWebhookEvent(poll, "5511999990000", []string{"x"}, at, false, "VOTEMSG1")
+	bob := pollVoteWebhookEvent(poll, "5511888880000", []string{"x"}, at, false, "VOTEMSG1")
+	if alice.id() != bob.id() {
+		t.Error("the event id changes with the voter: a receiver could hash candidate numbers and unmask an anonymous vote")
+	}
+	again := pollVoteWebhookEvent(poll, "5511999990000", []string{"x"}, at, false, "VOTEMSG2")
+	if alice.id() == again.id() {
+		t.Error("two different votes share an event id")
+	}
+	if voter, present := alice.Meta["voter"]; !present || voter != nil {
+		t.Errorf("voter = %v, want null in an anonymous poll", voter)
+	}
+}
+
+func TestAVoteRedeliveredByWhatsAppKeepsItsEventID(t *testing.T) { // HOOK-21
+	poll := Poll{ID: "POLL1", ChatJID: "chat@g.us", Options: []string{"A", "B"}}
+	at := time.Now()
+	a := pollVoteWebhookEvent(poll, "5511999990000", nil, at, false, "VOTEMSG1")
+	b := pollVoteWebhookEvent(poll, "5511999990000", nil, at.Add(time.Second), false, "VOTEMSG1")
+	if a.id() != b.id() {
+		t.Error("the same vote message gives different event ids")
+	}
+}

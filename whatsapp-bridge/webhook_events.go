@@ -69,7 +69,9 @@ func pollCreatedWebhookEvent(poll Poll, at time.Time, fromMe bool) webhookEvent 
 }
 
 // pollVoteWebhookEvent: the voter is null in an anonymous poll; the option names go only with content.
-func pollVoteWebhookEvent(poll Poll, voter string, hashes []string, at time.Time, fromMe bool) webhookEvent {
+// The event id is built from the vote message's id and never from the voter: it is a plain hash, and phone
+// numbers are easy to guess, so a receiver could otherwise hash its candidates and unmask an anonymous vote.
+func pollVoteWebhookEvent(poll Poll, voter string, hashes []string, at time.Time, fromMe bool, voteMessageID string) webhookEvent {
 	byHash := map[string]string{}
 	for _, option := range poll.Options {
 		byHash[hex.EncodeToString(sha256Of(option))] = option
@@ -84,7 +86,7 @@ func pollVoteWebhookEvent(poll Poll, voter string, hashes []string, at time.Time
 	if poll.HideVoterNames {
 		voterID = nil
 	}
-	return webhookEvent{Type: eventPollVote, Key: fmt.Sprintf("%s|%s|%s|%d", poll.ChatJID, poll.ID, voter, at.UnixMilli()),
+	return webhookEvent{Type: eventPollVote, Key: fmt.Sprintf("%s|%s|%s", poll.ChatJID, poll.ID, voteMessageID),
 		OccurredAt: at, ChatJID: poll.ChatJID, FromMe: fromMe,
 		Meta: map[string]any{"poll_id": poll.ID, "chat_jid": poll.ChatJID, "voter": voterID, "retracted": len(hashes) == 0,
 			"option_count": len(hashes), "timestamp": at.UTC().Format(time.RFC3339Nano)},
