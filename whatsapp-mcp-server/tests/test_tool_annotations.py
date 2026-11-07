@@ -31,21 +31,21 @@ def test_every_registered_tool_has_a_category():  # ANN-01
 
 @pytest.mark.parametrize("name", sorted(READ))
 def test_read_tools_are_read_only(name):  # ANN-01
-    assert annotations()[name].readOnlyHint is True
+    assert annotations()[name].read_only_hint is True
 
 
 @pytest.mark.parametrize("name", sorted(SEND))
 def test_send_tools_write_but_do_not_destroy(name):  # ANN-01
     a = annotations()[name]
-    assert (a.readOnlyHint, a.destructiveHint, a.openWorldHint) == (False, False, True)
+    assert (a.read_only_hint, a.destructive_hint, a.open_world_hint) == (False, False, True)
 
 
 def test_delete_message_is_destructive():  # ANN-01
     a = annotations()["delete_message"]
-    assert (a.readOnlyHint, a.destructiveHint, a.openWorldHint) == (False, True, True)
+    assert (a.read_only_hint, a.destructive_hint, a.open_world_hint) == (False, True, True)
 
 
 @pytest.mark.parametrize("name", sorted(DOWNLOAD))
 def test_download_tools_write_files_but_are_idempotent(name):  # ANN-01
     a = annotations()[name]
-    assert (a.readOnlyHint, a.destructiveHint, a.idempotentHint) == (False, False, True)
+    assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint) == (False, False, True)

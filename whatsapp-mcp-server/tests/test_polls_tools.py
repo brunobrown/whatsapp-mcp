@@ -15,7 +15,7 @@ GROUP = "120363222@g.us"
 
 
 def tool_schemas():
-    return {t.name: t.inputSchema for t in asyncio.run(main.mcp.list_tools())}
+    return {t.name: t.input_schema for t in asyncio.run(main.mcp.list_tools())}
 
 
 def test_the_five_tools_are_registered_with_their_parameters():  # SEND-01, RES-01, LIST-01, VOTE-01, DEL-01
