@@ -146,3 +146,15 @@ func (u *uiProcess) stop(grace time.Duration) {
 	case <-time.After(2 * time.Second):
 	}
 }
+
+// startUIFromEnvironment is what main calls: it reads the settings, starts the interface with the
+// environment the bridge had before ui_settings.json was applied (so the interface can tell a variable
+// from the environment from a value of the file) and logs why it did not start. nil means no interface.
+func startUIFromEnvironment(startupEnv []string, getenv func(string) string, logf func(string, ...any)) *uiProcess {
+	ui, err := startUI(loadUIConfig(getenv, startupEnv), logf)
+	if err != nil {
+		logf("The web interface is off: %v", err)
+		return nil
+	}
+	return ui
+}

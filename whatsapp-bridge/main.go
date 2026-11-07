@@ -1788,6 +1788,7 @@ func main() {
 	}
 	// Variables the web interface saved fill the ones the environment lacks; what was read when the
 	// package was initialised is read again with them.
+	startupEnv := os.Environ() // what the web interface is started with: before the file is applied
 	applyUISettingsAtStart(func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
 	autoDownloadCfg = loadAutoDownloadConfig(os.Getenv)
 	state := newBridgeState(time.Now)
@@ -1946,6 +1947,9 @@ func main() {
 	}
 	logger.Infof("The REST API token is in %s", filepath.Join(apiConfigDir, apiTokenFile))
 	startRESTServer(client, messageStore, state, defaultRESTPort, apiToken, logger)
+	// The web interface is a child of the bridge: it starts with it and ends with it, and a failure of
+	// the interface never stops the bridge.
+	webUI := startUIFromEnvironment(startupEnv, os.Getenv, func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -1957,6 +1961,7 @@ func main() {
 	<-exitChan
 
 	fmt.Println("Disconnecting...")
+	webUI.stop(5 * time.Second)
 	// Disconnect client
 	client.Disconnect()
 }

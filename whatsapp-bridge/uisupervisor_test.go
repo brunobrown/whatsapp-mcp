@@ -217,3 +217,72 @@ func TestUIChildGetsOnlyTheEnvironmentItIsGiven(t *testing.T) {
 
 	logs.waitFor(t, "probe-set=false")
 }
+
+func helperEnv(mode string) func(string) string {
+	return func(k string) string {
+		if k == "WHATSAPP_UI_COMMAND" {
+			return os.Args[0] + " -test.run=^TestUIHelperProcess$"
+		}
+		return ""
+	}
+}
+
+func TestUIStartedFromTheEnvironmentRunsAndStopsWithTheBridge(t *testing.T) { // UI-01, UI-02
+	logs := &logCollector{}
+
+	ui := startUIFromEnvironment([]string{"UI_HELPER=serve"}, helperEnv("serve"), logs.logf)
+
+	if ui == nil {
+		t.Fatalf("the interface did not start:\n%s", logs.text())
+	}
+	logs.waitFor(t, "App URL: http://127.0.0.1:8765")
+	pid := ui.pid()
+	ui.stop(2 * time.Second)
+	if processAlive(pid) || !ui.exited() {
+		t.Fatalf("process %d is still alive after stop", pid)
+	}
+}
+
+func TestUIChildSeesTheEnvironmentOfBeforeTheSavedSettings(t *testing.T) { // CFG-04
+	logs := &logCollector{}
+	// the bridge applied ui_settings.json to its own environment after taking this snapshot
+	t.Setenv("UI_PROBE", "filled-in-from-the-file")
+
+	ui := startUIFromEnvironment([]string{"UI_HELPER=env"}, helperEnv("env"), logs.logf)
+	defer ui.stop(time.Second)
+
+	logs.waitFor(t, "probe-set=false")
+}
+
+func TestUIThatCannotStartIsReportedAndTheBridgeGoesOn(t *testing.T) { // UI-03
+	logs := &logCollector{}
+	getenv := func(k string) string {
+		if k == "WHATSAPP_UI_COMMAND" {
+			return "/nonexistent/ui-command"
+		}
+		return ""
+	}
+
+	ui := startUIFromEnvironment(nil, getenv, logs.logf)
+
+	if ui != nil || !strings.Contains(logs.text(), "web interface is off") ||
+		!strings.Contains(logs.text(), "/nonexistent/ui-command") {
+		t.Fatalf("ui=%v log:\n%s", ui, logs.text())
+	}
+}
+
+func TestUIThatIsTurnedOffSaysNothingAndStartsNothing(t *testing.T) {
+	logs := &logCollector{}
+	getenv := func(k string) string {
+		if k == "WHATSAPP_UI" {
+			return "off"
+		}
+		return ""
+	}
+
+	ui := startUIFromEnvironment(nil, getenv, logs.logf)
+
+	if ui != nil || logs.text() != "" {
+		t.Fatalf("ui=%v log:\n%s", ui, logs.text())
+	}
+}
