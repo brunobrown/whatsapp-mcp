@@ -227,3 +227,13 @@ def test_the_shell_has_no_imperative_calls():  # EXT-02
     source = open(shell_module.__file__, encoding="utf-8").read()
 
     assert ".update(" not in source and "page.add" not in source
+
+
+def test_no_row_that_wraps_holds_an_expanded_child():  # UX-01
+    """An expanded child is invalid in a Row that wraps: Flutter draws a grey box over the whole region."""
+    entries = entries_for(section("alpha", "Alfa", 10))
+    for width in (360, 768, 1280):
+        view, _ = build(width, entries)
+        for row in of_type(view, ft.Row):
+            if row.wrap:
+                assert not [c for c in row.controls if getattr(c, "expand", None)], (width, [type(c).__name__ for c in row.controls])

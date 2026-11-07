@@ -72,8 +72,9 @@ def _header(state: AppState, on_sign_out: Callable[[], Any]) -> ft.Control:
     if pending:
         items.append(ft.Text(f"Reinício pendente: {pending}", size=14, color=ft.Colors.TERTIARY))
     items.append(ft.TextButton(content="Sair", icon=ft.Icons.LOGOUT, height=48, tooltip="Encerrar a sessão", on_click=lambda e: on_sign_out()))
+    # not wrapping: the title expands, and an expanded child is invalid inside a Row that wraps (Flutter draws a grey box instead)
     return ft.Container(padding=ft.Padding.symmetric(horizontal=16, vertical=4), content=ft.Row(
-        wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=items))
+        vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=items))
 
 
 def _main(content: ft.Control) -> ft.Control:
@@ -99,8 +100,8 @@ def build_shell(entries: Sequence[NavEntry], selected: str, width: Optional[floa
         extended=layout == "wide", min_extended_width=240, label_type=ft.NavigationRailLabelType.ALL, scrollable=True,
         on_change=lambda e: navigator.go(entries[int(e.control.selected_index)].id))
     return ft.Row(expand=True, spacing=0, controls=[
-        ft.Semantics(label="Navegação principal", container=True, content=rail),
-        ft.VerticalDivider(width=1),
+        ft.Semantics(label="Navegação principal", container=True, content=ft.Container(
+            border=ft.Border(right=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)), content=rail)),
         ft.Column(expand=True, spacing=0, controls=[_header(state, on_sign_out), _main(content)])])
 
 

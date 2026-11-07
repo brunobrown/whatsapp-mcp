@@ -261,3 +261,24 @@ def test_a_file_that_cannot_be_read_as_an_object_is_marked_unreadable_and_a_refu
     path.write_text('{"other": 1}')
     assert ConfigStore().load(make_section(path, mode_must_be_set)).unreadable is False
     assert ConfigStore().load(make_section(tmp_path / "absent.json")).unreadable is False
+
+
+def test_save_is_atomic_and_file_mode_is_0600(tmp_path, monkeypatch):  # CFG-03
+    path = tmp_path / "demo.json"
+    section = make_section(path)
+    previous = os.umask(0)
+    try:
+        assert ConfigStore().save(section, {"mode": "old"}, ABSENT).ok
+    finally:
+        os.umask(previous)
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    version = ConfigStore().load(section).version
+
+    def boom(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(store_module.os, "replace", boom)
+    result = ConfigStore().save(section, {"mode": "new"}, version)
+
+    assert result.ok is False and json.loads(path.read_text()) == {"mode": "old"}      # the old file survives a failed replace
+    assert [p.name for p in tmp_path.iterdir()] == ["demo.json"]                      # and no temporary file is left

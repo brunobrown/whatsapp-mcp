@@ -78,6 +78,7 @@ def test_a_session_starts_signed_out_with_the_theme_and_the_notification_service
     assert page.title == "WhatsApp MCP" and page.theme is not None and page.dark_theme is not None
     assert len(page.rendered) == 1 and page.rendered[0][0] is entry.App
     session = page.rendered[0][1][0]
+    assert page.rendered[0][1][1] is session.state                    # given directly, so the App follows it
     assert session.state.authenticated is False and dict(session.state.data) == {}
     assert any(type(s).__name__ == "Notifications" for s in page.services)
 

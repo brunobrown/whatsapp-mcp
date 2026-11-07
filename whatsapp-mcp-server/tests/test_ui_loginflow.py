@@ -252,3 +252,15 @@ def test_signing_out_ends_the_session(world):  # AUTH-05
     world.flow.sign_out()
 
     assert world.session.signed_in is False and world.session.log == ["in", "out"]
+
+
+def test_wrong_password_generic_message_and_growing_delay(world):  # AUTH-04
+    world.with_password()
+    first = world.flow.login("wrong")
+    world.clock.now += first.wait
+    second = world.flow.login("also wrong")
+    world.clock.now += second.wait
+    third = world.flow.login("still wrong")
+
+    assert first.message == second.message == third.message == FAILURE_MESSAGE
+    assert 0 < first.wait < second.wait < third.wait

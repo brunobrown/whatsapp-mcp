@@ -174,8 +174,10 @@ class FormFlow:
                 self.draft.set(key, raw)
             return True
         parsed = from_raw(f, raw)
+        if f.kind in ("text", "int", "float", "list") and isinstance(raw, str):
+            self._typed[key] = raw               # shown back exactly as typed: "2." must not become "2" while the person is still typing
         if parsed.error:
-            self._parse[key], self._typed[key] = parsed.error, parsed.text or ""
+            self._parse[key] = parsed.error
             return True
         self.draft.set(key, raw if f.kind == "records" else parsed.value)
         return True

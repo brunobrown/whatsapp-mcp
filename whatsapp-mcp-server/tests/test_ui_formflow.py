@@ -126,7 +126,7 @@ def test_a_number_that_is_not_one_keeps_the_text_and_blocks_saving(path):  # CFG
 
     assert flow.errors["size"] == "deve ser um número inteiro" and flow.typed("size") == "7x" and flow.can_save is False
     flow.set("size", "7")
-    assert "size" not in flow.errors and flow.typed("size") is None and flow.can_save is True
+    assert "size" not in flow.errors and flow.typed("size") == "7" and flow.can_save is True
 
 
 def test_a_value_out_of_bounds_is_an_error_beside_the_field_as_soon_as_it_is_typed(path):  # CFG-02
@@ -162,6 +162,28 @@ def test_leaving_with_unsaved_changes_requires_confirmation(path):  # CFG-06
 
     assert flow.leave() is False and flow.dirty
     assert flow.leave(confirmed=True) is True and not flow.dirty and flow.draft.values.get("size") is None
+
+
+def test_what_is_typed_is_shown_back_exactly_so_a_decimal_point_is_not_swallowed(tmp_path):  # CFG-02
+    flow = FormFlow(Section(id="m", title="M", icon="x", order=1, storage=EnvKeys(), validate=lambda v: [], fields=(
+        Field("mb", "MB", "float", default=25, bounds=(1, 100), env_var="WHATSAPP_AUTO_DOWNLOAD_MAX_MB"),)), ConfigStore(), EnvLayer(environ={}))
+    flow.load()
+
+    flow.set("mb", "2")
+    flow.set("mb", "2.")
+    assert flow.typed("mb") == "2." and flow.draft.values["mb"] == 2.0
+    flow.set("mb", "2.5")
+    assert flow.typed("mb") == "2.5" and flow.draft.values["mb"] == 2.5
+
+
+def test_saving_forgets_what_was_typed_and_shows_the_stored_value(path):  # CFG-03
+    flow = flow_for(path)
+    flow.set("size", "007")
+    assert flow.typed("size") == "007"
+
+    assert flow.save().ok
+
+    assert flow.typed("size") is None and flow.draft.values["size"] == 7
 
 
 def test_discard_goes_back_and_forgets_what_was_typed_wrong(path):  # CFG-06

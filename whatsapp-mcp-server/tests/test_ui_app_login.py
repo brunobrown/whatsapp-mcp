@@ -96,10 +96,18 @@ def test_typing_goes_to_the_handler_of_that_field():  # AUTH-01
     assert h.calls == [("edit", "password", "abc")]
 
 
-def test_the_typed_password_is_shown_back_masked_not_lost_on_redraw():  # AUTH-01
-    box = boxes(view("login", {"password": "abc"})[0])["Senha"]
+def test_the_boxes_are_not_told_a_value_on_every_redraw_so_typing_is_never_overwritten():  # AUTH-01, UX-02
+    first = boxes(view("login", {"password": "abc"})[0])["Senha"]
+    again = boxes(view("login", {"password": "abcd"})[0])["Senha"]
 
-    assert box.value == "abc" and box.password is True
+    assert first.value == "" and again.value == "" and first.key == again.key
+
+
+def test_after_a_submit_the_boxes_are_new_ones_and_so_empty():  # AUTH-01
+    before = boxes(view("login", {"_n": 0})[0])["Senha"]
+    after = boxes(view("login", {"_n": 1})[0])["Senha"]
+
+    assert before.key != after.key
 
 
 def test_a_failed_login_shows_the_message_beside_the_field_and_in_a_live_region():  # AUTH-04, UX-02

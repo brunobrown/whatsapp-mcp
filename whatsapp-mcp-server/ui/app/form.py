@@ -37,6 +37,7 @@ class FormActions:
         self.conflict = False
         self.general: List[str] = []
         self.restarts: List[str] = []
+        self._typing: dict = {}           # text typed and not yet taken: a keystroke only remembers, so it never races the next one
 
     @property
     def section(self) -> Section:
@@ -52,9 +53,21 @@ class FormActions:
         return storage.path().replace("\\", "/").rsplit("/", 1)[-1] if isinstance(storage, JsonFile) else "ui_settings.json"
 
     # -- editing ------------------------------------------------------------------------------------
+    def flush(self) -> None:
+        """Take what was typed into the form. Done when a box is left and before anything that reads or leaves the form."""
+        typed, self._typing = self._typing, {}
+        for key, raw in typed.items():
+            self.flow.set(key, raw)
+        if typed:
+            self.conflict, self.general = False, []
+            self._refresh()
+
     def change(self, key: str) -> Callable[[Any], None]:
         def handler(raw: Any) -> None:
             field = self.section.field(key)
+            if field.kind in ("text", "int", "float", "list", "secret", "records"):
+                self._typing[key] = raw                       # remembered; taken on blur or before saving
+                return
             if field.kind in ("choice", "bool") and field.risky(raw) and not field.risky(self.flow.shown(key)):
                 self._ask(Confirm(f"Confirmar: {field.label}", field.risk or "", "Confirmar", lambda: self._apply(key, raw)))
                 return
@@ -67,10 +80,12 @@ class FormActions:
         self._refresh()
 
     def add(self, key: str) -> None:
+        self.flush()
         self.flow.add_item(key)
         self._refresh()
 
     def remove(self, key: str, index: int) -> None:
+        self.flush()
         label = f"{self.section.field(key).label} {index + 1}"
 
         def do() -> None:
@@ -79,6 +94,7 @@ class FormActions:
         self._ask(Confirm(f"Remover {label}?", f"{label} sai da lista quando você salvar. Antes disso, descartar as alterações o traz de volta.", "Remover", do))
 
     def restore(self, key: str) -> None:
+        self.flush()
         label = self.section.field(key).label
 
         def do() -> None:
@@ -87,6 +103,8 @@ class FormActions:
         self._ask(Confirm(f"Restaurar o padrão de {label}?", f"O valor personalizado de {label} sai quando você salvar; passa a valer o padrão.", "Restaurar", do))
 
     def restore_all(self) -> None:
+        self.flush()
+
         def do() -> None:
             for field in self.section.fields:
                 if not field.readonly and not self.flow.is_locked(field.key):
@@ -95,6 +113,7 @@ class FormActions:
         self._ask(Confirm("Restaurar todos os padrões?", f"Todos os valores personalizados de {self.section.title} saem quando você salvar.", "Restaurar", do))
 
     def discard(self) -> None:
+        self.flush()
         if not self.flow.dirty:
             return
 
@@ -111,6 +130,7 @@ class FormActions:
 
     # -- saving -------------------------------------------------------------------------------------------
     def save(self, confirmed_replace: bool = False) -> None:
+        self.flush()
         outcome = self.flow.save(confirmed_replace=confirmed_replace)
         self.conflict, self.general = outcome.conflict, list(outcome.general)
         if outcome.needs_confirmation:
@@ -182,13 +202,13 @@ def form_view(flow: FormFlow, actions: FormActions) -> ft.Control:
             field=field, value=flow.shown(key), on_change=actions.change(key), error=errors.get(key), text=flow.typed(key),
             origin=flow.origin(key) if not read_only else None, locked=flow.is_locked(key) or read_only, env_var=flow.env_var(key),
             pending_restart=flow.pending(key), on_restore=(lambda k=key: actions.restore(k)) if not read_only else None,
-            on_add=(lambda k=key: actions.add(k)), on_remove=(lambda i, k=key: actions.remove(k, i)))))
+            on_add=(lambda k=key: actions.add(k)), on_remove=(lambda i, k=key: actions.remove(k, i)), on_blur=actions.flush)))
 
     if not read_only:
         parts.append(ft.Row(wrap=True, spacing=12, run_spacing=12, controls=[
             ft.FilledButton(content="Salvar", icon=ft.Icons.SAVE_OUTLINED, height=MIN_TARGET,
-                            disabled=not (flow.dirty and flow.can_save), on_click=lambda e: actions.save()),
-            ft.OutlinedButton(content="Descartar", height=MIN_TARGET, disabled=not flow.dirty, on_click=lambda e: actions.discard()),
+                            disabled=flow.status == "unavailable", on_click=lambda e: actions.save()),
+            ft.OutlinedButton(content="Descartar", height=MIN_TARGET, on_click=lambda e: actions.discard()),
             ft.TextButton(content="Restaurar todos os padrões", height=MIN_TARGET, on_click=lambda e: actions.restore_all())]))
     return ft.Container(max_width=MAX_WIDTH, content=ft.Column(spacing=20, controls=parts))
 

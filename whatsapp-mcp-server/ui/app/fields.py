@@ -31,6 +31,7 @@ class FieldProps:
     on_restore: Optional[Callable[[], None]] = None
     on_add: Optional[Callable[[], None]] = None   # records
     on_remove: Optional[Callable[[int], None]] = None
+    on_blur: Optional[Callable[[], None]] = None            # the person left a text box: now is the time to take what was typed
 
 
 _RESTART_WORDS = {"bridge": "o bridge", "server": "o servidor MCP"}
@@ -52,10 +53,10 @@ def _text_box(p: FieldProps) -> ft.TextField:
     f = p.field
     numeric = f.kind in ("int", "float")
     return ft.TextField(
-        label=f.label, value=_raw_text(p), helper=f.help or None, error=p.error, disabled=p.locked,
+        label=f.label, value=_raw_text(p), helper=f.help or None, error=p.error, disabled=p.locked, helper_max_lines=4, error_max_lines=4,
         multiline=f.kind == "list", min_lines=3 if f.kind == "list" else None, max_lines=8 if f.kind == "list" else None,
         keyboard_type=ft.KeyboardType.NUMBER if numeric else (ft.KeyboardType.MULTILINE if f.kind == "list" else ft.KeyboardType.TEXT),
-        max_length=None, on_change=lambda e: p.on_change(e.control.value))
+        max_length=None, on_change=lambda e: p.on_change(e.control.value), on_blur=(lambda e: p.on_blur()) if p.on_blur else None)
 
 
 def _secret_control(p: FieldProps) -> ft.Control:
@@ -64,8 +65,8 @@ def _secret_control(p: FieldProps) -> ft.Control:
     typing = p.value if isinstance(p.value, str) else ""
     box = ft.TextField(
         label=f.label, value=typing, password=True, can_reveal_password=True, disabled=p.locked, error=p.error,
-        hint_text="Definido. Deixe em branco para manter." if is_set else "Não definido.", helper=f.help or None,
-        on_change=lambda e: p.on_change(e.control.value))
+        hint_text="Definido. Deixe em branco para manter." if is_set else "Não definido.", helper=f.help or None, helper_max_lines=4, error_max_lines=4,
+        on_change=lambda e: p.on_change(e.control.value), on_blur=(lambda e: p.on_blur()) if p.on_blur else None)
     controls: List[ft.Control] = [box]
     if is_set and not p.locked:
         controls.append(ft.TextButton(content="Remover o valor", tooltip=f"Remover o valor definido de {f.label}", height=MIN_TARGET,
@@ -167,7 +168,7 @@ def records_control(p: FieldProps) -> ft.Control:
 
     cards: List[ft.Control] = []
     for index, item in enumerate(items):
-        rows = [field_row(FieldProps(field=sub, value=item.get(sub.key), on_change=edit(index, sub), locked=p.locked)) for sub in f.fields]
+        rows = [field_row(FieldProps(field=sub, value=item.get(sub.key), on_change=edit(index, sub), locked=p.locked, on_blur=p.on_blur)) for sub in f.fields]
         cards.append(ft.Container(padding=12, border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT), border_radius=6, content=ft.Column(spacing=8, controls=[
             ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
                 ft.Text(f"{f.label} {index + 1}", size=16, weight=ft.FontWeight.W_600),

@@ -142,3 +142,19 @@ def test_the_encryption_state_follows_the_variable(monkeypatch):  # CFG-01
     assert values()["encryption"] == "ligada"
     monkeypatch.setenv("WHATSAPP_DB_ENCRYPTION", "off")
     assert values()["encryption"].startswith("desligada")
+
+
+def test_every_field_reports_value_default_and_origin():  # CFG-01
+    from ui.core.envlayer import EnvLayer
+    from ui.core.formflow import FormFlow
+    from ui.core.store import ConfigStore
+
+    sections = all_sections()
+    assert len(sections) >= 9
+    for section in sections:
+        flow = FormFlow(section, ConfigStore(), EnvLayer(environ={}))
+        flow.load()
+        for f in section.fields:
+            assert flow.origin(f.key) in ("default", "file", "env"), (section.id, f.key)
+            flow.shown(f.key)                                           # the value (or the default) can always be had
+            assert f.default is None or f.kind in ("bool", "int", "float", "text", "choice", "multichoice", "list", "records", "secret")

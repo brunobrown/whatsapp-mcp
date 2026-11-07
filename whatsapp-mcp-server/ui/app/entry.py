@@ -152,8 +152,8 @@ def ToastHost(toast: Toast):
 
 
 @ft.component
-def App(session: Session):
-    state = session.state
+def App(session: Session, state: AppState):
+    """state is passed on its own as well, because a component only listens to the observables it is given directly."""
     watcher = ft.use_ref(None)
 
     def start() -> None:
@@ -163,7 +163,8 @@ def App(session: Session):
     ft.use_effect(start, [], cleanup=lambda: watcher.current.stop() if watcher.current else None)
     body = (Shell(session.entries, lambda page_id: route(session, page_id), state, on_sign_out=state.sign_out) if state.authenticated
             else LoginScreen(session.make_login_flow, notice=state.ended))
-    return ft.Stack(expand=True, controls=[body, ToastHost(session.toast)])
+    # a Column, not a Stack: the body expands, and an expanded child is only valid inside a Row or a Column
+    return ft.Column(expand=True, spacing=0, controls=[ft.Container(expand=True, content=body), ToastHost(session.toast)])
 
 
 # ---- the program ------------------------------------------------------------------------------------------
@@ -175,7 +176,8 @@ def main(page: ft.Page, services: Services) -> None:
         page.services.append(ftn.Notifications())
     except ImportError:
         pass
-    page.render(App, session_for(page, services))
+    session = session_for(page, services)
+    page.render(App, session, session.state)
 
 
 def serve(settings, assets_dir: Optional[str] = None) -> None:

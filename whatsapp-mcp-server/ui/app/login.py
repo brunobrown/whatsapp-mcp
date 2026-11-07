@@ -19,7 +19,9 @@ Editor = Callable[[str], Callable[[Any], None]]
 
 def _box(label: str, key: str, values: Dict[str, str], on_edit: Editor, *, secret: bool = True, error: Optional[str] = None,
          helper: Optional[str] = None, focus: bool = False, on_enter: Optional[Callable[[], Any]] = None) -> ft.TextField:
-    return ft.TextField(label=label, value=values.get(key, ""), password=secret, can_reveal_password=secret, autofocus=focus, error=error,
+    # No value= here: the box keeps what is typed, so a keystroke is never overwritten by a slower round trip. After a submit the
+    # generation in the key changes, which gives a fresh, empty box.
+    return ft.TextField(key=f"{key}-{values.get('_n', 0)}", label=label, password=secret, can_reveal_password=secret, autofocus=focus, error=error,
                         helper=helper, on_change=on_edit(key), on_submit=(lambda e: on_enter()) if on_enter else None)
 
 
@@ -28,7 +30,8 @@ def _heading(text: str) -> ft.Control:
 
 
 def _live(text: Optional[str], colour=ft.Colors.ERROR) -> ft.Control:
-    return ft.Semantics(live_region=True, container=True, content=ft.Text(text or "", size=16, color=colour, selectable=True, visible=bool(text)))
+    # the region stays on screen, empty, so that a screen reader is already watching it when a message appears
+    return ft.Semantics(live_region=True, container=True, content=ft.Text(text or "", size=16, color=colour, selectable=True))
 
 
 def _card(controls) -> ft.Control:
@@ -87,16 +90,21 @@ def account_view(values: Dict[str, str], error: Optional[str], busy: bool, on_ed
 @ft.component
 def LoginScreen(make_flow: Callable[[], LoginFlow], notice: Optional[str] = None):
     flow, _ = ft.use_state(lambda: make_flow())
-    values, set_values = ft.use_state({})
+    typed_ref = ft.use_ref(None)
+    generation, set_generation = ft.use_state(0)
     error, set_error = ft.use_state(None)
     busy, set_busy = ft.use_state(False)
     mode, set_mode = ft.use_state(lambda: flow.mode())
+    if typed_ref.current is None:
+        typed_ref.current = {}
 
     def edit(key: str):
-        return lambda e: set_values(lambda current: {**current, key: e.control.value})
+        def typing(e) -> None:                              # a keystroke is only remembered: redrawing on it would race the next key
+            typed_ref.current[key] = e.control.value
+        return typing
 
     async def submit() -> None:
-        typed = dict(values)
+        typed = dict(typed_ref.current)
         set_busy(True)
         try:
             if mode == "setup":
@@ -105,7 +113,8 @@ def LoginScreen(make_flow: Callable[[], LoginFlow], notice: Optional[str] = None
                 result = await asyncio.to_thread(flow.login, typed.get("password", ""))
         finally:
             set_busy(False)
-        set_values({})                                       # a submitted password does not stay in memory
+        typed_ref.current = {}                               # a submitted password does not stay in memory, nor in the box
+        set_generation(lambda n: n + 1)
         set_error(None if result.ok else result.message)
         set_mode(flow.mode())
 
@@ -113,29 +122,35 @@ def LoginScreen(make_flow: Callable[[], LoginFlow], notice: Optional[str] = None
         result = flow.request_code()
         set_error(None if result.announced else result.message)
 
-    return login_view(mode, values, error, busy, edit, lambda: ft.context.page.run_task(submit), new_code, notice)
+    return login_view(mode, {"_n": generation}, error, busy, edit, lambda: ft.context.page.run_task(submit), new_code, notice)
 
 
 @ft.component
 def AccountPage(make_flow: Callable[[], LoginFlow], on_sign_out: Callable[[], Any]):
     flow, _ = ft.use_state(lambda: make_flow())
-    values, set_values = ft.use_state({})
+    typed_ref = ft.use_ref(None)
+    generation, set_generation = ft.use_state(0)
     error, set_error = ft.use_state(None)
     notice, set_notice = ft.use_state(None)
     busy, set_busy = ft.use_state(False)
+    if typed_ref.current is None:
+        typed_ref.current = {}
 
     def edit(key: str):
-        return lambda e: set_values(lambda current: {**current, key: e.control.value})
+        def typing(e) -> None:
+            typed_ref.current[key] = e.control.value
+        return typing
 
     async def submit() -> None:
-        typed = dict(values)
+        typed = dict(typed_ref.current)
         set_busy(True)
         try:
             result = await asyncio.to_thread(flow.change_password, typed.get("current", ""), typed.get("password", ""), typed.get("confirm", ""))
         finally:
             set_busy(False)
-        set_values({})
+        typed_ref.current = {}
+        set_generation(lambda n: n + 1)
         set_error(None if result.ok else result.message)
         set_notice("Senha alterada." if result.ok else None)
 
-    return account_view(values, error, busy, edit, lambda: ft.context.page.run_task(submit), on_sign_out, notice)
+    return account_view({"_n": generation}, error, busy, edit, lambda: ft.context.page.run_task(submit), on_sign_out, notice)

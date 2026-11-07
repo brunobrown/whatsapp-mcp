@@ -140,24 +140,41 @@ def test_a_file_other_users_can_read_is_warned_about_on_the_form(path):  # CFG-1
 
 # ---- editing and the error beside the field ----
 
-def test_a_number_typed_wrong_shows_its_error_beside_the_field_and_blocks_saving(path):  # CFG-02
+def test_a_number_typed_wrong_shows_its_error_beside_the_field_once_the_box_is_left(path):  # CFG-02
     flow, env, actions = make(policy(path))
-    view = form_view(flow, actions)
-    box = next(c for c in of_type(view, ft.TextField) if c.label == "Tamanho")
+    box = next(c for c in of_type(form_view(flow, actions), ft.TextField) if c.label == "Tamanho")
 
     type_into(box, "7x")
+    assert flow.errors == {} and env.refreshes == 0                                 # a keystroke only remembers: no redraw to race the next key
+    box.on_blur(SimpleNamespace(control=box))
 
-    view = form_view(flow, actions)
-    box = next(c for c in of_type(view, ft.TextField) if c.label == "Tamanho")
-    assert box.error == "deve ser um número inteiro" and box.value == "7x"
-    assert all(b.disabled for b in buttons(view, "Salvar")) and env.refreshes >= 1
+    box = next(c for c in of_type(form_view(flow, actions), ft.TextField) if c.label == "Tamanho")
+    assert box.error == "deve ser um número inteiro" and box.value == "7x" and env.refreshes == 1
 
 
-def test_the_save_button_waits_for_a_change(path):
+def test_saving_takes_what_is_still_being_typed_and_refuses_what_is_wrong(path):  # CFG-02
+    flow, env, actions = make(policy(path))
+    box = next(c for c in of_type(form_view(flow, actions), ft.TextField) if c.label == "Tamanho")
+    type_into(box, "7x")
+
+    click(buttons(form_view(flow, actions), "Salvar")[0])                           # no blur happened: the button takes the text
+
+    assert not path.exists() and [n.key for n in env.notices] == ["save_failed:Política de envio"]
+    assert next(c for c in of_type(form_view(flow, actions), ft.TextField) if c.label == "Tamanho").error == "deve ser um número inteiro"
+
+
+def test_saving_takes_what_is_still_being_typed_and_writes_it(path):  # CFG-03
+    flow, env, actions = make(policy(path))
+    box = next(c for c in of_type(form_view(flow, actions), ft.TextField) if c.label == "Tamanho")
+    type_into(box, "7")
+
+    click(buttons(form_view(flow, actions), "Salvar")[0])
+
+    assert json.loads(path.read_text()) == {"size": 7}
+
+
+def test_save_is_there_unless_the_check_cannot_be_made(path):
     flow, _, actions = make(policy(path))
-    assert all(b.disabled for b in buttons(form_view(flow, actions), "Salvar"))
-
-    flow.set("size", "3")
 
     assert not any(b.disabled for b in buttons(form_view(flow, actions), "Salvar"))
 
@@ -260,7 +277,8 @@ def test_restoring_one_field_asks_first_and_says_which(path):  # CFG-07
 
 def test_discarding_changes_asks_only_when_there_are_some(path):  # CFG-06
     flow, env, actions = make(policy(path))
-    assert all(b.disabled for b in buttons(form_view(flow, actions), "Descartar"))
+    click(buttons(form_view(flow, actions), "Descartar")[0])
+    assert env.asked == []                                                         # nothing to lose, nothing to ask
 
     flow.set("size", "3")
     click(buttons(form_view(flow, actions), "Descartar")[0])
@@ -351,6 +369,7 @@ def test_the_form_tells_the_shell_when_it_gets_or_loses_unsaved_changes(path):  
     actions = FormActions(flow, notify=lambda n: None, ask=lambda c: None, refresh=lambda: None, note_restart=lambda s: None, dirty_changed=marks.append)
 
     actions.change("size")("3")
+    actions.flush()
     click(buttons(form_view(flow, actions), "Salvar")[0])
 
     assert marks == [True, False]
