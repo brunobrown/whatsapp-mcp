@@ -120,6 +120,7 @@ This application consists of two main components:
 - All message history is stored in an encrypted SQLite database (SQLCipher) within the `whatsapp-bridge/store/` directory; see [Security of your data](#security-of-your-data)
 - The database maintains tables for chats, messages, `polls`, `poll_votes`, `reactions` and `contacts_identity` (who is behind each phone number and LID, with address-book and push names)
 - Messages are indexed for efficient searching and retrieval
+- `messages.db` runs in SQLite's WAL mode with `synchronous=NORMAL`: writes no longer wait for a disk flush each, so concurrent writers (incoming events, history sync, the REST API) do not time out with `database is locked`. While the bridge runs you will see `messages.db-wal` and `messages.db-shm` next to it. They are as private (`0600`) and as encrypted as the database itself, the MCP server still reads them read-only, and the schema is moved into the main file at every start. **To copy the database, stop the bridge first** (or copy the three files together): a lone `messages.db` can miss the latest rows. A power cut can lose the last few seconds of messages, never corrupt the database; an ordinary exit or crash loses nothing that was committed.
 - Downloaded media lives under `whatsapp-bridge/store/<chat>/<message id>/`
 
 #### Database changes

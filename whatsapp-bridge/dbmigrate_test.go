@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -170,9 +172,15 @@ func TestAFailedVerificationLeavesTheOriginalAlone(t *testing.T) { // MIG-02
 	if fileHash(t, "store/messages.db") != before || !startsWithSQLiteMagic(t, "store/messages.db") {
 		t.Error("the original was changed")
 	}
+	// the original runs in WAL mode, so its own -wal and -shm may sit next to it; nothing else may (no temporary
+	// file of the failed migration, no copy)
 	entries, _ := os.ReadDir("store")
-	if len(entries) != 1 {
-		t.Errorf("files left next to the original: %v", entries)
+	for _, entry := range entries {
+		switch entry.Name() {
+		case "messages.db", "messages.db-wal", "messages.db-shm":
+		default:
+			t.Errorf("unexpected file left next to the original: %s", entry.Name())
+		}
 	}
 }
 
@@ -375,10 +383,15 @@ func TestPurgeRemovesOnlyPlaintextCopies(t *testing.T) { // MIG-06
 
 	removed, err := purgePlaintext("store")
 
-	if err != nil || len(removed) != 2 {
-		t.Fatalf("removed %v err %v, want the two plaintext copies", removed, err)
+	// the two plaintext copies and the -wal/-shm that the WAL-mode plaintext database left with its copy: they
+	// hold plaintext too, so the purge must overwrite and remove them
+	wantRemoved := []string{copies[0], copies[0] + "-shm", copies[0] + "-wal", oldPlain}
+	sort.Strings(removed)
+	sort.Strings(wantRemoved)
+	if err != nil || !reflect.DeepEqual(removed, wantRemoved) {
+		t.Fatalf("removed %v err %v, want %v", removed, err, wantRemoved)
 	}
-	for _, gone := range []string{copies[0], oldPlain} {
+	for _, gone := range []string{copies[0], copies[0] + "-shm", copies[0] + "-wal", oldPlain} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s is still there", gone)
 		}
@@ -575,9 +588,17 @@ func TestADatabaseWithAWALIsRecoveredOnACopyAndLosesNothing(t *testing.T) { // M
 	if _, err := os.Stat(copies[0] + "-wal"); err != nil {
 		t.Error("the WAL must go with the plaintext copy")
 	}
-	for _, leftover := range []string{"store/messages.db-wal", "store/messages.db-shm", "store/messages.db-journal"} {
-		if _, err := os.Stat(leftover); err == nil {
-			t.Errorf("%s was left against the new database", leftover)
+	// the new database runs in WAL mode and has its own -wal/-shm; the old plaintext WAL must not be left against
+	// it: whatever sits next to the new file is not that one (not its bytes, not its plaintext rows)
+	if _, err := os.Stat("store/messages.db-journal"); err == nil {
+		t.Error("store/messages.db-journal was left against the new database")
+	}
+	if wal, err := os.ReadFile("store/messages.db-wal"); err == nil {
+		if oldWAL := mustRead(t, copies[0]+"-wal"); bytes.Equal(wal, oldWAL) {
+			t.Error("the old plaintext WAL was left against the new database")
+		}
+		if strings.Contains(string(wal), "only in the WAL") {
+			t.Error("plaintext rows of the old WAL are in the WAL of the new database")
 		}
 	}
 	entries, _ := os.ReadDir("store")
