@@ -74,6 +74,7 @@ def arguments(files):
         "list_pending_drafts": {},
         "get_metrics": {},
         "export_conversation": {"chat_jid": GROUP},
+        "save_conversation_export": {"chat_jid": GROUP, "save_as": "call-table"},
         "discard_pending_draft": {"draft_id": "d_none"},
         "test_webhook": {"name": "local"},
         "send_message": {"recipient": GROUP, "message": "hi"},

@@ -49,13 +49,11 @@ class Pseudonyms:
 
 def export_conversation(chat_jid: str, after: Optional[str] = None, before: Optional[str] = None,
                         anonymize: bool = False, include_polls: bool = True, include_reactions: bool = True,
-                        limit: int = DEFAULT_LIMIT, save_as: Optional[str] = None) -> dict:
+                        limit: int = DEFAULT_LIMIT) -> dict:
     if not isinstance(chat_jid, str) or not chat_jid.strip():
         return _error("INVALID_ARGUMENT", "chat_jid is required")
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_LIMIT:
         return _error("INVALID_ARGUMENT", f"limit must be a whole number between 1 and {MAX_LIMIT}")
-    if save_as is not None and not (isinstance(save_as, str) and _SAFE_NAME.fullmatch(save_as)):
-        return _error("INVALID_ARGUMENT", "save_as is a file name of letters, digits, dot, dash and underscore")
     try:
         params = [whatsapp._instant_param(v, n) if v else None for v, n in ((after, "after"), (before, "before"))]
     except ValueError as e:
@@ -126,14 +124,26 @@ def export_conversation(chat_jid: str, after: Optional[str] = None, before: Opti
         "untrusted_content": True,
         "notice": NOTICE,
     }
-    if save_as:
-        path = os.path.join(localconfig.config_dir(), "exports", save_as if save_as.endswith(".json") else save_as + ".json")
-        try:
-            _write_private(path, result)
-        except OSError as e:
-            return _error("EXPORT_WRITE_FAILED", f"Could not write {path}: {e.strerror}")
-        result["saved_to"] = path
     return result
+
+
+def save_conversation_export(chat_jid: str, save_as: str, after: Optional[str] = None, before: Optional[str] = None,
+                             anonymize: bool = False, include_polls: bool = True, include_reactions: bool = True,
+                             limit: int = DEFAULT_LIMIT, overwrite: bool = False) -> dict:
+    """export_conversation, written to <configuration directory>/exports/<save_as>.json (directory 0700, file 0600)."""
+    if not (isinstance(save_as, str) and _SAFE_NAME.fullmatch(save_as) and save_as not in (".", "..")):
+        return _error("INVALID_ARGUMENT", "save_as is a file name of letters, digits, dot, dash and underscore")
+    result = export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit)
+    if not result.get("success"):
+        return result
+    path = os.path.join(localconfig.config_dir(), "exports", save_as if save_as.endswith(".json") else save_as + ".json")
+    try:
+        _write_private(path, result, overwrite)
+    except FileExistsError:
+        return _error("EXPORT_EXISTS", f"{path} already exists; choose another name or pass overwrite=true")
+    except OSError as e:
+        return _error("EXPORT_WRITE_FAILED", f"Could not write {path}: {e.strerror}")
+    return {**result, "saved_to": path}
 
 
 def _polls(cursor, jid: str, window_ids: List[str], pseudo: Pseudonyms) -> List[dict]:
@@ -182,14 +192,24 @@ def _reactions(cursor, jid: str, window_ids: List[str], pseudo: Pseudonyms) -> L
     return out
 
 
-def _write_private(path: str, data: dict) -> None:
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+def _write_private(path: str, data: dict, overwrite: bool) -> None:
+    """Write through a temporary file opened with O_EXCL and O_NOFOLLOW, so a planted link is never followed."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.chmod(directory, 0o700)
+    if not overwrite and os.path.lexists(path):
+        raise FileExistsError(path)
     tmp = f"{path}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
-        os.replace(tmp, path)
+        if overwrite:
+            os.replace(tmp, path)
+        else:
+            os.link(tmp, path)       # fails if the name appeared meanwhile; never replaces an existing file
+            os.unlink(tmp)
     finally:
-        if os.path.exists(tmp):
+        if os.path.lexists(tmp):
             os.unlink(tmp)

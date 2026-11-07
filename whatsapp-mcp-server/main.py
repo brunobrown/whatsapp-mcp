@@ -749,8 +749,7 @@ def export_conversation(
     anonymize: bool = False,
     include_polls: bool = True,
     include_reactions: bool = True,
-    limit: int = 500,
-    save_as: Optional[str] = None
+    limit: int = 500
 ) -> Dict[str, Any]:
     """Export a window of one chat (messages, polls with their votes, reactions) as structured data for archiving.
 
@@ -766,13 +765,40 @@ def export_conversation(
         include_polls: Polls created in the window, with options, votes and who voted (pseudonyms when anonymized)
         include_reactions: The reactions that stand on the messages of the window
         limit: At most this many messages (1 to 2000, default 500)
-        save_as: Also write the result to <configuration directory>/exports/<save_as>.json (mode 0600). Letters, digits, . - _
 
     Returns:
-        success, chat, range, count, has_more, next_after, messages, polls, reactions, untrusted_content and notice,
-        plus saved_to when save_as was given. Errors: INVALID_ARGUMENT, CHAT_NOT_FOUND, AMBIGUOUS_CHAT, DIRECTORY_UNAVAILABLE
+        success, chat, range, count, has_more, next_after, messages, polls, reactions, untrusted_content and notice.
+        To keep the result in a file use save_conversation_export. Errors: INVALID_ARGUMENT, CHAT_NOT_FOUND, AMBIGUOUS_CHAT, DIRECTORY_UNAVAILABLE
     """
-    return export.export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit, save_as)
+    return export.export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit)
+
+@mcp.tool(annotations=LOCAL_WRITES)
+def save_conversation_export(
+    chat_jid: str,
+    save_as: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    anonymize: bool = False,
+    include_polls: bool = True,
+    include_reactions: bool = True,
+    limit: int = 500,
+    overwrite: bool = False
+) -> Dict[str, Any]:
+    """Like export_conversation, and also write the result to <configuration directory>/exports/<save_as>.json.
+
+    The directory is 0700 and the file 0600; the file is not encrypted. An existing file is never replaced unless
+    overwrite is true.
+
+    Args:
+        save_as: File name: letters, digits, dot, dash and underscore
+        overwrite: Replace an existing file of that name
+        (the other arguments are those of export_conversation)
+
+    Returns:
+        The export plus saved_to. Errors: those of export_conversation, EXPORT_EXISTS and EXPORT_WRITE_FAILED
+    """
+    return export.save_conversation_export(chat_jid, save_as, after, before, anonymize, include_polls,
+                                           include_reactions, limit, overwrite)
 
 @mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:

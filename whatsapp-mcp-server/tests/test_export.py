@@ -113,7 +113,7 @@ def test_the_same_person_keeps_the_same_pseudonym_everywhere(conn):  # EXPORT-04
 
 @pytest.mark.parametrize("kwargs", [{"chat_jid": ""}, {"chat_jid": A, "limit": 0}, {"chat_jid": A, "limit": 2001},
                                     {"chat_jid": A, "limit": True}, {"chat_jid": A, "after": "yesterday"},
-                                    {"chat_jid": A, "save_as": "../x"}, {"chat_jid": A, "save_as": ""}])
+                                    ])
 def test_bad_arguments(conn, kwargs):  # EXPORT-05
     assert export.export_conversation(**kwargs)["error_code"] == "INVALID_ARGUMENT"
 
@@ -124,10 +124,10 @@ def test_unknown_chat_and_unreadable_database(conn, tmp_path, monkeypatch):  # E
     assert export.export_conversation(A)["error_code"] == "DIRECTORY_UNAVAILABLE"
 
 
-def test_save_as_writes_a_private_json_file_in_the_exports_directory(conn, tmp_path):  # EXPORT-06
+def test_saving_writes_a_private_json_file_in_a_private_directory(conn, tmp_path):  # EXPORT-06
     seed(conn)
 
-    out = export.export_conversation(A, save_as="alpha")
+    out = export.save_conversation_export(A, "alpha")
 
     path = out["saved_to"]
     assert path == os.path.join(str(tmp_path / "config"), "exports", "alpha.json")
@@ -136,8 +136,59 @@ def test_save_as_writes_a_private_json_file_in_the_exports_directory(conn, tmp_p
     assert saved["count"] == 4 and "saved_to" not in saved
 
 
-def test_the_tool_is_registered_and_read_only():  # EXPORT-07
-    assert main.export_conversation.__doc__ and "anonymize" in main.export_conversation.__doc__
+def test_an_existing_directory_with_wide_permissions_is_tightened(conn, tmp_path):  # EXPORT-06
+    seed(conn)
+    directory = tmp_path / "config" / "exports"
+    directory.mkdir(parents=True)
+    os.chmod(directory, 0o755)
+
+    export.save_conversation_export(A, "alpha")
+
+    assert stat.S_IMODE(os.stat(directory).st_mode) == 0o700
+
+
+def test_an_existing_export_is_not_replaced_unless_asked(conn, tmp_path):  # EXPORT-06
+    seed(conn)
+    first = export.save_conversation_export(A, "alpha")
+    with open(first["saved_to"], "w") as f:
+        f.write("mine")
+
+    again = export.save_conversation_export(A, "alpha")
+    assert again["error_code"] == "EXPORT_EXISTS" and open(first["saved_to"]).read() == "mine"
+    assert export.save_conversation_export(A, "alpha", overwrite=True)["success"] is True
+    assert json.load(open(first["saved_to"]))["count"] == 4
+
+
+def test_a_planted_link_is_never_followed(conn, tmp_path):  # EXPORT-06
+    seed(conn)
+    directory = tmp_path / "config" / "exports"
+    directory.mkdir(parents=True)
+    target = tmp_path / "victim.txt"
+    target.write_text("keep")
+    os.symlink(target, directory / "alpha.json")
+
+    assert export.save_conversation_export(A, "alpha")["error_code"] == "EXPORT_EXISTS"
+    assert export.save_conversation_export(A, "alpha", overwrite=True)["success"] is True
+    assert target.read_text() == "keep"          # the link was replaced, not written through
+
+
+@pytest.mark.parametrize("name", ["../x", "a/b", "", ".", "..", "a b", "x" * 81])
+def test_unsafe_file_names_are_refused(conn, name):  # EXPORT-06
+    seed(conn)
+    assert export.save_conversation_export(A, name)["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_a_failed_export_writes_nothing(conn, tmp_path):  # EXPORT-06
+    assert export.save_conversation_export("nobody@g.us", "alpha")["error_code"] == "CHAT_NOT_FOUND"
+    assert not os.path.exists(tmp_path / "config" / "exports")
+
+
+def test_the_read_tool_cannot_write_and_the_writing_one_is_not_read_only():  # EXPORT-07
+    import asyncio
+    tools = {t.name: t for t in asyncio.run(main.mcp.list_tools())}
+    assert "save_as" not in tools["export_conversation"].input_schema["properties"]
+    assert tools["export_conversation"].annotations.read_only_hint is True
+    assert tools["save_conversation_export"].annotations.read_only_hint is False
 
 
 def test_mentions_by_id_follow_the_pseudonym_of_that_person(conn):  # EXPORT-04
