@@ -782,7 +782,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		return
 	}
 
-	if !recordPoll(messageStore, func(e *events.Message) (*waProto.PollVoteMessage, error) {
+	own := ""
+	if client != nil && client.Store != nil && client.Store.ID != nil {
+		own = client.Store.ID.User
+	}
+	if !recordPoll(messageStore, own, func(e *events.Message) (*waProto.PollVoteMessage, error) {
 		return client.DecryptPollVote(context.Background(), e)
 	}, msg, logger) {
 		return
@@ -1408,6 +1412,46 @@ func loadRetentionDays(getenv func(string) string) int {
 	return days
 }
 
+// storeRootDir is the absolute, symlink-free path of store/, the only place downloaded files are deleted from.
+func storeRootDir() (string, error) {
+	root, err := filepath.Abs("store")
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	return root, nil
+}
+
+// removeStoreFile deletes a downloaded file, and its directory when that is left empty, but only
+// inside storeRoot. removed reports whether a file was deleted; forget is false when the path was left
+// alone (outside store/ or not deletable), so its record must be kept, and true when the file is gone.
+func removeStoreFile(storeRoot, path string) (removed, forget bool) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false, false
+	}
+	// Resolve the directory, not the file: a symlinked file is unlinked without touching its
+	// target, but a symlinked directory would redirect the delete outside store/.
+	dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
+	if err != nil && !os.IsNotExist(err) {
+		return false, false
+	}
+	if err != nil { // the directory is gone, so is the file
+		return false, strings.HasPrefix(abs, storeRoot+string(os.PathSeparator))
+	}
+	if !strings.HasPrefix(dir, storeRoot+string(os.PathSeparator)) {
+		return false, false // never touch anything outside store/
+	}
+	err = os.Remove(filepath.Join(dir, filepath.Base(abs)))
+	if err != nil && !os.IsNotExist(err) {
+		return false, false
+	}
+	os.Remove(dir) // only succeeds when the directory is empty
+	return err == nil, true
+}
+
 // CleanupExpiredMedia deletes the downloaded file of every message older than days and clears
 // its local_path, keeping the message itself. The age is the message's, not the file's, since
 // the download can happen long after the message. Only paths inside store/ are ever deleted.
@@ -1415,12 +1459,9 @@ func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, er
 	if days <= 0 {
 		return 0, fmt.Errorf("retention days must be positive, got %d", days)
 	}
-	storeRoot, err := filepath.Abs("store")
+	storeRoot, err := storeRootDir()
 	if err != nil {
 		return 0, err
-	}
-	if resolved, err := filepath.EvalSymlinks(storeRoot); err == nil {
-		storeRoot = resolved
 	}
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour)
 
@@ -1449,28 +1490,11 @@ func (store *MessageStore) CleanupExpiredMedia(now time.Time, days int) (int, er
 
 	deleted := 0
 	for _, e := range candidates {
-		abs, err := filepath.Abs(e.path)
-		if err != nil {
-			continue
+		removed, forget := removeStoreFile(storeRoot, e.path)
+		if removed {
+			deleted++
 		}
-		// Resolve the directory, not the file: a symlinked file is unlinked without touching its
-		// target, but a symlinked directory would redirect the delete outside store/.
-		dir, err := filepath.EvalSymlinks(filepath.Dir(abs))
-		if err != nil && !os.IsNotExist(err) {
-			continue
-		}
-		if err == nil {
-			if !strings.HasPrefix(dir, storeRoot+string(os.PathSeparator)) {
-				continue // never touch anything outside store/
-			}
-			target := filepath.Join(dir, filepath.Base(abs))
-			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-				continue
-			} else if err == nil {
-				deleted++
-			}
-			os.Remove(dir) // only succeeds when the directory is empty
-		} else if !strings.HasPrefix(abs, storeRoot+string(os.PathSeparator)) {
+		if !forget {
 			continue
 		}
 		if err := store.SetLocalPath(e.id, e.chatJID, ""); err != nil {

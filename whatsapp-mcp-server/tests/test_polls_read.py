@@ -206,3 +206,22 @@ def test_list_polls_newest_first_with_counts_and_paging(conn):  # LIST-01
 def test_list_polls_rejects_bad_paging(conn, kwargs):  # LIST-02
     out = whatsapp.list_polls(A, **kwargs)
     assert out["success"] is False and out["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_list_polls_orders_by_message_time_not_by_insertion(conn):  # LIST-01
+    add_poll(conn, id="LATE", question="Mais nova", minute=9)    # inserida primeiro
+    add_poll(conn, id="EARLY", question="Mais antiga", minute=1)
+    add_poll(conn, id="MIDDLE", question="Do meio", minute=5)
+
+    out = whatsapp.list_polls(A)
+
+    assert [p["message_id"] for p in out["polls"]] == ["LATE", "MIDDLE", "EARLY"]
+
+
+def test_voters_are_listed_in_the_order_they_voted_not_by_id(conn):  # RES-02
+    add_poll(conn)
+    vote(conn, "9999", ["Sim"], at=1)   # votou primeiro, mas o id é o maior
+    vote(conn, "1111", ["Sim"], at=2)
+    vote(conn, "5555", ["Sim"], at=3)
+
+    assert opt(whatsapp.get_poll_results("P1", A), "Sim")["voters"] == ["9999", "1111", "5555"]
