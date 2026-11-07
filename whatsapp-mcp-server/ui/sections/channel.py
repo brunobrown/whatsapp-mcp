@@ -23,7 +23,7 @@ SECTION = register(Section(
         Field("profiles", "Perfis do monitor", "list", default=[], max_length=100,
               help="Os perfis são o único controle sobre o que vira aviso: conversas, remetentes, gatilhos e assuntos. Até 20."),
         Field("polls", "Enquetes", "list", default=[], max_length=100, help="Ids de mensagens de enquete cujos votos e encerramento são avisados. Até 20."),
-        Field("include_excerpt", "Incluir um trecho do texto", "bool", default=_DEFAULTS.include_excerpt,
+        Field("include_excerpt", "Incluir um trecho do texto", "bool", default=_DEFAULTS.include_excerpt, risk_when=(True,),
               risk="O trecho é texto de um desconhecido colocado diante do agente. Deixe desligado, a menos que aceite esse risco.",
               help="Desligado, o aviso leva só ids, tipos e horários."),
         Field("excerpt_chars", "Tamanho do trecho", "int", default=_DEFAULTS.excerpt_chars, bounds=(1, 280)),

@@ -33,7 +33,7 @@ SECTION = register(Section(
               help="Nomes de conversas, números ou JIDs. Vale nos dois modos e vence a lista de permissão."),
         Field("override_token", "Token de liberação", "secret",
               help="Quem o informa em um envio libera aquele envio bloqueado. É um obstáculo, não uma barreira."),
-        Field("session_taint", "Contaminação da sessão", "choice", default="block", options=("block", "off"),
+        Field("session_taint", "Contaminação da sessão", "choice", default="block", options=("block", "off"), risk_when=("off",),
               risk="Com off, o agente pode enviar a uma conversa o que leu em outra: uma mensagem maliciosa pode levá-lo a vazar dados.",
               help="block impede enviar a uma conversa diferente das que a sessão já leu. A variável WHATSAPP_SESSION_TAINT, se definida, vence este valor."),
     ),

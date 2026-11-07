@@ -46,6 +46,7 @@ class Field:
     id_key: Optional[str] = None              # records: the sub-field that names a record (to keep its secret when records move)
     readonly: bool = False                    # shown, never edited
     risk: Optional[str] = None                # what to tell the operator before a value that weakens a defence
+    risk_when: Tuple[Any, ...] = ()           # the values that carry that risk; empty means the warning always applies
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -65,6 +66,10 @@ class Field:
             raise ValueError(f"field {self.key!r}: a key is repeated among its fields")
         if self.id_key is not None and self.id_key not in keys:
             raise ValueError(f"field {self.key!r}: id_key {self.id_key!r} is not one of its fields")
+
+    def risky(self, value: Any) -> bool:
+        """Whether choosing value should be confirmed with the warning in risk."""
+        return bool(self.risk) and (not self.risk_when or value in self.risk_when)
 
     def sub(self, key: str) -> "Field":
         """The field of a record by its key."""

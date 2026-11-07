@@ -225,3 +225,19 @@ def test_an_error_message_never_repeats_the_value():
     message = Field("thing", "Thing", "choice", options=("a",)).check("top-secret-value")
 
     assert "top-secret-value" not in message
+
+
+# ---- Field.risky: confirm only the choices that weaken a defence ----
+
+def test_a_field_without_a_warning_is_never_risky():
+    assert Field("x", "X", "bool").risky(True) is False
+
+
+def test_a_warning_with_values_applies_to_those_values_only():
+    field = Field("mode", "Mode", "choice", options=("draft", "auto"), risk="sem aprovação", risk_when=("auto",))
+
+    assert field.risky("auto") is True and field.risky("draft") is False and field.risky(None) is False
+
+
+def test_a_warning_without_values_always_applies():
+    assert Field("host", "Host", "text", risk="exposto").risky("anything") is True

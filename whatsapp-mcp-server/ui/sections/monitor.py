@@ -26,7 +26,7 @@ def _profile_fields():
     return (
         Field("name", "Nome do perfil", "text", max_length=64, help="Identifica o perfil nas ferramentas. Sem pontos."),
         Field("enabled", "Ativo", "bool", default=True),
-        Field("mode", "Modo de resposta", "choice", default="draft", options=monitor.MODES,
+        Field("mode", "Modo de resposta", "choice", default="draft", options=monitor.MODES, risk_when=("auto",),
               risk="Em auto o agente responde sem aprovação humana a quem estiver liberado.",
               help="draft deixa a resposta pendente para aprovação. auto envia direto."),
         Field("targets", "Números monitorados", "list", max_length=_LIST_ITEM,
@@ -43,7 +43,7 @@ def _profile_fields():
         Field("auto_senders", "Remetentes em resposta automática", "list", max_length=_LIST_ITEM),
         Field("topics", "Assuntos", "list", max_length=60, help="Palavras-chave. Vazio aceita qualquer texto."),
         Field("allow_own_alias", "Aceitar apelido nas próprias mensagens", "bool", default=False),
-        Field("cross_chat_replies", "Responder após ler outras conversas", "bool", default=False,
+        Field("cross_chat_replies", "Responder após ler outras conversas", "bool", default=False, risk_when=(True,),
               risk="Permite responder depois de ler outras conversas do perfil: o texto de uma pode induzir o agente a levar dados à outra."),
         Field("approval_token", "Token de aprovação", "secret", help="Exigido para enviar no modo auto. É um obstáculo, não uma barreira."),
         *limits,
