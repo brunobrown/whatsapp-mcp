@@ -3,6 +3,7 @@ import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { useT } from "@/i18n/t";
 import { useSession } from "@/services/services";
 import { LoginPage } from "./LoginPage";
+import { SetupPage } from "./SetupPage";
 
 /** The page of /login: it reads the session and shows the form that state calls for. */
 export function AuthPage() {
@@ -38,5 +39,6 @@ export function AuthPage() {
       </AuthLayout>
     );
   }
+  if (session.data.state === "setup") return <SetupPage />;
   return <LoginPage notice={session.data.message} />;
 }
