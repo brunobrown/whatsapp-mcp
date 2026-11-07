@@ -131,7 +131,7 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
   const sections = useSections();
   const restart = useUiStore((state) => state.restart);
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
+    <aside aria-label={t("shell.panel")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
       <div className="flex h-16 shrink-0 items-center gap-1 border-b border-line bg-surface pr-2 pl-4">
         <div className="min-w-0 flex-1 leading-tight">
           <p className="m-0 truncate text-lg font-semibold">{t("app.name")}</p>
@@ -170,7 +170,7 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
           </ul>
         )}
       </nav>
-    </div>
+    </aside>
   );
 }
 

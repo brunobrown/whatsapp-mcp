@@ -41,6 +41,7 @@ export const en = {
   "notFound.body": "This address does not match any page of the interface.",
   "notFound.link": "Go to the settings",
   "route.error": "This page could not be opened.",
+  "shell.panel": "Settings menu",
   "shell.nav": "Sections",
   "shell.skip": "Skip to the content",
   "shell.back": "Back to the sections",

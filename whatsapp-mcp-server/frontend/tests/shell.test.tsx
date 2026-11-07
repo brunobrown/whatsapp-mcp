@@ -115,6 +115,16 @@ describe("wide screens (600 px and more)", () => {
     expect(await screen.findAllByText("Restart needed")).toHaveLength(2);
   });
 
+  it("keeps the brand header, the theme and sign-out buttons and the section list in one landmark", async () => {
+    open("/s/send_policy");
+    const nav = await listed();
+    const panel = screen.getByRole("complementary", { name: "Settings menu" });
+    expect(within(panel).getByRole("navigation", { name: "Sections" })).toBe(nav);
+    expect(within(panel).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+    expect(within(panel).getByText("WhatsApp MCP")).toBeInTheDocument();
+  });
+
   it("has no back button", async () => {
     open("/s/media");
     await listed();
