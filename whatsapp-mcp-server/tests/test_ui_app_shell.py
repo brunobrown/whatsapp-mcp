@@ -168,10 +168,26 @@ def test_a_section_registered_later_appears_without_editing_the_shell():  # EXT-
 
 
 def test_registered_test_section_is_rendered_by_shell():  # EXT-03
-    entries = entries_for(section("brandnew", "Recém-chegada", 15))
-    view, rec = build(1280, entries, selected="brandnew", content=ft.Text("conteúdo de brandnew"))
+    from ui.app.form import FormActions, form_view
+    from ui.core.envlayer import EnvLayer
+    from ui.core.formflow import FormFlow
+    from ui.core.registry import EnvKeys
+    from ui.core.store import ConfigStore
 
-    assert "conteúdo de brandnew" in texts(view) and rec.state.section_id is None      # shown by being given, not by the shell knowing it
+    registry = Registry()
+    registry.register(Section(id="brandnew", title="Recém-chegada", icon="settings", order=15, storage=EnvKeys(), validate=lambda v: [],
+                              fields=(Field("zone", "Fuso da recém-chegada", "text", env_var="WHATSAPP_TIMEZONE"),)))
+    entries = nav_entries(registry.sections(), PAGES)
+    section_registered = registry.sections()[0]
+    flow = FormFlow(section_registered, ConfigStore(), EnvLayer(environ={}))
+    flow.load()
+    page = form_view(flow, FormActions(flow, notify=lambda n: None, ask=lambda c: None, refresh=lambda: None, note_restart=lambda s: None))
+
+    view, _ = build(1280, entries, selected="brandnew", content=page)
+
+    rail = of_type(view, ft.NavigationRail)[0]
+    assert [d.label for d in rail.destinations] == ["Status", "Recém-chegada", "Conta"] and rail.selected_index == 1
+    assert "Recém-chegada" in texts(view) and "Fuso da recém-chegada" in " ".join(str(getattr(c, "label", "")) for c in walk(view))
 
 
 def test_the_shell_never_names_a_section_of_the_project():  # EXT-01

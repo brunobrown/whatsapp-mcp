@@ -52,6 +52,8 @@ def test_the_status_page_says_whether_the_bridge_is_connected_and_paired():  # O
     shown = texts(status_view(CONNECTED, COUNTERS))
 
     assert "Conectado ao WhatsApp" in shown and "5511999990000" in shown and "0.5.0" in shown and "2 h 15 min" in shown
+    down = texts(status_view(Unavailable("unreachable"), None))                    # and a bridge that does not answer is said, not hidden
+    assert "O bridge não responde" in down and "Conectado ao WhatsApp" not in down
 
 
 def test_a_bridge_that_is_up_but_not_connected_says_so():  # OPS-01

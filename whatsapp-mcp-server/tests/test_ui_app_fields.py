@@ -197,13 +197,22 @@ def test_the_row_says_where_the_value_comes_from_in_words_not_only_in_colour(): 
 
 
 def test_environment_defined_field_is_locked_and_names_variable():  # CFG-04
+    from ui.core.envlayer import EnvLayer
+    from ui.core.registry import EnvKeys, Section
+
     field = Field("n", "Porta", "int", env_var="WHATSAPP_UI_PORT")
-    p, _ = props(field, 9000, origin="env", locked=True, env_var="WHATSAPP_UI_PORT")
+    section = Section(id="s", title="S", icon="x", order=1, storage=EnvKeys(), validate=lambda v: [], fields=(field,))
+    state = EnvLayer(environ={"WHATSAPP_UI_PORT": "9000"}).state(section)[0]          # the lock comes from the environment, not from the caller
+    free = EnvLayer(environ={}).state(section)[0]
 
+    p, _ = props(field, state.value, origin=state.origin, locked=state.locked, env_var=state.env_var)
     row = fields.field_row(p)
+    open_p, _ = props(field, free.value, origin=free.origin, locked=free.locked, env_var=free.env_var)
 
+    assert (state.value, state.origin, state.locked) == (9000, "env", True) and free.locked is False
     assert all(c.disabled for c in of_type(row, ft.TextField))
     assert "Definido pela variável de ambiente WHATSAPP_UI_PORT" in texts(row)
+    assert not any(c.disabled for c in of_type(fields.field_row(open_p), ft.TextField))
 
 
 def test_a_read_only_field_is_disabled_without_blaming_the_environment():  # CFG-04

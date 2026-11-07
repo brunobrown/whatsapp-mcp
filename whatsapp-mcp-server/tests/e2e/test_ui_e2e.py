@@ -126,12 +126,17 @@ def test_e2e_layout_adapts_without_horizontal_scroll(browser, ui):  # UX-01
 
 
 def tab_until(page, label_part, limit=30):
+    """Press Tab until the focused control is named like label_part; returns the names of every control passed on the way."""
+    seen = []
     for _ in range(limit):
         page.keyboard.press("Tab")
         page.wait_for_timeout(150)
-        if label_part in (page.evaluate("document.activeElement && (document.activeElement.getAttribute('aria-label') || document.activeElement.textContent || '')") or ""):
-            return
-    raise AssertionError(f"Tab never reached {label_part!r}")
+        name = page.evaluate("document.activeElement && (document.activeElement.tagName === 'INPUT' ? 'input:' + document.activeElement.value : "
+                             "(document.activeElement.getAttribute('aria-label') || document.activeElement.textContent || ''))") or ""
+        seen.append(name)
+        if label_part in name:
+            return seen
+    raise AssertionError(f"Tab never reached {label_part!r}; it passed {seen}")
 
 
 def test_e2e_every_control_is_keyboard_operable(browser, ui):  # UX-02
@@ -153,4 +158,7 @@ def test_e2e_every_control_is_keyboard_operable(browser, ui):  # UX-02
     tab_until(page, "Mídia")                                  # Tab reaches a destination of the rail ...
     page.keyboard.press("Enter")                                  # ... and Enter opens it
     page.get_by_role("textbox", name="Tamanho máximo baixado").wait_for(state="attached", timeout=20000)
-    tab_until(page, "Salvar")                                     # and the section's own button is reachable too
+    passed = tab_until(page, "Salvar") + tab_until(page, "Salvar")       # one full turn of the focus ring, wherever it started: every control shows up
+    for control in ("Baixar mídia ao chegar", "image", "video", "audio", "document", "Guardar o conteúdo", "Gravar o texto", "Salvar"):
+        assert any(control in name for name in passed), f"Tab skipped {control!r}; it passed {passed}"
+    assert len({name for name in passed if name.startswith("input:")}) == 2, f"the two number boxes were not both reached: {passed}"

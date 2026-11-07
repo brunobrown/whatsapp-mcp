@@ -144,6 +144,29 @@ def test_the_encryption_state_follows_the_variable(monkeypatch):  # CFG-01
     assert values()["encryption"].startswith("desligada")
 
 
+def test_value_default_and_origin_of_a_field_follow_the_environment_and_the_file():  # CFG-01
+    from ui.core.envlayer import EnvLayer
+    from ui.core.formflow import FormFlow
+    from ui.core.store import ConfigStore
+
+    section = next(s for s in all_sections() if any(f.env_var == "WHATSAPP_AUTO_DOWNLOAD_MAX_MB" for f in s.fields))
+    key = next(f.key for f in section.fields if f.env_var == "WHATSAPP_AUTO_DOWNLOAD_MAX_MB")
+
+    def flow_with(environ):
+        flow = FormFlow(section, ConfigStore(), EnvLayer(environ=environ))
+        flow.load()
+        return flow
+
+    plain = flow_with({})
+    assert (plain.origin(key), plain.shown(key)) == ("default", section.field(key).default) and section.field(key).default == 25
+    layer = EnvLayer(environ={})
+    assert layer.save(section, {key: 50}, layer.load().version).ok
+    from_file = flow_with({})
+    assert (from_file.origin(key), from_file.shown(key), section.field(key).default) == ("file", 50, 25)
+    from_env = flow_with({"WHATSAPP_AUTO_DOWNLOAD_MAX_MB": "10"})
+    assert (from_env.origin(key), from_env.shown(key), from_env.is_locked(key)) == ("env", 10, True)
+
+
 def test_every_field_reports_value_default_and_origin():  # CFG-01
     from ui.core.envlayer import EnvLayer
     from ui.core.formflow import FormFlow
@@ -156,5 +179,5 @@ def test_every_field_reports_value_default_and_origin():  # CFG-01
         flow.load()
         for f in section.fields:
             assert flow.origin(f.key) in ("default", "file", "env"), (section.id, f.key)
-            flow.shown(f.key)                                           # the value (or the default) can always be had
+            flow.shown(f.key)                                           # the value (or the default) can always be had; what it is, is held by the test above
             assert f.default is None or f.kind in ("bool", "int", "float", "text", "choice", "multichoice", "list", "records", "secret")

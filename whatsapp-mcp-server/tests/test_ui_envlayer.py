@@ -195,6 +195,12 @@ def test_a_change_to_a_bridge_variable_is_pending_until_the_interface_restarts_w
     restarted = EnvLayer(environ={})           # the bridge started again, and with it the interface
     assert restarted.pending() == {"bridge": [], "server": []}
     assert state(restarted, "max_mb").pending_restart is None
+    # the other scope: a running MCP server that started before the change keeps it pending until that server reads it
+    restarted.save(media(), {"zone": "America/Recife"}, restarted.load().version)
+    started = note(tmp_path, os.getpid(), {})
+    assert restarted.pending()["server"] == ["WHATSAPP_TIMEZONE"] and state(restarted, "zone").pending_restart == "server"
+    started.write_text(json.dumps({"pid": os.getpid(), "file_env": {"WHATSAPP_TIMEZONE": "America/Recife"}}))
+    assert restarted.pending()["server"] == [] and state(restarted, "zone").pending_restart is None
 
 
 def test_a_value_the_environment_overrides_is_never_pending(tmp_path):  # CFG-08
