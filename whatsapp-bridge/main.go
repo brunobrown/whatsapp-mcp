@@ -800,6 +800,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// Skip if there's no content and no media
 	if content == "" && mediaType == "" {
+		if fields := droppedFields(msg.Message); len(fields) > 0 {
+			logger.Infof("Not stored: message %s in %s has no text or media (fields: %s)", msg.Info.ID, chatJID, strings.Join(fields, ", "))
+		}
 		return
 	}
 

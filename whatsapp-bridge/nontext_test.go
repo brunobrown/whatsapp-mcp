@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,5 +61,68 @@ func TestNonTextMessageIsStoredByHandleMessage(t *testing.T) { // NT-01, NT-04
 	}
 	if row := readRow(t, store, "STK"); row.content != "[sticker]" {
 		t.Errorf("sticker content = %q", row.content)
+	}
+}
+
+// infoLogger keeps the Infof lines it receives.
+type infoLogger struct{ lines []string }
+
+func (l *infoLogger) Warnf(string, ...any)    {}
+func (l *infoLogger) Errorf(string, ...any)   {}
+func (l *infoLogger) Debugf(string, ...any)   {}
+func (l *infoLogger) Sub(string) waLog.Logger { return l }
+func (l *infoLogger) Infof(msg string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(msg, args...))
+}
+
+func TestDroppedFieldsNamesOnlyWhatIsNotKnownToCarryNoText(t *testing.T) { // NT-05
+	for name, c := range map[string]struct {
+		msg  *waE2E.Message
+		want []string
+	}{
+		"an unknown kind is named": {&waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("segredo")}}, []string{"listMessage"}},
+		"the context info next to it is not": {&waE2E.Message{
+			ListMessage:        &waE2E.ListMessage{},
+			MessageContextInfo: &waE2E.MessageContextInfo{}}, []string{"listMessage"}},
+		"poll vote":          {voteUpdate("P", 1), nil},
+		"reaction":           {&waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{}}, nil},
+		"protocol message":   {&waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{}}, nil},
+		"sender key":         {&waE2E.Message{SenderKeyDistributionMessage: &waE2E.SenderKeyDistributionMessage{}}, nil},
+		"encrypted envelope": {&waE2E.Message{SecretEncryptedMessage: &waE2E.SecretEncryptedMessage{}}, nil},
+		"encrypted reaction": {&waE2E.Message{EncReactionMessage: &waE2E.EncReactionMessage{}}, nil},
+		"empty message":      {&waE2E.Message{}, nil},
+		"nil message":        {nil, nil},
+	} {
+		got := droppedFields(c.msg)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: droppedFields = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+func TestHandleMessageLogsAnUnknownKindWithoutItsContent(t *testing.T) { // NT-05
+	store := newTestStore(t)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	store.StoreChat("chat@g.us", "Chat", now)
+	logger := &infoLogger{}
+	unknown := &waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("conteudo-secreto")}}
+
+	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "LST", unknown, now), logger)
+	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "RCT", &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{}}, now), logger)
+
+	var dropped []string
+	for _, line := range logger.lines {
+		if strings.Contains(line, "Not stored") {
+			dropped = append(dropped, line)
+		}
+	}
+	if len(dropped) != 1 || !strings.Contains(dropped[0], "LST") || !strings.Contains(dropped[0], "listMessage") {
+		t.Fatalf("dropped-message lines = %q, want exactly one naming LST and listMessage", dropped)
+	}
+	if strings.Contains(dropped[0], "conteudo-secreto") {
+		t.Error("the log line must never carry the content of the message")
+	}
+	if messageCount(t, store, "LST") != 0 {
+		t.Error("a message with no text must still not be stored")
 	}
 }
