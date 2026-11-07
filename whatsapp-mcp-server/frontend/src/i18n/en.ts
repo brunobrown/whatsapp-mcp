@@ -26,6 +26,7 @@ export const en = {
   "notice.connectionLost": "The interface lost its connection.",
   "notice.sessionWarning": "Your session ends in {minutes} min because of inactivity.",
   "notice.sessionEnded": "Your session ended because of inactivity.",
+  "toast.region": "Notifications",
   "error.network": "The interface lost its connection.",
   "error.timeout": "The request took too long.",
   "error.unexpected": "Something went wrong. Try again.",
