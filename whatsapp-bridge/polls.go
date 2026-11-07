@@ -252,6 +252,8 @@ func recordPoll(store *MessageStore, own string, decrypt pollVoteDecryptor, evt 
 		} else if !stored {
 			logger.Warnf("Ignoring a poll that reuses the ID of a poll by someone else (%s)", evt.Info.ID)
 			return false
+		} else {
+			store.webhooks.Emit(pollCreatedWebhookEvent(poll, evt.Info.Timestamp, evt.Info.IsFromMe))
 		}
 		return true
 	}
@@ -274,8 +276,14 @@ func recordPoll(store *MessageStore, own string, decrypt pollVoteDecryptor, evt 
 	if ms := update.GetSenderTimestampMS(); ms > 0 {
 		at = time.UnixMilli(ms)
 	}
-	if _, err := store.StorePollVote(pollID, store.pollChat(pollID, evt.Info.Chat), who, hashes, at); err != nil {
+	voteChat := store.pollChat(pollID, evt.Info.Chat)
+	stored, err := store.StorePollVote(pollID, voteChat, who, hashes, at)
+	if err != nil {
 		logger.Warnf("Failed to store a vote on poll %s: %v", pollID, err)
+	} else if stored {
+		if poll, found, _ := store.GetPoll(pollID, voteChat); found {
+			store.webhooks.Emit(pollVoteWebhookEvent(poll, who, hashes, at, evt.Info.IsFromMe))
+		}
 	}
 	return true
 }
