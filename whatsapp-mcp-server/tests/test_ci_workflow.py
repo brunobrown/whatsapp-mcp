@@ -23,3 +23,11 @@ def test_the_workflow_runs_the_bridge_and_server_checks():  # CI-01
     assert 'WHATSAPP_DB_ENCRYPTION: "off"' in text
     assert "uv sync --locked" in text and "uv run pytest -q" in text
     assert re.search(r"permissions:\s*\n\s*contents:\s*read", text)
+
+
+def test_a_new_push_to_a_pull_request_cancels_the_run_it_replaces_but_pushes_to_branches_do_not():  # CI-01
+    text = read()
+    assert re.search(r"concurrency:\s*\n\s*group:\s*\$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}", text)
+    # cancelling is conditional: only for pull_request events, so a merged commit on main or dev is checked to the end
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+    assert "cancel-in-progress: true" not in text
