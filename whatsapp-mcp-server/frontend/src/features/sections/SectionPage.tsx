@@ -96,7 +96,11 @@ function SectionForm({ sectionId }: { sectionId: string }) {
 
   const focusField = (key: string): void => {
     const box = form.current?.querySelector(`[data-field="${CSS.escape(key)}"]`);
-    const target = box?.querySelector<HTMLElement>('[aria-invalid="true"]') ?? box?.querySelector<HTMLElement>("input, textarea, button, [role=switch]");
+    // The control the message is about; failing that, the first place to type, then any button.
+    const target =
+      box?.querySelector<HTMLElement>('[aria-invalid="true"]') ??
+      box?.querySelector<HTMLElement>("input, textarea, [role=switch], [role=combobox], [role=radio]") ??
+      box?.querySelector<HTMLElement>("button");
     target?.focus();
   };
 

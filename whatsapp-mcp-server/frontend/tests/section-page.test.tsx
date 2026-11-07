@@ -233,6 +233,33 @@ describe("saving", () => {
     expect(field("Limit")).toHaveFocus();
   });
 
+  it("focuses the first place to type when the message belongs to a whole records field", async () => {
+    const profiles = f({
+      key: "profiles", label: "Profiles", kind: "records", id_key: "name",
+      fields: [f({ key: "name", label: "Profile name", kind: "text" })],
+    });
+    current = section({
+      fields: [profiles], values: { profiles: [] }, state: { profiles: { origin: "default", locked: false, pending: null } },
+    });
+    server.use(
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json({ ...okOutcome, ok: false, restarts: [], errors: { profiles: "every profile needs a name" }, general: [] }, { status: 422 }),
+      ),
+    );
+    const router = createAppRouter(createMemoryHistory({ initialEntries: ["/s/s"] }));
+    render(
+      <AppProviders router={router}>
+        <RouterProvider router={router} />
+      </AppProviders>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Add record to Profiles" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("alert");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Profile name")).toHaveFocus();
+    });
+  });
+
   it("asks for the notification permission at the first Save, not on load", async () => {
     const requestPermission = vi.fn(() => Promise.resolve("granted" as NotificationPermission));
     vi.stubGlobal("Notification", { permission: "default", requestPermission });
