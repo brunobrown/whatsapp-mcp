@@ -70,6 +70,7 @@ export const en = {
   "field.origin.default": "Default",
   "field.origin.file": "Saved",
   "field.origin.environment": "Environment",
+  "field.default": "Default: {value}",
   "field.locked": "Set by the environment variable {variable}. Remove it from the environment to edit it here.",
   "field.lockedNoVariable": "This value is set outside the interface and cannot be edited here.",
   "field.readonly": "Read only.",

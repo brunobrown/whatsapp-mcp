@@ -143,6 +143,35 @@ describe("each kind renders its control and sends what was typed", () => {
   });
 });
 
+describe("the default beside a value that is no longer it (CFG-01)", () => {
+  const saved: FieldState = { origin: "file", locked: false, pending: null };
+  const environment: FieldState = { origin: "environment", locked: true, pending: null };
+
+  it.each([
+    [field({ kind: "choice", options: ["a", "b"], default: "a" }), "b", "Default: a"],
+    [field({ kind: "int", default: 8765 }), "9000", "Default: 8765"],
+    [field({ kind: "int", default: null }), "30", "Default: None"],
+    [field({ kind: "bool", default: true }), false, "Default: On"],
+    [field({ kind: "multichoice", options: ["x", "y", "z"], default: ["x", "z"] }), ["y"], "Default: x, z"],
+    [field({ kind: "list", default: [] }), ["one"], "Default: None"],
+  ])("shows the default of a saved field: %#", (schema, initial, text) => {
+    render(<Harness schema={schema} initial={initial} state={saved} />);
+    expect(screen.getByText(text)).toBeInTheDocument();
+  });
+
+  it("shows it for a value that the environment sets", () => {
+    render(<Harness schema={field({ kind: "text", default: "127.0.0.1", env_var: "V" })} initial="0.0.0.0" state={environment} />);
+    expect(screen.getByText("Default: 127.0.0.1")).toBeInTheDocument();
+  });
+
+  it("shows none while the value is the default, and none for a secret", () => {
+    const { rerender } = render(<Harness schema={field({ kind: "int", default: 5 })} initial="5" state={{ origin: "default", locked: false, pending: null }} />);
+    expect(screen.queryByText(/^Default:/)).not.toBeInTheDocument();
+    rerender(<Harness schema={field({ kind: "secret", secret: true })} initial={{ set: true }} state={saved} />);
+    expect(screen.queryByText(/^Default:/)).not.toBeInTheDocument();
+  });
+});
+
 describe("help, origin and errors", () => {
   it("links the help text to the control", () => {
     render(<Harness schema={field({ help: "Where files go." })} initial="" />);

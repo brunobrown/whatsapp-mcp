@@ -62,6 +62,15 @@ function describeValue(value: unknown, t: ReturnType<typeof useT>): string {
   return typeof value === "boolean" ? (value ? t("common.on") : t("common.off")) : asText(value);
 }
 
+/** The default of a field in words, for a field whose value is no longer it. Secrets and records show none. */
+function defaultText(field: FieldSchema, t: ReturnType<typeof useT>): string | null {
+  if (field.kind === "secret" || field.kind === "records") return null;
+  const value = field.default;
+  if (Array.isArray(value)) return value.length > 0 ? asList(value).join(", ") : t("common.none");
+  if (value === null || value === undefined || value === "") return t("common.none");
+  return describeValue(value, t);
+}
+
 interface Wiring {
   id: string;
   describedBy: string | undefined;
@@ -318,6 +327,9 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
             {t(`field.origin.${origin}`)}
           </Badge>
           {pending ? <Badge variant="warning">{t(`field.pending.${pending}`)}</Badge> : null}
+          {origin !== "default" && defaultText(field, t) !== null ? (
+            <span className="text-sm text-muted">{t("field.default", { value: defaultText(field, t) ?? "" })}</span>
+          ) : null}
           {canRestore ? (
             <Button
               variant="ghost"
