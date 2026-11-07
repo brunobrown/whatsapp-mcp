@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -44,6 +44,27 @@ export async function freePort(): Promise<number> {
       });
     });
   });
+}
+
+/** The newest modification time of the files under `dir`. */
+function newest(dir: string): number {
+  let latest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    latest = Math.max(latest, entry.isDirectory() ? newest(path) : statSync(path).mtimeMs);
+  }
+  return latest;
+}
+
+/** The pages served are the built ones; a build older than the sources would test yesterday's interface. */
+function assertPagesAreCurrent(): void {
+  const index = join(SERVER_DIR, "ui", "web", "index.html");
+  if (!existsSync(index)) {
+    throw new Error("The interface pages are not built. Run `npx vite build` in whatsapp-mcp-server/frontend first.");
+  }
+  if (statSync(index).mtimeMs < newest(join(FRONTEND, "src"))) {
+    throw new Error("The built pages are older than the sources. Run `npx vite build` in whatsapp-mcp-server/frontend.");
+  }
 }
 
 /** The command that runs the interface's Python: the project's venv when there is one, else uv. */
@@ -113,9 +134,7 @@ export class Harness {
   }
 
   async start(): Promise<void> {
-    if (!existsSync(join(SERVER_DIR, "ui", "web", "index.html"))) {
-      throw new Error("The interface pages are not built. Run `npx vite build` in whatsapp-mcp-server/frontend first.");
-    }
+    assertPagesAreCurrent();
     await this.bridge.start();
     await this.launch();
     if (this.options.password !== false && !(this.options.seed ?? []).includes("ui_auth.json")) await this.createPassword();

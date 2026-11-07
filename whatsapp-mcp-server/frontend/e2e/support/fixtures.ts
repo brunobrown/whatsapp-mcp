@@ -3,7 +3,7 @@ import { Harness } from "./harness";
 import type { HarnessOptions } from "./harness";
 
 export { expect, request } from "@playwright/test";
-export { FIXTURE_DIR, Harness, PASSWORD } from "./harness";
+export { FIXTURE_DIR, Harness, PASSWORD, SERVER_DIR } from "./harness";
 
 /**
  * Starts one interface per spec file in `beforeAll` and removes it in `afterAll`: a fresh configuration directory,
