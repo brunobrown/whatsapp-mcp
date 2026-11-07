@@ -153,6 +153,8 @@ class Section:
     # encode: (form values, the file as it was) -> the file to write. Both are the identity by default.
     decode: Callable[[Dict[str, Any]], Dict[str, Any]] = lambda file_values: file_values
     encode: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]] = lambda form_values, previous: form_values
+    # Rules that need to see the whole form (a repeated name, say), run before encode; [] when the form is fine.
+    check_form: Callable[[Dict[str, Any]], List["Problem"]] = lambda form_values: []
 
     def __post_init__(self):
         if not _ID.fullmatch(self.id or ""):
