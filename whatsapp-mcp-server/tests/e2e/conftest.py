@@ -102,19 +102,18 @@ def open_page(browser, ui, width=1280, height=900):
     context = browser.new_context(viewport={"width": width, "height": height})
     _OPEN.append(context)
     page = context.new_page()
-    for _ in range(5):                                   # the accessibility tree is switched on by a click on a placeholder that may not exist yet
+    page.goto(ui.url, wait_until="commit", timeout=60000)
+    page.wait_for_selector("flt-semantics-placeholder, flt-glass-pane", state="attached", timeout=60000)
+    for _ in range(4):                                   # a cold start can take a while under load: wait on the same page, never reload it (that restarts the cold start)
+        page.evaluate("document.querySelector('flt-semantics-placeholder')?.click()")          # turns the accessibility tree on
+        page.wait_for_timeout(800)
         try:
-            page.goto(ui.url, wait_until="commit", timeout=20000)
-            page.wait_for_selector("flt-semantics-placeholder, flt-glass-pane", state="attached", timeout=30000)
-            page.evaluate("document.querySelector('flt-semantics-placeholder')?.click()")
-            page.wait_for_timeout(800)
-            page.wait_for_selector("input[aria-label]", state="attached", timeout=20000)      # the first screen's fields exist: callers can tell sign-up from sign-in
-            break
+            page.wait_for_selector("input[aria-label]", state="attached", timeout=30000)      # the first screen's fields exist: callers can tell sign-up from sign-in
+            return page
         except Exception:
             continue
-    else:
-        raise AssertionError("the first screen never exposed a field")
-    return page
+    page.screenshot(path=os.environ.get("WHATSAPP_UI_E2E_DEBUG", "/dev/null"))
+    raise AssertionError("the first screen never exposed a field: " + page.evaluate("document.documentElement.outerHTML.slice(0, 600)"))
 
 
 def survives_a_browser_crash(test):
