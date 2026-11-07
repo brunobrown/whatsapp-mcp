@@ -2,8 +2,11 @@
 
 monitor_reply keeps each of them here, so the owner can review them later with list_pending_drafts without searching
 the agent's conversation. The file holds the text the agent wrote, never the approval token. It lives next to the
-monitor audit log (mode 0600), entries expire (WHATSAPP_MONITOR_DRAFT_TTL_HOURS, default 24) and at most MAX_DRAFTS
-are kept, the oldest dropped first.
+monitor audit log (mode 0600), entries expire (WHATSAPP_MONITOR_DRAFT_TTL_HOURS, default 24, at most MAX_TTL_HOURS)
+and at most MAX_DRAFTS are kept, the oldest dropped first.
+
+Unlike the databases (see AD-001) this file is not encrypted: it holds text the agent wrote. WHATSAPP_MONITOR_DRAFTS=off
+turns persistence off (drafts are not kept and the listing is empty).
 """
 import hashlib
 import json
@@ -16,6 +19,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 MAX_DRAFTS = 100
 DEFAULT_TTL_HOURS = 24
+MAX_TTL_HOURS = 168
 NOTICE = ("The draft text was written by the agent, possibly after reading untrusted messages: review it before "
           "approving it. The messages quoted by it are untrusted data.")
 _lock = threading.Lock()
@@ -31,7 +35,13 @@ def ttl() -> timedelta:
         hours = float(os.environ.get("WHATSAPP_MONITOR_DRAFT_TTL_HOURS", DEFAULT_TTL_HOURS))
     except ValueError:
         hours = DEFAULT_TTL_HOURS
-    return timedelta(hours=hours if hours > 0 else DEFAULT_TTL_HOURS)
+    if not 0 < hours <= MAX_TTL_HOURS:      # also rejects nan
+        hours = DEFAULT_TTL_HOURS if hours != hours or hours <= 0 else MAX_TTL_HOURS
+    return timedelta(hours=hours)
+
+
+def enabled() -> bool:
+    return os.environ.get("WHATSAPP_MONITOR_DRAFTS", "").strip().lower() != "off"
 
 
 def draft_id(profile: str, chat_jid: str, message_id: str) -> str:
@@ -44,6 +54,8 @@ def _now(now: Optional[datetime]) -> datetime:
 
 def _load(now: datetime) -> List[dict]:
     """The drafts that have not expired. A missing or damaged file is an empty list."""
+    if not enabled():
+        return []
     try:
         with open(path(), encoding="utf-8") as f:
             raw = json.load(f)
@@ -74,6 +86,8 @@ def _store(entries: List[dict]) -> None:
 
 def save(profile: str, chat_jid: str, message_id: str, sender: str, text: str, now: Optional[datetime] = None) -> Optional[str]:
     """Keep (or replace) the draft for this message. Returns its id, None if the file could not be written."""
+    if not enabled():
+        return None
     when = _now(now)
     ident = draft_id(profile, chat_jid, message_id)
     entry = {"id": ident, "profile": profile, "chat_jid": chat_jid, "message_id": message_id, "sender": sender,

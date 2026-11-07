@@ -467,9 +467,13 @@ class Hook(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 ```
 
+### Metrics
+
+`get_metrics(window_hours=24)` returns counters for diagnosing the setup, never text, names, chat ids or senders: `messages` (received and from this account), `monitor_replies` (per profile: sent, blocked, failed, from `monitor_audit.log`, and a count per error code), `sends` (by result, and how many used an override token, from `send_audit.log`), `pending_drafts` and `webhooks` (delivered, failed, dropped and queued, summed over the endpoints; `null` if the bridge does not answer). `get_connection_status` also reports `server_version`, `features` and `enabled`, so a client connected to an older server is recognised by their absence.
+
 ### Pending drafts
 
-In draft mode `monitor_reply` sends nothing without the profile's `approval_token`. The reply it refused is kept in `monitor_drafts.json` (next to `monitor_audit.log`, mode 0600) so the owner can review it later: `list_pending_drafts(profile=None)` shows `id`, `profile`, `chat_jid`, `message_id`, `sender`, `text`, `created_at` and `expires_at`, and `discard_pending_draft(draft_id)` deletes one. The token is never stored. A draft expires after `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` (default 24), at most 100 are kept (the oldest go first), and sending the reply removes its draft. The text was written by the agent, possibly after reading untrusted messages, so the listing is marked `untrusted_content`. `WHATSAPP_MONITOR_DRAFTS` changes the file's path.
+In draft mode `monitor_reply` sends nothing without the profile's `approval_token`. The reply it refused is kept in `monitor_drafts.json` (next to `monitor_audit.log`, mode 0600) so the owner can review it later: `list_pending_drafts(profile=None)` shows `id`, `profile`, `chat_jid`, `message_id`, `sender`, `text`, `created_at` and `expires_at`, and `discard_pending_draft(draft_id)` deletes one. The token is never stored. A draft expires after `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` (default 24), at most 100 are kept (the oldest go first), and sending the reply removes its draft. The text was written by the agent, possibly after reading untrusted messages, so the listing is marked `untrusted_content`. `WHATSAPP_MONITOR_DRAFTS` changes the file's path, or `off` turns persistence off. The file is **not encrypted** (unlike the databases): it holds text the agent wrote, protected only by mode 0600; the lifetime is capped at 168 hours.
 
 ### Waking an agent on an event
 

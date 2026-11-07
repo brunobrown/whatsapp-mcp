@@ -72,6 +72,7 @@ def arguments(files):
         "get_connection_status": {},
         "get_webhook_status": {},
         "list_pending_drafts": {},
+        "get_metrics": {},
         "discard_pending_draft": {"draft_id": "d_none"},
         "test_webhook": {"name": "local"},
         "send_message": {"recipient": GROUP, "message": "hi"},

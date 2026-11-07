@@ -9,6 +9,7 @@ import monitor
 import pollwatch
 import capabilities
 import drafts
+import metrics
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -726,6 +727,18 @@ def discard_pending_draft(draft_id: str) -> Dict[str, Any]:
     if drafts.remove(draft_id):
         return {"success": True, "message": "Draft discarded. Nothing was sent."}
     return {"success": False, "error_code": "DRAFT_NOT_FOUND", "message": f"No pending draft {draft_id!r}"}
+
+@mcp.tool(annotations=READ_ONLY)
+def get_metrics(window_hours: float = 24) -> Dict[str, Any]:
+    """Counters for diagnosing the setup over the last window_hours (default 24, at most 2160), with no message text.
+
+    Returns:
+        messages (received and from_this_account, from the database; null if it cannot be read), monitor_replies
+        (per profile: sent, blocked, failed, from the audit log; plus error_codes), sends (by_result and with_override,
+        from the send audit log), pending_drafts, and webhooks (delivered, failed, dropped, queued, summed over the
+        endpoints; null when the bridge does not answer). Chat ids, names and senders are never included.
+    """
+    return metrics.collect(window_hours, bridge_status=whatsapp_get_connection_status())
 
 @mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:

@@ -120,3 +120,20 @@ def test_a_damaged_file_reads_as_empty_and_is_replaced(conn):  # DRAFT-08
 
     drafts.save("p", GROUP, "M1", ANA, "x")
     assert [e["message_id"] for e in stored()] == ["M1"]
+
+
+def test_ttl_is_capped_and_bad_values_fall_back(monkeypatch):  # DRAFT-05
+    for value, hours in (("100000", drafts.MAX_TTL_HOURS), ("0", 24), ("-3", 24), ("abc", 24), ("nan", 24), ("48", 48)):
+        monkeypatch.setenv("WHATSAPP_MONITOR_DRAFT_TTL_HOURS", value)
+        assert drafts.ttl() == timedelta(hours=hours), value
+
+
+def test_persistence_can_be_turned_off(monkeypatch, conn, sent):  # DRAFT-09
+    seed(conn)
+    config()
+    monkeypatch.setenv("WHATSAPP_MONITOR_DRAFTS", "off")
+
+    out = reply("HIT", "kept?", approval_token=None)
+
+    assert out["error_code"] == "APPROVAL_REQUIRED" and out["draft_id"] is None
+    assert drafts.listing()["drafts"] == []
