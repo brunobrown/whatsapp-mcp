@@ -1,0 +1,30 @@
+{
+  "profiles": {
+    "assistant": {
+      "enabled": true,
+      "mode": "draft",
+      "targets": [
+        "15550100001"
+      ],
+      "aliases": [
+        "helper"
+      ],
+      "triggers": [
+        "mention",
+        "reply"
+      ],
+      "topics": [
+        "status"
+      ],
+      "limits": {
+        "cooldown_seconds": 30
+      },
+      "senders": {
+        "deny": [
+          "15550100003"
+        ]
+      },
+      "instructions": "Answer briefly."
+    }
+  }
+}
