@@ -230,7 +230,9 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 
 	// A message its author deleted for everyone stays deleted: a second delivery (history sync, an offline
 	// replay) must not bring the erased text or media back.
-	if store.isDeleted(id, chatJID) {
+	if deleted, err := store.isDeleted(id, chatJID); err != nil {
+		return err
+	} else if deleted {
 		return errMessageDeleted
 	}
 
@@ -244,7 +246,8 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 			sender = excluded.sender, content = excluded.content, timestamp = excluded.timestamp,
 			is_from_me = excluded.is_from_me, media_type = excluded.media_type, filename = excluded.filename,
 			url = excluded.url, media_key = excluded.media_key, file_sha256 = excluded.file_sha256,
-			file_enc_sha256 = excluded.file_enc_sha256, file_length = excluded.file_length`,
+			file_enc_sha256 = excluded.file_enc_sha256, file_length = excluded.file_length
+		WHERE COALESCE(messages.deleted_at, '') = ''`,
 		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
 	)
 	return err
@@ -350,8 +353,8 @@ func extractMessageMeta(msg *waProto.Message) MessageMeta {
 // SetMessageMeta records the metadata of a stored message. Empty values never replace stored
 // ones, so a message that arrives again without metadata keeps what it had.
 func (store *MessageStore) SetMessageMeta(id, chatJID string, meta MessageMeta) error {
-	if store.isDeleted(id, chatJID) {
-		return nil
+	if deleted, err := store.isDeleted(id, chatJID); err != nil || deleted {
+		return err
 	}
 	_, err := store.db.Exec(
 		`UPDATE messages SET

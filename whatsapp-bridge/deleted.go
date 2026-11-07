@@ -25,11 +25,18 @@ func revokeTarget(msg *waProto.Message) (string, bool) {
 
 var errMessageDeleted = errors.New("the message was deleted for everyone")
 
-// isDeleted reports whether the stored message was deleted for everyone.
-func (store *MessageStore) isDeleted(id, chatJID string) bool {
+// isDeleted reports whether the stored message was deleted for everyone. A message that is not stored is not
+// deleted. A database error is returned, never read as "not deleted": the callers refuse to write then.
+func (store *MessageStore) isDeleted(id, chatJID string) (bool, error) {
 	var at sql.NullString
 	err := store.db.QueryRow("SELECT deleted_at FROM messages WHERE id = ? AND chat_jid = ?", id, chatJID).Scan(&at)
-	return err == nil && at.Valid && at.String != ""
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return at.Valid && at.String != "", nil
 }
 
 // keepDeletedContent reports WHATSAPP_KEEP_DELETED_CONTENT=true: keep the text and the media of a message

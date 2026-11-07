@@ -135,3 +135,19 @@ func TestDeletedTextIsOverwrittenInTheDatabaseFile(t *testing.T) { // DEL-10
 		t.Errorf("secure_delete = %d (%v), want it on so erased text does not stay in free pages", on, err)
 	}
 }
+
+func TestAReadErrorWhileCheckingNeverLetsAWriteThrough(t *testing.T) { // DEL-11
+	store := newTestStore(t)
+	seedText(t, store, "M1", "5511999990000", "x", false)
+	store.db.Exec("ALTER TABLE messages RENAME COLUMN deleted_at TO gone_at") // the check can no longer be answered
+
+	if err := store.StoreMessage("M1", "chat@g.us", "5511999990000", "new", time.Now(), false, "", "", "", nil, nil, nil, 0); err == nil {
+		t.Error("StoreMessage wrote although it could not tell whether the message was deleted")
+	}
+	if stored, err := store.StorePollVote("M1", "chat@g.us", "v", []string{"x"}, time.Now()); stored || err == nil {
+		t.Errorf("StorePollVote = (%v, %v), want a refusal with the error", stored, err)
+	}
+	if stored, err := store.StoreReaction("M1", "chat@g.us", "v", "👍", time.Now()); stored || err == nil {
+		t.Errorf("StoreReaction = (%v, %v), want a refusal with the error", stored, err)
+	}
+}
