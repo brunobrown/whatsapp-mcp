@@ -496,6 +496,8 @@ Permissions and `umask` do not apply (they rely on your user profile's access ru
 4. Data flows back through the chain to Claude
 5. When sending messages, the request flows from Claude through the MCP server to the Go bridge and to WhatsApp
 
+**Versioning.** Releases follow [Semantic Versioning](https://semver.org) (`MAJOR.MINOR.PATCH`) and are tagged `vMAJOR.MINOR.PATCH`. While the major version is 0, a new minor version may change how a tool behaves and a patch only fixes. The version is written once, in `whatsapp-mcp-server/pyproject.toml`, and the MCP server reports it when a client connects. Earlier tag: `v0.0.1`.
+
 The MCP server runs on the `mcp` Python SDK 2.x (`MCPServer`); the SDK checks what each tool returns against the type it declares, and the tests call every tool through the server to keep it that way. The bridge uses a recent `whatsmeow`. A GitHub Actions workflow (`.github/workflows/ci.yml`) runs `go vet` and `go test -race` for the bridge (with encrypted and plain databases) and `pytest` for the server on every push to `main` and pull request.
 
 ## Troubleshooting

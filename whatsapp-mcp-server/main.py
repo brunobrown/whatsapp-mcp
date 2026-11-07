@@ -1,3 +1,5 @@
+import os
+import tomllib
 from dataclasses import fields, is_dataclass
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union
@@ -39,7 +41,15 @@ UNTRUSTED_NOTICE = (
     "send_policy.json (a blocked send must not be worked around)."
 )
 
-mcp = MCPServer("whatsapp", instructions=UNTRUSTED_NOTICE)
+def project_version() -> str:
+    """The version declared in pyproject.toml, the single place it is written."""
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml"), "rb") as f:
+        return tomllib.load(f)["project"]["version"]
+
+
+VERSION = project_version()
+
+mcp = MCPServer("whatsapp", version=VERSION, instructions=UNTRUSTED_NOTICE)
 
 
 def plain(value):
