@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("playwright")
 
-from tests.e2e.conftest import CAPTURES, PASSWORD, open_page  # noqa: E402
+from tests.e2e.conftest import CAPTURES, PASSWORD, open_page, survives_a_browser_crash  # noqa: E402
 
 pytestmark = pytest.mark.skipif(os.environ.get("WHATSAPP_UI_E2E") != "1", reason="browser tests run only with WHATSAPP_UI_E2E=1")
 
@@ -61,6 +61,7 @@ def signed_in(browser, ui, width=1280, height=900):
     return page
 
 
+@survives_a_browser_crash
 def test_e2e_login_gate_shows_no_configuration(browser, ui):  # AUTH-01
     page = open_page(browser, ui)
 
@@ -71,6 +72,7 @@ def test_e2e_login_gate_shows_no_configuration(browser, ui):  # AUTH-01
         assert word not in shown, f"{word!r} is on screen before the password"
 
 
+@survives_a_browser_crash
 def test_e2e_the_first_password_is_created_with_the_code_from_the_log_and_opens_the_interface(browser, ui):  # AUTH-02
     assert ui.code, ui.log.read()
     page = open_page(browser, ui)
@@ -83,6 +85,7 @@ def test_e2e_the_first_password_is_created_with_the_code_from_the_log_and_opens_
     assert set(auth) == {"version", "scrypt", "salt", "hash"} and PASSWORD not in json.dumps(auth)
 
 
+@survives_a_browser_crash
 def test_e2e_a_value_edited_in_the_browser_is_saved_to_the_settings_file(browser, ui):  # CFG-04
     page = signed_in(browser, ui)
 
@@ -107,6 +110,7 @@ def test_e2e_a_value_edited_in_the_browser_is_saved_to_the_settings_file(browser
     assert "Reinicie o bridge" in text_of(page)
 
 
+@survives_a_browser_crash
 def test_e2e_layout_adapts_without_horizontal_scroll(browser, ui):  # UX-01
     for width, height in ((360, 740), (768, 1024), (1280, 900)):
         page = signed_in(browser, ui, width, height)
@@ -139,6 +143,7 @@ def tab_until(page, label_part, limit=30):
     raise AssertionError(f"Tab never reached {label_part!r}; it passed {seen}")
 
 
+@survives_a_browser_crash
 def test_e2e_every_control_is_keyboard_operable(browser, ui):  # UX-02
     signed_in(browser, ui)                                        # makes sure a password exists
     page = open_page(browser, ui)                                 # a new browser context: the login screen

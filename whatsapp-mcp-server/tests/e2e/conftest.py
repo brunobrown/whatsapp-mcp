@@ -115,3 +115,24 @@ def open_page(browser, ui, width=1280, height=900):
     else:
         raise AssertionError("the first screen never exposed a field")
     return page
+
+
+def survives_a_browser_crash(test):
+    """A software-rendered Chromium sometimes dies under load ("Target crashed"): that is the browser, not the interface, so the test runs once more.
+    Any other failure, and a second crash, fail the test as they are."""
+    import functools
+
+    @functools.wraps(test)
+    def run(*args, **kwargs):
+        try:
+            return test(*args, **kwargs)
+        except Exception as error:
+            if "crashed" not in str(error):
+                raise
+            while _OPEN:
+                try:
+                    _OPEN.pop().close()
+                except Exception:
+                    pass
+            return test(*args, **kwargs)
+    return run
