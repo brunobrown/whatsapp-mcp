@@ -84,6 +84,31 @@ def test_frontend_has_no_whatsapp_brand_assets():  # MIG-19
     assert offenders == [], f"WhatsApp brand assets in the frontend: {offenders}"
 
 
+PROJECT_NAME = "WhatsApp MCP"
+
+
+def test_the_only_whatsapp_text_in_the_frontend_is_the_project_name():  # MIG-19 (text prong)
+    """"WhatsApp MCP" is the project's own name and may name the interface; the product's name, or anything implying the
+    official app, may not appear."""
+    frontend = SERVER / "frontend"
+    sources = [frontend / "index.html", *(p for p in (frontend / "src").rglob("*") if p.is_file()),
+               *(p for p in (frontend / "public").rglob("*") if p.is_file() and p.suffix in {".html", ".json", ".svg", ".txt", ".webmanifest"})]
+    seen = []
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        stripped = text.replace(PROJECT_NAME, "")
+        assert not re.search(r"whats\W?app", stripped, re.I), f"{path.relative_to(frontend)} names WhatsApp beyond the project name"
+        if PROJECT_NAME in text:
+            seen.append(path.relative_to(frontend).as_posix())
+    assert sorted(seen) == ["index.html", "src/i18n/en.ts"], seen
+
+
+def test_the_whatsapp_text_check_flags_the_product_name():  # MIG-19
+    assert re.search(r"whats\W?app", "Sign in to WhatsApp".replace(PROJECT_NAME, ""), re.I)
+    assert re.search(r"whats\W?app", "WhatsApp Web settings".replace(PROJECT_NAME, ""), re.I)
+    assert not re.search(r"whats\W?app", "WhatsApp MCP Settings".replace(PROJECT_NAME, ""), re.I)
+
+
 # Portuguese is detected two ways: any letter only Portuguese uses (accents, cedilla, tilde), or a whole word from a list of
 # words with no English meaning. The list is wide on purpose; a word that is also English (com, a, no, me...) is left out.
 PORTUGUESE_WORDS = (
