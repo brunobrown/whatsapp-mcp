@@ -84,12 +84,19 @@ def test_frontend_has_no_whatsapp_brand_assets():  # MIG-19
     assert offenders == [], f"WhatsApp brand assets in the frontend: {offenders}"
 
 
-PORTUGUESE = re.compile(
-    r"[áàâãéêíóôõúç]"
-    r"|\b(não|você|para|erro|senha|arquivo|mensagem|configuração|salvar|salvo|inválid\w*|obrigatório|campo|porta|deve|usar|"
-    r"com|uma|dos|das|nos|nas|sua|seu|ainda|apenas|quando|sem|ou)\b",
-    re.I,
+# Portuguese is detected two ways: any letter only Portuguese uses (accents, cedilla, tilde), or a whole word from a list of
+# words with no English meaning. The list is wide on purpose; a word that is also English (com, a, no, me...) is left out.
+PORTUGUESE_WORDS = (
+    "não|nao|você|voce|para|pra|erro|erros|senha|arquivo|arquivos|mensagem|mensagens|configuração|configurações|salvar|salvo|"
+    "salvando|inválido|inválida|invalido|invalida|obrigatório|obrigatorio|campo|campos|porta|deve|devem|usar|uma|dos|das|nos|nas|"
+    "sua|seu|suas|seus|ainda|apenas|quando|sem|ou|tente|tentar|novamente|mais|menos|tarde|cedo|falha|falhou|ao|aos|gravar|gravado|"
+    "gravando|ocorreu|sucesso|aguarde|carregando|nenhum|nenhuma|também|tambem|porque|pelo|pela|pelos|pelas|como|mas|foi|são|está|"
+    "estão|será|isso|esse|essa|este|esta|usuário|usuario|conexão|conexao|inicie|feche|abra|abrir|fechar|aviso|ativar|desativar|"
+    "padrão|padrao|valor|valores|todos|todas|cada|existe|existem|entrar|sair|sessão|sessao|expirou|expirada|digite|informe|"
+    "escolha|selecione|opção|opcao|opções|opcoes|já|ja|pode|podem|precisa|precisam|aqui|agora|depois|antes|sobre|entre|até|"
+    "desde|durante|seguinte|seguintes|permitido|permitida|proibido|bloqueado|bloqueada|enviar|enviado|enviada|receber|lista|vazio|vazia"
 )
+PORTUGUESE = re.compile(r"[áàâãäéêèíìîóôõòúùûüçñ]|\b(" + PORTUGUESE_WORDS + r")\b", re.I)
 
 
 def operator_literals():
@@ -104,3 +111,12 @@ def operator_literals():
 def test_server_operator_texts_are_english():  # MIG-20
     hits = [(str(f), n, v[:80]) for f, n, v in operator_literals() if PORTUGUESE.search(v)]
     assert hits == [], f"Portuguese in string literals: {hits}"
+
+
+def test_the_portuguese_detector_flags_portuguese_and_passes_english():  # MIG-20
+    for text in ("Tente novamente mais tarde", "Falha ao gravar", "Senha incorreta", "Nenhum arquivo", "Ação inválida",
+                 "Conexão perdida", "Digite o valor"):
+        assert PORTUGUESE.search(text), text
+    for text in ("Try again later", "Failed to write the file", "Password is wrong", "No file", "Invalid action",
+                 "WHATSAPP_UI_PORT must be a whole number", "Sign in to continue.", "Request refused; reload the page."):
+        assert not PORTUGUESE.search(text), text
