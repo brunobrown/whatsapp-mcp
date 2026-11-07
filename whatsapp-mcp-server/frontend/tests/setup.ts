@@ -21,6 +21,23 @@ if (typeof Element !== "undefined") {
   if (!("ResizeObserver" in globalThis)) Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserverStub });
 }
 
+if (typeof window !== "undefined") window.scrollTo = () => undefined;
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+      onchange: null,
+    }),
+  });
+}
+
 beforeAll(() => {
   server.listen({ onUnhandledFrame: "error" });
 });

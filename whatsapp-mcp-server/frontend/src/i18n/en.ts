@@ -33,6 +33,10 @@ export const en = {
   "error.invalid": "Some values were refused.",
   "auth.wait": "Too many attempts. Wait {seconds} seconds.",
   "auth.sessionEnded": "Your session ended because of inactivity.",
+  "notFound.title": "Page not found",
+  "notFound.body": "This address does not match any page of the interface.",
+  "notFound.link": "Go to the settings",
+  "route.error": "This page could not be opened.",
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
 } as const;

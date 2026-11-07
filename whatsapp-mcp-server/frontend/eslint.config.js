@@ -23,6 +23,11 @@ export default defineConfig(
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/consistent-type-imports": "error",
+      // TanStack Router navigates by throwing the object `redirect()` returns.
+      "@typescript-eslint/only-throw-error": [
+        "error",
+        { allow: [{ from: "package", package: "@tanstack/router-core", name: ["Redirect", "NotFoundError"] }] },
+      ],
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
     },
   },
