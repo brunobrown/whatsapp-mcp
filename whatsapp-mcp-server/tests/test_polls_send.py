@@ -337,3 +337,11 @@ def test_the_tool_forwards_quiz_answer_and_closes_in_minutes_to_the_bridge(db, p
 def test_spaces_around_the_quiz_answer_are_ignored(db, post):  # QUIZ-01
     assert whatsapp.send_poll(GROUP, "Q", ["A", "B"], quiz_answer=" b ").success is True
     assert sent(post)["quiz_answer"] == "B"
+
+
+def test_a_poll_can_be_sent_to_a_person_by_phone_number(db, post):  # DM-06
+    out = whatsapp.send_poll("5511999990000", "Lunch?", ["Yes", "No"], allow_multiple=False)
+    assert out.success is True
+    assert sent(post)["recipient"] == "5511999990000" and sent(post)["allow_multiple"] is False
+    preview = whatsapp.send_poll("5511999990000", "Lunch?", ["Yes", "No"], dry_run=True).preview
+    assert preview["chat_jid"] == "5511999990000@s.whatsapp.net"
