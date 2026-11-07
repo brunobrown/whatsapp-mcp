@@ -207,9 +207,15 @@ type pollVoteDecryptor func(*events.Message) (*waE2E.PollVoteMessage, error)
 // recordPoll stores the poll of a poll message, or the decrypted vote of a poll update. A vote that
 // cannot be decrypted (the bridge never saw the poll) is only logged. It reports false when the
 // message is a poll that was refused because it reuses the ID of another person's poll.
-func recordPoll(store *MessageStore, decrypt pollVoteDecryptor, evt *events.Message, logger waLog.Logger) bool {
+func recordPoll(store *MessageStore, own string, decrypt pollVoteDecryptor, evt *events.Message, logger waLog.Logger) bool {
 	chatJID := evt.Info.Chat.String()
-	if poll, ok := pollFromMessage(chatJID, evt.Info.ID, evt.Info.Sender.User, evt.Message); ok {
+	// Whatever the addressing (phone number or LID) of an event from this account, it is stored
+	// under the same user as what we send ourselves, so we are never two people.
+	who := evt.Info.Sender.User
+	if evt.Info.IsFromMe && own != "" {
+		who = own
+	}
+	if poll, ok := pollFromMessage(chatJID, evt.Info.ID, who, evt.Message); ok {
 		stored, err := store.StorePoll(poll)
 		if err != nil {
 			logger.Warnf("Failed to store poll %s: %v", evt.Info.ID, err)
@@ -238,7 +244,7 @@ func recordPoll(store *MessageStore, decrypt pollVoteDecryptor, evt *events.Mess
 	if ms := update.GetSenderTimestampMS(); ms > 0 {
 		at = time.UnixMilli(ms)
 	}
-	if _, err := store.StorePollVote(pollID, chatJID, evt.Info.Sender.User, hashes, at); err != nil {
+	if _, err := store.StorePollVote(pollID, chatJID, who, hashes, at); err != nil {
 		logger.Warnf("Failed to store a vote on poll %s: %v", pollID, err)
 	}
 	return true
@@ -497,13 +503,18 @@ func votePoll(env pollEnv, store *MessageStore, req VotePollRequest, logger waLo
 	return http.StatusOK, SendMessageResponse{Success: true, Message: "Vote sent", MessageID: resp.ID, ChatJID: chat.String()}
 }
 
-// DeleteMessage removes a message from the database, and its poll and votes if it was a poll.
+// DeleteMessage removes a message from the database, its poll and votes if it was a poll, and the
+// file downloaded for it (only ever inside store/).
 func (store *MessageStore) DeleteMessage(id, chatJID string) error {
 	tx, err := store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	var localPath sql.NullString
+	if err := tx.QueryRow("SELECT local_path FROM messages WHERE id = ? AND chat_jid = ?", id, chatJID).Scan(&localPath); err != nil && err != sql.ErrNoRows {
+		return err
+	}
 	for _, stmt := range []string{
 		"DELETE FROM poll_votes WHERE poll_id = ? AND chat_jid = ?",
 		"DELETE FROM polls WHERE id = ? AND chat_jid = ?",
@@ -513,7 +524,15 @@ func (store *MessageStore) DeleteMessage(id, chatJID string) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if localPath.Valid && localPath.String != "" {
+		if root, err := storeRootDir(); err == nil {
+			removeStoreFile(root, localPath.String)
+		}
+	}
+	return nil
 }
 
 // DeleteMessageRequest is the body of /api/delete_message.

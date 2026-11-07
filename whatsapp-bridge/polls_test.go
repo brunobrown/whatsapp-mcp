@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -114,10 +117,10 @@ func TestReceivedPollOfAnotherAuthorIsNotAcceptedByRecordPoll(t *testing.T) { //
 	first := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "POLL1", creationMessage("Original", []string{"A", "B"}, 0), now)
 	forged := pollEvent("chat@g.us", "5511888880000@s.whatsapp.net", "POLL1", creationMessage("Falsa", []string{"X", "Y"}, 0), now)
 
-	if !recordPoll(store, nil, first, waLog.Noop) {
+	if !recordPoll(store, "", nil, first, waLog.Noop) {
 		t.Fatal("the first poll must be accepted")
 	}
-	if recordPoll(store, nil, forged, waLog.Noop) {
+	if recordPoll(store, "", nil, forged, waLog.Noop) {
 		t.Error("a poll reusing another author's ID must be refused, so the message is not stored either")
 	}
 	if got, _, _ := store.GetPoll("POLL1", "chat@g.us"); got.Question != "Original" {
@@ -220,7 +223,7 @@ func TestReceivedPollIsStoredWithOptionsInOrder(t *testing.T) { // RX-01
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	evt := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "POLL1", creationMessage("Almoço?", []string{"Sim", "Não", "Talvez"}, 1), now)
 
-	recordPoll(store, nil, evt, waLog.Noop)
+	recordPoll(store, "", nil, evt, waLog.Noop)
 
 	got, found, err := store.GetPoll("POLL1", "chat@g.us")
 	if err != nil || !found {
@@ -245,7 +248,7 @@ func TestReceivedVoteStoresHashesVoterAndVoteTime(t *testing.T) { // RX-02
 	evt := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "VOTEMSG", voteUpdate("POLL1", votedAt.UnixMilli()),
 		votedAt.Add(time.Hour)) // the envelope arrives later than the vote was cast
 
-	recordPoll(store, decryptTo(sha("Sim"), sha("Talvez")), evt, waLog.Noop)
+	recordPoll(store, "", decryptTo(sha("Sim"), sha("Talvez")), evt, waLog.Noop)
 
 	vote, ok := votesOf(t, store, "POLL1")["5511999990000"]
 	if !ok {
@@ -265,7 +268,7 @@ func TestVoteWithoutTimestampUsesTheEnvelopeTime(t *testing.T) { // RX-02
 	arrived := time.Date(2026, 11, 6, 12, 5, 0, 0, time.UTC)
 	evt := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "VOTEMSG", voteUpdate("POLL1", 0), arrived)
 
-	recordPoll(store, decryptTo(sha("Sim")), evt, waLog.Noop)
+	recordPoll(store, "", decryptTo(sha("Sim")), evt, waLog.Noop)
 
 	if got := votesOf(t, store, "POLL1")["5511999990000"].At; !got.Equal(arrived) {
 		t.Errorf("vote time = %v, want %v", got, arrived)
@@ -277,7 +280,7 @@ func TestVoteThatCannotBeDecryptedStoresNothing(t *testing.T) { // RX-04
 	failing := func(*events.Message) (*waE2E.PollVoteMessage, error) { return nil, errors.New("no message secret") }
 	evt := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "VOTEMSG", voteUpdate("POLL1", 1), time.Now())
 
-	recordPoll(store, failing, evt, waLog.Noop)
+	recordPoll(store, "", failing, evt, waLog.Noop)
 
 	if n := len(votesOf(t, store, "POLL1")); n != 0 {
 		t.Errorf("%d votes stored, want none", n)
@@ -290,8 +293,8 @@ func TestOlderReceivedVoteDoesNotReplaceNewer(t *testing.T) { // RX-03
 	newer := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "V2", voteUpdate("POLL1", t0.Add(time.Minute).UnixMilli()), t0)
 	older := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "V1", voteUpdate("POLL1", t0.UnixMilli()), t0)
 
-	recordPoll(store, decryptTo(sha("Não")), newer, waLog.Noop)
-	recordPoll(store, decryptTo(sha("Sim")), older, waLog.Noop)
+	recordPoll(store, "", decryptTo(sha("Não")), newer, waLog.Noop)
+	recordPoll(store, "", decryptTo(sha("Sim")), older, waLog.Noop)
 
 	want := []string{hex.EncodeToString(sha("Não"))}
 	if got := votesOf(t, store, "POLL1")["5511999990000"].Hashes; !reflect.DeepEqual(got, want) {
@@ -677,5 +680,179 @@ func TestDeleteMessageFailureKeepsEverythingLocal(t *testing.T) { // DEL-03
 	}
 	if _, found, _ := store.GetPoll("POLL1", "chat@g.us"); !found || len(votesOf(t, store, "POLL1")) != 1 || messageCount(t, store, "POLL1") != 1 {
 		t.Error("nothing local may be removed when the revoke fails")
+	}
+}
+
+func TestPollRoutesAreRegisteredInTheRESTMux(t *testing.T) { // SEND-01, VOTE-01, DEL-01 (fiação)
+	mux := newRESTMux(nil, newTestStore(t), fakeConn{connected: true}, newBridgeState(time.Now), nil)
+	for _, route := range []string{"/api/send_poll", "/api/vote_poll", "/api/delete_message"} {
+		bad := httptest.NewRecorder()
+		mux.ServeHTTP(bad, httptest.NewRequest(http.MethodPost, route, strings.NewReader("{")))
+		if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "Invalid request format") {
+			t.Errorf("POST %s with a bad body = %d %q, want 400 Invalid request format (route missing?)", route, bad.Code, bad.Body.String())
+		}
+		get := httptest.NewRecorder()
+		mux.ServeHTTP(get, httptest.NewRequest(http.MethodGet, route, nil))
+		if get.Code != http.StatusMethodNotAllowed {
+			t.Errorf("GET %s = %d, want 405", route, get.Code)
+		}
+	}
+}
+
+func TestHandleMessageStoresAPollMessageAndRefusesAForgedOne(t *testing.T) { // RX-01, RX-05
+	store := newTestStore(t)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	store.StoreChat("chat@g.us", "Chat", now)
+	first := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "POLL1", creationMessage("Original", []string{"A", "B"}, 0), now)
+	forged := pollEvent("chat@g.us", "5511888880000@s.whatsapp.net", "POLL1", creationMessage("Falsa", []string{"X", "Y"}, 0), now)
+	text := pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "TXT", &waE2E.Message{Conversation: proto.String("oi")}, now)
+
+	handleMessage(nil, store, first, waLog.Noop)
+	handleMessage(nil, store, forged, waLog.Noop)
+	handleMessage(nil, store, text, waLog.Noop)
+
+	if row := readRow(t, store, "POLL1"); row.content != "[enquete] Original" {
+		t.Errorf("message content = %q, want [enquete] Original (the forged duplicate must not overwrite it)", row.content)
+	}
+	if poll, found, _ := store.GetPoll("POLL1", "chat@g.us"); !found || poll.Question != "Original" {
+		t.Errorf("poll = %+v (found %v), want Original", poll, found)
+	}
+	if row := readRow(t, store, "TXT"); row.content != "oi" {
+		t.Errorf("an ordinary message must still be stored, got %q", row.content)
+	}
+}
+
+func TestValidatePollLimits(t *testing.T) { // SEND-04 (limites no bridge)
+	many := func(n int) []string {
+		options := make([]string, n)
+		for i := range options {
+			options[i] = fmt.Sprintf("opção %d", i)
+		}
+		return options
+	}
+	for name, c := range map[string]struct {
+		question string
+		options  []string
+		ok       bool
+	}{
+		"255 character question":      {strings.Repeat("q", 255), []string{"A", "B"}, true},
+		"256 character question":      {strings.Repeat("q", 256), []string{"A", "B"}, false},
+		"255 multibyte characters":    {strings.Repeat("ç", 255), []string{"A", "B"}, true},
+		"empty question":              {"", []string{"A", "B"}, false},
+		"12 options":                  {"Q", many(12), true},
+		"13 options":                  {"Q", many(13), false},
+		"2 options":                   {"Q", []string{"A", "B"}, true},
+		"1 option":                    {"Q", []string{"A"}, false},
+		"100 character option":        {"Q", []string{strings.Repeat("o", 100), "B"}, true},
+		"101 character option":        {"Q", []string{strings.Repeat("o", 101), "B"}, false},
+		"empty option":                {"Q", []string{"A", " "}, false},
+		"options differing by case":   {"Q", []string{"Sim", "SIM"}, false},
+		"different options with case": {"Q", []string{"Sim", "Simples"}, true},
+	} {
+		if err := validatePoll(c.question, c.options); (err == nil) != c.ok {
+			t.Errorf("%s: validatePoll error = %v, want ok=%v", name, err, c.ok)
+		}
+	}
+}
+
+func TestPollCreationIsReadFromEveryFieldWhatsAppUses(t *testing.T) { // RX-01
+	inner := creationMessage("Q", []string{"A", "B"}, 1).PollCreationMessage
+	for name, msg := range map[string]*waE2E.Message{
+		"V1": {PollCreationMessage: inner},
+		"V2": {PollCreationMessageV2: inner},
+		"V3": {PollCreationMessageV3: inner},
+		"V5": {PollCreationMessageV5: inner},
+		"V6": {PollCreationMessageV6: inner},
+	} {
+		poll, ok := pollFromMessage("chat@g.us", "P", "alice", msg)
+		if !ok || poll.Question != "Q" || !reflect.DeepEqual(poll.Options, []string{"A", "B"}) || poll.SelectableCount != 1 {
+			t.Errorf("%s: pollFromMessage = %+v (ok %v), want question Q, options A B, selectable 1", name, poll, ok)
+		}
+		if got := extractTextContent(msg); got != "[enquete] Q" {
+			t.Errorf("%s: content = %q, want [enquete] Q", name, got)
+		}
+	}
+}
+
+// recordingLogger keeps the warnings it receives.
+type recordingLogger struct{ warnings []string }
+
+func (l *recordingLogger) Warnf(msg string, args ...any) {
+	l.warnings = append(l.warnings, fmt.Sprintf(msg, args...))
+}
+func (l *recordingLogger) Errorf(string, ...any)   {}
+func (l *recordingLogger) Infof(string, ...any)    {}
+func (l *recordingLogger) Debugf(string, ...any)   {}
+func (l *recordingLogger) Sub(string) waLog.Logger { return l }
+
+func TestUndecryptableVoteIsWarnedAbout(t *testing.T) { // RX-04
+	store := newTestStore(t)
+	logger := &recordingLogger{}
+	failing := func(*events.Message) (*waE2E.PollVoteMessage, error) { return nil, errors.New("no message secret") }
+
+	ok := recordPoll(store, "", failing, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "V", voteUpdate("POLL1", 1), time.Now()), logger)
+
+	if !ok {
+		t.Error("an undecryptable vote must not stop the handling of the message")
+	}
+	if len(logger.warnings) != 1 || !strings.Contains(logger.warnings[0], "POLL1") || !strings.Contains(logger.warnings[0], "no message secret") {
+		t.Errorf("warnings = %q, want one naming the poll and the cause", logger.warnings)
+	}
+}
+
+func TestEventsFromThisAccountAreStoredUnderItsOwnUserWhateverTheAddressing(t *testing.T) { // EDGE-03
+	store := newTestStore(t)
+	const own = "5511900000000"
+	f := newFakePollClient()
+	if status, resp := sendPoll(f.env, store, SendPollRequest{Recipient: "chat@g.us", Question: "Q", Options: []string{"Sim", "Não"}}, waLog.Noop); status != http.StatusOK {
+		t.Fatalf("sendPoll = %d %+v", status, resp)
+	}
+	fromMeAsLID := func(id string, msg *waE2E.Message) *events.Message {
+		evt := pollEvent("chat@g.us", "99887766@lid", id, msg, time.Now())
+		evt.Info.IsFromMe = true
+		return evt
+	}
+
+	if !recordPoll(store, own, nil, fromMeAsLID("SENT1", creationMessage("Q", []string{"Sim", "Não"}, 0)), waLog.Noop) {
+		t.Error("the echo of our own poll, addressed by LID, must be accepted")
+	}
+	recordPoll(store, own, decryptTo(sha("Sim")), fromMeAsLID("V1", voteUpdate("SENT1", time.Now().UnixMilli())), waLog.Noop)
+
+	votes := votesOf(t, store, "SENT1")
+	if _, ok := votes[own]; !ok || len(votes) != 1 {
+		t.Errorf("voters = %v, want only %s (our vote from another device must not be a second person)", votes, own)
+	}
+
+	stranger := pollEvent("chat@g.us", "99887766@lid", "SENT1", creationMessage("Falsa", []string{"X", "Y"}, 0), time.Now())
+	if recordPoll(store, own, nil, stranger, waLog.Noop) {
+		t.Error("the same LID, when the event is not from this account, is someone else and must not rewrite our poll")
+	}
+}
+
+func TestDeleteMessageAlsoRemovesTheDownloadedFile(t *testing.T) { // DEL-01
+	store := newTestStore(t)
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	file := seedDownloaded(t, store, "IMG", time.Hour, now)
+	store.db.Exec("UPDATE messages SET is_from_me = 1 WHERE id = 'IMG'")
+	outside := filepath.Join(t.TempDir(), "importante.txt")
+	os.WriteFile(outside, []byte("x"), 0o644)
+	seedDownloaded(t, store, "OUT", time.Hour, now)
+	store.db.Exec("UPDATE messages SET is_from_me = 1, local_path = ? WHERE id = 'OUT'", outside)
+	f, _, _ := revokingFake()
+
+	for _, id := range []string{"IMG", "OUT"} {
+		if status, resp := deleteMessage(f.env, store, DeleteMessageRequest{ChatJID: "chat@g.us", MessageID: id}, waLog.Noop); status != http.StatusOK {
+			t.Fatalf("deleteMessage %s = %d %+v", id, status, resp)
+		}
+	}
+
+	if exists(file) || exists(filepath.Dir(file)) {
+		t.Error("the downloaded file (and its now empty directory) must be removed")
+	}
+	if !exists(outside) {
+		t.Error("a file outside store/ must never be deleted")
+	}
+	if messageCount(t, store, "IMG") != 0 || messageCount(t, store, "OUT") != 0 {
+		t.Error("both messages must be gone from the database")
 	}
 }
