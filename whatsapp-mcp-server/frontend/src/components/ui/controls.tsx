@@ -1,5 +1,5 @@
 import { Check, ChevronDown } from "lucide-react";
-import { Checkbox, Select as SelectPrimitive, Switch as SwitchPrimitive } from "radix-ui";
+import { Checkbox, RadioGroup as RadioGroupPrimitive, Select as SelectPrimitive, Switch as SwitchPrimitive } from "radix-ui";
 import { useId } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/lib/utils";
@@ -141,5 +141,65 @@ export function CheckboxGroup({
         })}
       </div>
     </fieldset>
+  );
+}
+
+export interface RadioGroupProps {
+  legend: ReactNode;
+  options: readonly SelectOption[];
+  value: string;
+  onValueChange: (value: string) => void;
+  invalid?: boolean;
+  disabled?: boolean;
+  "aria-describedby"?: string;
+  className?: string;
+}
+
+/** A choice among a few options, all visible. Arrow keys move the choice, as the radio pattern asks. */
+export function RadioGroup({
+  legend,
+  options,
+  value,
+  onValueChange,
+  invalid = false,
+  disabled = false,
+  className,
+  "aria-describedby": describedBy,
+}: RadioGroupProps) {
+  const base = useId();
+  const legendId = `${base}-legend`;
+  return (
+    <div className={cn("min-w-0", className)}>
+      <div id={legendId} className="mb-1 font-medium text-ink">
+        {legend}
+      </div>
+      <RadioGroupPrimitive.Root
+        value={value}
+        onValueChange={onValueChange}
+        disabled={disabled}
+        aria-labelledby={legendId}
+        aria-describedby={describedBy}
+        aria-invalid={invalid || undefined}
+        className="flex flex-col"
+      >
+        {options.map((option, index) => {
+          const id = `${base}-${String(index)}`;
+          return (
+            <div key={option.value} className="flex min-h-(--min-target) items-center gap-3">
+              <RadioGroupPrimitive.Item
+                id={id}
+                value={option.value}
+                className="relative flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full border border-muted bg-panel before:absolute before:-inset-3 before:content-[''] data-[state=checked]:border-accent-solid disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-danger-ink"
+              >
+                <RadioGroupPrimitive.Indicator className="block size-2.5 rounded-full bg-accent-solid" />
+              </RadioGroupPrimitive.Item>
+              <label htmlFor={id} className="flex-1 cursor-pointer py-2">
+                {option.label}
+              </label>
+            </div>
+          );
+        })}
+      </RadioGroupPrimitive.Root>
+    </div>
   );
 }
