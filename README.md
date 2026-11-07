@@ -355,7 +355,9 @@ vote_poll(chat_jid="<group JID>", message_id="<poll message ID>", options=["Sush
 - **Votes while the bridge is off**: WhatsApp keeps messages for a linked device and delivers them when it reconnects. A vote given with the bridge stopped was counted after it started again (checked on 2026-11-07, a vote from the account's own phone). A vote is lost only if WhatsApp no longer holds it (the device stayed unlinked for long) or the poll was never seen by the bridge.
 - **Voting**: `options` are the texts of the options, in any case, and the vote replaces the previous one; an empty list retracts it. A single-answer poll takes one option. An option the poll does not have, a repeated one or too many options is `INVALID_VOTE`; a poll the bridge never saw is `POLL_NOT_FOUND`; nothing is sent in either case. Voting needs the poll's secret, so it works only for polls the bridge saw.
 - **Deleting**: `delete_message(chat_jid, message_id)` deletes for everyone a message sent by this account (a text, a file or a poll) and removes it, a poll's votes and its downloaded file (only when the file lies inside `store/`) from your side only after WhatsApp accepted it. Someone else's message is `NOT_OWN_MESSAGE` and an unknown one `MESSAGE_NOT_FOUND`. It cannot be undone; use `dry_run=true` to see which message it is.
-- **Not supported**: polls with images, closing a poll before its deadline, reading a quiz's right answer or a deadline back (`get_poll_results` counts the votes as for any poll), editing the question of a poll or adding an option from here (the bridge only applies the ones it receives), deleting someone else's message as a group admin, and polls in Channels and Communities.
+- **Deadline and quiz, read back**: `get_poll_results` and `list_polls`-style reads also return `closes_at` (UTC, `null` without a deadline), `closed` (the clock has passed it), `quiz` and, **only for a quiz this account created**, `correct_answer` and `correct` on each option. The bridge stores the deadline, the quiz flag and the right answer of every poll it sees (columns added by an idempotent `ALTER TABLE`; polls stored before this version have none, so they read as open and not a quiz). The right answer of someone else's quiz is never shown. `watch.py --poll` prints one `event=poll_closed` line when the poll reaches its deadline while it watches. The bridge sends a `poll_closed` webhook event (ids and `total_voters` only, no question or options) once per poll, checked every 15 seconds; a poll that closed while the bridge was off is marked without an event when it is older than an hour. The event is not hidden by `include_own`: the end of a poll is not something this account did.
+- **Closing before the deadline: not possible from here.** The WhatsApp protocol as implemented by the library the bridge uses has a deadline only in the message that creates the poll; there is no message to end one early (the encrypted updates it knows are message edits, question edits and added options), and nothing found in its protocol definitions can be sent to do it. To stop answers, set a short `closes_in_minutes` when creating the poll, or delete the poll with `delete_message`. If a future version of the library adds it, this is the place to add the tool.
+- **Not supported**: polls with images, closing a poll before its deadline (see above), editing the question of a poll or adding an option from here (the bridge only applies the ones it receives), deleting someone else's message as a group admin, and polls in Channels and Communities.
 
 ### Media Handling Features
 
@@ -393,6 +395,10 @@ download_media_batch(chat_jid="<JID>", after="2026-10-20T22:12:00-03:00", types=
 
 Downloads the media of that chat inside the window (same `after`/`before` rules as `list_messages`), oldest first, **one at a time**. `types` is any of `image`, `video`, `audio`, `document` (default all). Limits: `max_size_mb` (default 25; larger media is skipped, nothing is downloaded), `max_items` (default 50, up to 200; `truncated=true` when more were left out) and `timeout_seconds` per item (default 120, up to 600). The result has `total`, `downloaded`, `already_downloaded`, `failed`, `skipped`, `truncated`, `aborted` and `items`; each item has `message_id`, `timestamp`, `media_type`, `filename`, `status` (`downloaded`, `already_downloaded`, `failed`, `skipped`), `path` and, when it did not download, `error_code`, `message` and `hint`. One failed item does not stop the batch; a bridge that does not answer does (`aborted="BRIDGE_UNREACHABLE"`, the rest `skipped`). Bad arguments return `error_code=INVALID_ARGUMENT`.
 
+### Messages deleted for everyone
+
+When the author deletes a message for everyone, the bridge keeps the row (so the history shows that something was there) but, by default, **erases what was in it**: the text becomes `[message deleted]`, the media details and the downloaded file are removed, a poll loses its question and votes, and the reactions to it go. The row gets `deleted_at` (a column added by an idempotent `ALTER TABLE`; existing data is untouched) and the `message_deleted` webhook event can announce it, with ids only. Set `WHATSAPP_KEEP_DELETED_CONTENT=true` to keep the text and media instead (`deleted_at` is still set); that is your choice to make, since the sender asked for it to disappear. Only the message's own author can delete it: a request from someone else, such as a group admin's removal, changes nothing because the bridge cannot tell it from a forged one. The author is recognised by the address stored with the message, so a deletion that arrives under the other address of the same person (phone number versus LID) is also ignored; the bridge logs `Ignoring the deletion ...` when that happens. This has not been checked in a real conversation. A deletion does not count as a new message and does not move the chat's last message time. A message that was deleted stays deleted: a second delivery of it (history sync, an offline replay), an edit, a reaction or a vote that arrives later changes nothing, and the media keys, URL, hashes, reply link and forwarded flag are erased with the text. The messages database is opened with `secure_delete` on, so erased text is overwritten in the file instead of staying in free pages (a copy of the database or of its write-ahead log made *before* the deletion still has it). Messages deleted before this version, or while the bridge was off, are not known.
+
 ### Webhooks
 
 MCP cannot push events to an agent, so by default the agent asks (`monitor_messages`, `watch_poll`). The bridge can instead **tell a program of yours** when something happens, with a signed HTTP POST. It is **off**: nothing leaves the bridge unless `webhooks.json` exists in the configuration directory (next to `api_token` and `db.key`, `~/.config/whatsapp-mcp/` by default). The bridge refuses the file if other users can read it (`chmod 600`), and it reads it only at start.
@@ -420,21 +426,25 @@ MCP cannot push events to an agent, so by default the agent asks (`monitor_messa
 | `include_content` | Default `false`: the event carries ids, type, chat, sender, time and `content_length`, **not** the text, the question or the option names, the emoji or the file name. `true` adds them and marks the event `untrusted_content` |
 | `include_own` | Default `false`: what this account does from another device (your phone) is not delivered, so an agent does not answer itself. What the bridge sends through the MCP tools (`send_message`, `send_poll`, `vote_poll`, `react_to_message`) never becomes an event, with or without this option: WhatsApp does not echo it back to the bridge |
 | `allow_private_network` | Default `false`. See the destination rules |
+| `persist_queue` | Default `false`. `true` keeps the endpoint's queue on disk, see *Durable queue* below |
 | `"enabled": false` (top level) | Turns everything off |
 
 | Event | When |
 | ----- | ---- |
 | `message` | A new message arrives (history re-sent by WhatsApp and anything older than an hour is not news) |
 | `poll_created`, `poll_vote` | A poll arrives; a vote is stored, changed or retracted (`retracted`). In an anonymous poll `voter` is `null` |
+| `poll_closed` | A poll reached its deadline (once; ids and `total_voters` only) |
 | `reaction`, `message_edit` | A reaction (`retracted` when taken back) or an edit of a stored message |
+| `message_deleted` | The author deleted a stored message for everyone. Only ids (`message_id`, `chat_jid`, `sender`), never the text |
 | `connection` | `connected`, `disconnected`, `logged_out` |
 | `ping` | `test_webhook` |
 
-Deleted messages are not an event: the bridge does not process them.
 
 **Body**: `event_id` (the same across attempts and across WhatsApp redeliveries: **deduplicate on it**), `type`, `occurred_at` (UTC), `delivery_attempt` and `data`. **Signature**: `X-Webhook-Timestamp` (seconds) and `X-Webhook-Signature: sha256=<hex>`, the HMAC-SHA256 of `<timestamp>.<raw body>` with the endpoint's `secret`. Recompute it over the raw bytes, compare in constant time and refuse a timestamp more than 5 minutes off; the bridge does not do the replay check for you.
 
-**Delivery** is at least once. Each attempt has a 5 s limit; a network error, 5xx, 408 or 429 is repeated after 1 s, 4 s, 16 s, 1 min and 5 min (six attempts, about 6 minutes), any other 4xx is dropped, and a redirect is **not followed**. The queue is in memory, one per endpoint, 1000 events: when it is full the oldest is dropped (`dropped` in the status). A slow endpoint does not hold up the others or the reception of messages. A restart loses what was waiting, but nothing is lost for good: messages and votes are in the database, so a receiver catches up with `monitor_messages` or `watch_poll`. A body over 64 KiB is sent with `truncated: true` and without the text.
+**Delivery** is at least once. Each attempt has a 5 s limit; a network error, 5xx, 408 or 429 is repeated after 1 s, 4 s, 16 s, 1 min and 5 min (six attempts, about 6 minutes), any other 4xx is dropped, and a redirect is **not followed**. The queue is in memory by default (one per endpoint, 1000 events; see *Durable queue*): when it is full the oldest is dropped (`dropped` in the status). A slow endpoint does not hold up the others or the reception of messages. Without `persist_queue` a restart loses what was waiting, but nothing is lost for good: messages and votes are in the database, so a receiver catches up with `monitor_messages` or `watch_poll`. A body over 64 KiB is sent with `truncated: true` and without the text.
+
+**Durable queue** (`"persist_queue": true`, per endpoint, off by default): every accepted event is appended to `webhook_queue_<hash>.jsonl` in the configuration directory (mode 0600; the name is a hash of the endpoint name) before it is queued, and marked done when it is delivered, dropped or given up on. An event that was waiting, or being retried, when the bridge stopped is delivered again at the next start, with the same `event_id` (still at least once: deduplicate). The file is rewritten at start with only what is pending and compacted while running, so it does not grow without limit; events older than 24 hours are forgotten, and at most the newest 1000 are kept. The file holds ids, types, chat, sender and times, **never the text**: an event recovered after a restart arrives without it even for an endpoint with `include_content`, and the receiver reads the message with the MCP tools. A 4xx answer is final and does not come back. `get_webhook_status` shows `persistent` and `recovered` (events picked up at start) per endpoint. If the file cannot be written the endpoint keeps working in memory and the bridge logs a warning.
 
 **Destinations**: `https://` to any host; `http://` only to a loopback address (`127.0.0.0/8`, `::1`) or `localhost`; no user name or password in the URL; never the bridge's own API. The bridge checks the address it actually connects to: a loopback destination reaches only loopback, and every other one is refused if it resolves to loopback, a private network, link-local (cloud metadata) or multicast, unless `allow_private_network` is `true`, which lifts the private-network refusal (it also lets public addresses through, as before, but never loopback, link-local, multicast, `0.0.0.0/8` or the IPv6 forms that embed an IPv4 address: NAT64 and 6to4).
 
@@ -467,6 +477,104 @@ class Hook(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 ```
 
+### Exporting a conversation
+
+`export_conversation(chat_jid, after, before, anonymize=False, include_polls=True, include_reactions=True, limit=500)` returns a window of one chat, oldest first, as structured data: `messages` (id, time with zone, sender, text, media type and size, quoted message, forwarded), `polls` created in the window (options, who voted for what, retractions) and `reactions`. `has_more` and `next_after` page through a long chat (pass `next_after` as `after`). With `save_conversation_export(chat_jid, save_as="name", ...)` (same arguments plus `overwrite`) the result is also written to `exports/name.json` in the configuration directory (directory 0700, file 0600, never replacing an existing file unless `overwrite=true`; the file is not encrypted). `export_conversation` itself writes nothing. It is read only and the output is marked `untrusted_content`.
+
+`anonymize=true` replaces each person with a stable pseudonym (`P1`, `P2`, ... in order of first appearance; the account is `Me`), the chat id and name with `[chat]`, `@<id>` mentions with the person's pseudonym, phone-like numbers in the text and in poll questions with `[number]`, and drops sender names and media file names. It **cannot find names written inside the text of a message** (a person greeted by name, a signature): read the export before sharing it.
+
+### Metrics
+
+`get_metrics(window_hours=24)` returns counters for diagnosing the setup, never text, names, chat ids or senders: `messages` (received and from this account), `monitor_replies` (per profile: sent, blocked, failed, from `monitor_audit.log`, and a count per error code), `sends` (by result, and how many used an override token, from `send_audit.log`), `pending_drafts` and `webhooks` (delivered, failed, dropped and queued, summed over the endpoints; `null` if the bridge does not answer). `get_connection_status` also reports `server_version`, `features` and `enabled`, so a client connected to an older server is recognised by their absence.
+
+### Pending drafts
+
+In draft mode `monitor_reply` sends nothing without the profile's `approval_token`. The reply it refused is kept in `monitor_drafts.json` (next to `monitor_audit.log`, mode 0600) so the owner can review it later: `list_pending_drafts(profile=None)` shows `id`, `profile`, `chat_jid`, `message_id`, `sender`, `text`, `created_at` and `expires_at`, and `discard_pending_draft(draft_id)` deletes one. The token is never stored. A draft expires after `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` (default 24), at most 100 are kept (the oldest go first), and sending the reply removes its draft. The text was written by the agent, possibly after reading untrusted messages, so the listing is marked `untrusted_content`. `WHATSAPP_MONITOR_DRAFTS` changes the file's path, or `off` turns persistence off. The file is **not encrypted** (unlike the databases): it holds text the agent wrote, protected only by mode 0600 (a file other users can read is ignored); the lifetime is capped at 168 hours. Two server processes take turns through a lock file (`monitor_drafts.json.lock`).
+
+### Claude Code channel (research preview)
+
+Claude Code can load an MCP server as a **channel**: the server declares `experimental["claude/channel"]` and sends `notifications/claude/channel`, which the open session sees as `<channel source="whatsapp" ...>text</channel>` and can wake up for. This server can do that. It is **off by default** and, when on, it only *announces* events; nothing in it sends, votes, reacts or deletes, and there is no permission relay (`claude/channel/permission` is neither declared nor handled: approving tools by WhatsApp message is a risk that is not worth taking).
+
+**Turning it on**
+
+1. Create `channel.json` in the configuration directory (next to `api_token`; or the path in `WHATSAPP_CHANNEL_CONFIG`), mode `0600` (the server refuses a file other users can read, and `get_connection_status` shows the reason in `channel.error`):
+
+   ```json
+   {
+     "enabled": true,
+     "profiles": ["support"],
+     "polls": ["<poll message id>"],
+     "include_excerpt": false,
+     "excerpt_chars": 120,
+     "batch_seconds": 3,
+     "min_interval_seconds": 5,
+     "max_batch": 20,
+     "poll_interval_seconds": 2
+   }
+   ```
+
+   `profiles` are [monitor profiles](#monitoring-and-auto-reply) and are the **only** control over what becomes a notice: their chats, `senders` allow and deny lists, triggers, topics and `max_event_age_minutes` decide. A profile that is missing, disabled or invalid yields nothing. `polls` are poll message ids whose vote changes (counts only) and closing are announced. Anything not in a listed, enabled profile or poll can never be announced. An unknown key or a value out of range turns the channel off.
+2. Start Claude Code with the server loaded as a development channel. Own channels are not on Anthropic's approved list, so use the development flag, in an interactive session: `claude --dangerously-load-development-channels server:whatsapp` (`whatsapp` is the name the server has in your MCP configuration). The flag is ignored with `-p` and in the Agent SDK. Claude Code asks you to confirm.
+3. To turn it off: set `"enabled": false`, delete `channel.json`, or start Claude Code without the flag. Restart the server after changing the file (it is read at start).
+
+**What a notice says.** Ids, types and times: profile, chat id, sender id, trigger, message id, time and length. **Never** the text, the sender's name or the chat's name. The session reads the message with `get_message_context`/`list_messages` (which mark it `untrusted_content`) and answers with `monitor_reply` under the profile's mode, token, limits and the send policy. With `"include_excerpt": true` a notice also carries up to `excerpt_chars` (at most 280) characters of the text, on one line, without `<` or `>` (so it cannot close the channel tag) and marked `untrusted_content=true`: it is text from a stranger placed in front of your agent, so leave it off unless you accept that.
+
+**Pacing and repeats.** Events within `batch_seconds` of each other become one notice (`event=batch`, with `count`); two notices are at least `min_interval_seconds` apart; a notice names at most `max_batch` events. Each event has an id and is announced once. The position (per profile and poll) and the last 500 ids are kept in `channel_state.json` (mode 0600, next to the configuration), written after a notice is sent, so a restart neither repeats what was announced nor misses what arrived while the server was down. It starts at the end the first time: history is not announced. If the process stops between sending a notice and saving, that one notice can come again.
+
+**Limits and risks**
+- Delivery is not confirmed: if the session did not load the channel (flag missing, organization policy), the notice disappears without an error. Notices sent while Claude is busy are queued by Claude Code and delivered together at its next turn.
+- Claude Code requires a claude.ai login or a Console API key; it does not work with Bedrock, Vertex or Foundry. On Team and Enterprise plans an administrator has to allow channels.
+- A notice is not a command. Treat what it points to as untrusted data, exactly like `monitor_messages`.
+- The notifier starts only after the client sends `notifications/initialized`, and only on stdio.
+
+**What was and was not checked** (Claude Code 2.1.319 on 2026-11-07): the installed binary contains `--dangerously-load-development-channels <servers...>` and the `notifications/claude/channel` method, so the flag and method exist in that version. The server side is tested with a real MCP handshake over stdio (a child process): the capability is declared only when enabled and valid, and the notice, its `meta`, filtering, burst grouping, restart and excerpt are checked on the wire. **Not tested in a real Claude Code session**: that a notice wakes an *idle* session (the documentation only implies it), the minimum Claude Code version, the size limit of a notice, and the "push messages" part of the MCP page of its documentation. Test those before depending on them, and expect them to change while it is a preview.
+
+### Waking an agent on an event
+
+MCP is request and response: the server cannot interrupt an idle session. Two commands in `whatsapp-mcp-server/` print **one line per event** for a tool that wakes the agent on each line. Both use the same shape and never print message text, names, questions or options (those come from other people; the agent reads them with the read tools, which mark them untrusted):
+
+```
+event=message profile=support chat=120363000000000000@g.us sender=5511999990000 id=3EB0ABC trigger=mention mode=draft ts=2026-11-07T10:00:00-03:00
+event=poll_vote poll=3EB0DEF chat=120363000000000000@g.us options=1 retracted=false
+state=error code=DIRECTORY_UNAVAILABLE
+```
+
+Values are cut to letters, digits and `@ . : + , _ -`, so a hostile value cannot add a space, a line break or a key. Lines that start with `state=` are diagnostics (`started`, `error`, `recovered`, `stopped`) and also go to stdout.
+
+**`watch.py`** follows a monitor profile (the profile's chats, senders, triggers and maximum age decide what becomes a line; a disabled or invalid profile prints `state=error` and exits with status 2) or the votes of a poll:
+
+```bash
+uv run watch.py --profile support               # new events only; resumes from the saved position
+uv run watch.py --profile support --since now    # ignore what the saved position says
+uv run watch.py --profile support --since 1234   # from an explicit cursor
+uv run watch.py --poll <message_id>              # one line per vote change
+```
+
+The position is kept in `watch_profile_<name>.cursor` (or `watch_poll_<id>.cursor`) in the configuration directory, mode 0600; the command refuses a file other users can read (`CURSOR_FILE_OPEN`). Without `--since`, a first run starts at the end, so history is not replayed. If the database cannot be read it prints `state=error`, retries with a growing wait (2 s up to 30 s) and prints `state=recovered`; no event is lost, because the position only moves after the lines are printed. SIGINT and SIGTERM save the position, print `state=stopped` and exit 0. `watch` never sends, votes or reacts: an answer still goes through `monitor_reply` and the send policy.
+
+**`webhook_receiver.py`** receives the bridge's [webhooks](#webhooks), checks the HMAC-SHA256 signature in constant time, refuses a timestamp more than 5 minutes off, deduplicates by `event_id` and prints the same kind of line. It listens on loopback only and refuses to start without a secret of at least 32 bytes or with the example value:
+
+```bash
+WEBHOOK_SECRET=<the endpoint's secret> python3 webhook_receiver.py --port 9000
+# or: python3 webhook_receiver.py --secret-file ~/.config/whatsapp-mcp/hook.secret   (mode 0600)
+```
+
+**With Claude Code's `Monitor` tool**: ask the agent to start `uv run --directory /path/to/whatsapp-mcp/whatsapp-mcp-server watch.py --profile support` as a monitor. Each line wakes the session; the agent then reads the message with `get_message_context` and answers through `monitor_reply`. A monitor has a time limit (5 minutes by default, at most 30) and is not restarted by `--resume`, so ask the agent to start it again when it ends; the saved position makes that safe.
+
+**With a hook and `asyncRewake`**: a hook command with `"asyncRewake": true` runs in the background and, if it exits with code 2, wakes Claude with its output. Use it for a one-shot "wake me at the next event". `watch.py` is a long-running command, so for this use the receiver or a small wrapper that exits 2 after the first line.
+
+Which path to use:
+
+| Path | Needs | Good for | Limits |
+| ---- | ----- | -------- | ------ |
+| [Channel](#claude-code-channel-research-preview) | An open interactive session started with the development flag | Being told of an event without any loop; the session can wake on it | Research preview; not confirmed for an idle session; not in `-p`; plan and organization rules |
+| `Monitor` + `watch.py` | An open Claude Code session | A stream of events inside the session | Time limit per monitor; ends with the session |
+| Session cron (`/loop`, `CronCreate`) | An open session | Polling every minute or more | Minimum 1 minute; expires after 7 days |
+| Cloud routines | No open session | Scheduled work | Cannot reach a bridge on your machine |
+| Webhook + `webhook_receiver.py` | A program of yours running | Feeding another system or a wrapper | Not an agent by itself |
+
+The Claude Code facts above (limits of `Monitor`, `asyncRewake`) come from its documentation of 2026-11-07; check it before relying on them.
+
 ### Checking the bridge
 
 `get_connection_status` (or `GET http://127.0.0.1:8080/api/status`) returns `connected`, `logged_in`, `phone`, `version`, `started_at`, `uptime_seconds`, `last_event_at`, `last_message_at`, `last_connected_at`, `last_disconnected_at` (all in UTC, `null` if it has not happened since the bridge started) and `pending_media_retries`. If the bridge does not answer, the tool returns `connected=false`, `bridge_reachable=false`, `error_code=BRIDGE_UNREACHABLE`, the time of the newest stored message (`last_message_at`) and the last write to the bridge log (`last_log_at`).
@@ -496,6 +604,9 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_AUTO_DOWNLOAD_MAX_MB` | bridge | `25` | Largest media saved automatically (by the size WhatsApp declares) |
 | `WHATSAPP_AUTO_DOWNLOAD_TYPES` | bridge | `image,document,audio` | Comma-separated types saved automatically (`image`, `video`, `audio`, `document`) |
 | `WHATSAPP_MEDIA_RETENTION_DAYS` | bridge | off | Delete downloaded files of messages older than this many days (the messages stay). Only a positive whole number turns it on. |
+| `WHATSAPP_KEEP_DELETED_CONTENT` | bridge | off | `true` keeps the text and media of a message its author deleted for everyone (see [Messages deleted for everyone](#messages-deleted-for-everyone)) |
+| `WHATSAPP_MONITOR_DRAFTS` | MCP server | `monitor_drafts.json` next to the audit log | Path of the pending drafts file, or `off` to keep none |
+| `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` | MCP server | `24` | How long a pending draft lives (at most 168) |
 | `WHATSAPP_DB_ENCRYPTION` | bridge | `on` | `on` encrypts the databases (and migrates plaintext ones at start); `off` keeps them in plain SQLite |
 | `WHATSAPP_DB_KEY` | bridge, MCP server | - | The master key of the databases, 64 hexadecimal characters; wins over the key file |
 | `WHATSAPP_DB_KEY_FILE` | bridge, MCP server | `<config dir>/db.key` | A file with the master key (it must exist) |
@@ -522,6 +633,8 @@ Webhooks: `ENDPOINT_NOT_FOUND`, `INVALID_ARGUMENT`, `BRIDGE_UNREACHABLE`, `BRIDG
 Database: `DATABASE_KEY_UNAVAILABLE`, `DATABASE_UNREADABLE` (the MCP server cannot open an encrypted database).
 
 ## Security of your data
+
+Using an agent on top of this? Read the [security guide for agents](docs/security-guide.md) (threat model, what the approval token is and is not, how to separate a test group from production) and the [example profiles](docs/profile-examples.md).
 
 Everything the bridge stores is yours and stays on your machine. These are the protections, and their limits.
 

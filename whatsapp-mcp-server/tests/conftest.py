@@ -29,3 +29,9 @@ def isolated_messages_db(tmp_path, monkeypatch):
     """No test reads the bridge's real database: the default path points to a file that does not exist.
     Tests that need a database swap the path for their own."""
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "no_db" / "messages.db"))
+
+
+@pytest.fixture(autouse=True)
+def isolated_drafts(tmp_path, monkeypatch):
+    """No test writes the real pending-drafts file."""
+    monkeypatch.setenv("WHATSAPP_MONITOR_DRAFTS", str(tmp_path / "monitor_drafts.json"))

@@ -34,7 +34,7 @@ func clientDecryptors(client *whatsmeow.Client) decryptors {
 // that is any message we sent, whatever user (phone number or LID) it was stored under.
 func (store *MessageStore) EditMessage(id, chatJID, who string, fromMe bool, content string) (bool, error) {
 	res, err := store.db.Exec(
-		"UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND (sender = ? OR (? AND is_from_me = 1))",
+		"UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND (sender = ? OR (? AND is_from_me = 1)) AND COALESCE(deleted_at, '') = ''",
 		content, id, chatJID, who, fromMe)
 	if err != nil {
 		return false, err

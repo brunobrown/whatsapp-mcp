@@ -12,7 +12,8 @@ import main  # noqa: E402
 READ = {"search_contacts", "list_messages", "list_chats", "get_chat", "get_direct_chat_by_contact",
         "get_contact_chats", "get_last_interaction", "get_message_context", "get_message_thread",
         "get_poll_results", "watch_poll", "list_polls", "get_message_reactions", "get_monitor_profiles", "monitor_messages",
-        "get_group_participants", "get_connection_status", "get_webhook_status"}
+        "get_group_participants", "get_connection_status", "get_webhook_status", "list_pending_drafts", "get_metrics", "export_conversation"}
+LOCAL = {"discard_pending_draft", "save_conversation_export"}
 SEND = {"test_webhook", "send_message", "send_file", "send_audio_message", "send_poll", "vote_poll", "react_to_message", "monitor_reply"}
 DELETE = {"delete_message"}
 DOWNLOAD = {"download_media", "download_media_batch"}
@@ -24,7 +25,7 @@ def annotations():
 
 def test_every_registered_tool_has_a_category():  # ANN-01
     registered = set(annotations())
-    categorised = READ | SEND | DELETE | DOWNLOAD
+    categorised = READ | LOCAL | SEND | DELETE | DOWNLOAD
     assert registered - categorised == set(), "tool(s) registered without an annotation category"
     assert categorised - registered == set(), "category lists a tool that is not registered"
 
@@ -49,3 +50,9 @@ def test_delete_message_is_destructive():  # ANN-01
 def test_download_tools_write_files_but_are_idempotent(name):  # ANN-01
     a = annotations()[name]
     assert (a.read_only_hint, a.destructive_hint, a.idempotent_hint) == (False, False, True)
+
+
+@pytest.mark.parametrize("name", sorted(LOCAL))
+def test_local_write_tools_touch_only_local_state(name):  # ANN-01, DRAFT-07
+    a = annotations()[name]
+    assert (a.read_only_hint, a.destructive_hint, a.open_world_hint) == (False, False, False)

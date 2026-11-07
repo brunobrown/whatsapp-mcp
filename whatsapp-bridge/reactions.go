@@ -37,6 +37,9 @@ type Reaction struct {
 // StoreReaction records the reaction of reactor, which replaces the one before it only when it is newer.
 // An empty emoji takes the reaction back. It reports whether anything was stored.
 func (store *MessageStore) StoreReaction(targetID, chatJID, reactor, emoji string, at time.Time) (bool, error) {
+	if deleted, err := store.isDeleted(targetID, chatJID); err != nil || deleted {
+		return false, err
+	}
 	res, err := store.db.Exec(
 		`INSERT INTO reactions (target_id, chat_jid, reactor, emoji, timestamp_ms) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT(target_id, chat_jid, reactor) DO UPDATE SET

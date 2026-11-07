@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import dbcrypto
+import drafts
 import filemode
 import send_policy
 
@@ -890,9 +891,10 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         if needs_token and not token_ok:
             why = ("this profile has no approval_token, so replies to this sender can never be sent"
                    if not selected.approval_token else "give the approval_token to send it")
+            saved = drafts.save(selected.name, jid, message.id, message.sender, text) if preview.success else None
             return refuse("blocked", APPROVAL_REQUIRED, error(
                 APPROVAL_REQUIRED, f"Draft only: {why}. Nothing was sent.", mode=mode,
-                preview=preview.preview if preview.success else None))
+                preview=preview.preview if preview.success else None, draft_id=saved))
         if not _audit_writable():
             return error(RATE_LIMIT_UNVERIFIABLE, f"The audit log {AUDIT_PATH} cannot be used, so the reply limits "
                                                   "cannot be checked. Nothing was sent.")
@@ -909,6 +911,8 @@ def monitor_reply(profile: str, chat_jid: str, message_id: str, text: str, appro
         _audit(selected, jid, message, hit, mode, token_ok, "sent" if result.success else
                ("blocked" if result.error_code == send_policy.BLOCKED else "failed"), len(text),
                error_code=result.error_code, reply_id=result.message_id if result.success else None)
+    if result.success:
+        drafts.remove(drafts.draft_id(selected.name, jid, message.id))
     answer = {"success": result.success, "message": result.message, "mode": mode, "profile": selected.name}
     if result.error_code:
         answer["error_code"] = result.error_code
