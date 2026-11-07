@@ -1157,8 +1157,8 @@ def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
 
 
 LINK_EXPIRED_HINT = (
-    "O link da mídia expirou e o celular não respondeu ao pedido de reenvio. "
-    "Abra o WhatsApp no celular conectado ao bridge, desbloqueado e online, e tente de novo."
+    "The media link expired and the phone did not answer the resend request. "
+    "Open WhatsApp on the phone connected to the bridge, unlocked and online, and try again."
 )
 
 

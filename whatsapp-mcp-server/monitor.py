@@ -34,7 +34,7 @@ DEFAULT_TRIGGERS = ("mention", "reply", "direct")
 MAX_ALIASES = 10
 MODES = ("draft", "auto")
 MIN_TOKEN_CHARS = 8
-EXAMPLE_TOKEN = "troque-por-um-valor-so-seu"
+EXAMPLE_TOKEN = "replace-with-your-own-value"
 DEFAULT_LIMITS = {
     "replies_per_chat_per_hour": 6,
     "replies_per_sender_per_hour": 4,

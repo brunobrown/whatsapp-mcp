@@ -1,4 +1,4 @@
-"""Testes do T3: o servidor MCP envia o token da API e reporta BRIDGE_UNAUTHORIZED (API-06)."""
+"""T3 tests: the MCP server sends the API token and reports BRIDGE_UNAUTHORIZED (API-06)."""
 import os
 import sys
 from unittest import mock
@@ -58,7 +58,7 @@ def test_the_token_is_read_on_every_call():  # API-06
     assert [bearer(c) for c in post.call_args_list] == [f"Bearer {TOKEN}", "Bearer " + "cd" * 32]
 
 
-@pytest.mark.parametrize("content", [None, "", "curto", "zz" * 32, "AB" * 32, TOKEN + "00"])
+@pytest.mark.parametrize("content", [None, "", "short", "zz" * 32, "AB" * 32, TOKEN + "00"])
 def test_without_a_valid_token_no_header_is_sent_and_nothing_breaks(content):  # API-06
     if content is not None:
         write_token(content)
@@ -84,7 +84,7 @@ def test_a_refused_send_is_bridge_unauthorized(status):  # API-06
         tool = main.send_response(result)
 
     assert result.success is False and result.error_code == "BRIDGE_UNAUTHORIZED"
-    assert tool["error_code"] == "BRIDGE_UNAUTHORIZED" and "Reinicie" in tool["message"] and TOKEN not in str(tool)
+    assert tool["error_code"] == "BRIDGE_UNAUTHORIZED" and "Restart" in tool["message"] and TOKEN not in str(tool)
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -94,7 +94,7 @@ def test_a_refused_download_is_bridge_unauthorized_with_a_hint(status):  # API-0
         out = main.download_media("M", "c@g.us")
 
     assert out["success"] is False and out["error_code"] == "BRIDGE_UNAUTHORIZED"
-    assert "Reinicie" in out["hint"] and TOKEN not in str(out)
+    assert "Restart" in out["hint"] and TOKEN not in str(out)
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -103,7 +103,7 @@ def test_refused_participants_are_bridge_unauthorized(status):  # API-06
     with mock.patch("whatsapp.requests.post", return_value=reply(status, {"success": False})):
         out = main.get_group_participants("g@g.us")
 
-    assert out["success"] is False and out["error_code"] == "BRIDGE_UNAUTHORIZED" and "Reinicie" in out["message"]
+    assert out["success"] is False and out["error_code"] == "BRIDGE_UNAUTHORIZED" and "Restart" in out["message"]
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -113,7 +113,7 @@ def test_refused_status_is_bridge_unauthorized_but_reachable(status):  # API-06
         out = whatsapp.get_connection_status()
 
     assert out["connected"] is False and out["bridge_reachable"] is True
-    assert out["error_code"] == "BRIDGE_UNAUTHORIZED" and "Reinicie" in out["message"]
+    assert out["error_code"] == "BRIDGE_UNAUTHORIZED" and "Restart" in out["message"]
 
 
 def test_a_refusal_with_a_body_that_is_not_json_is_still_unauthorized():  # API-06

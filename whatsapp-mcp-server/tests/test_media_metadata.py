@@ -1,4 +1,4 @@
-"""Testes do P1-7: metadados de mídia (arquivo, MIME, tamanho, encaminhada, resposta, caminho local) na leitura."""
+"""P1-7 tests: media metadata (file, MIME, size, forwarded, reply, local path) on read."""
 import os
 import sqlite3
 import sys
@@ -23,7 +23,7 @@ def make_db(path, with_meta=True):
     conn.executescript(
         CHATS + f"CREATE TABLE messages ({BASE_COLUMNS}{META_COLUMNS if with_meta else ''}, PRIMARY KEY (id, chat_jid));"
     )
-    conn.execute("INSERT INTO chats VALUES (?, 'Projeto', '2026-10-21 12:00:00+00:00')", (CHAT,))
+    conn.execute("INSERT INTO chats VALUES (?, 'Project', '2026-10-21 12:00:00+00:00')", (CHAT,))
     conn.commit()
     return conn
 
@@ -48,13 +48,13 @@ def read_one(**kwargs):
 
 
 def test_document_shows_name_mime_and_size(conn):  # MEDIA-06
-    add(conn, "DOC1", 1, media_type="document", filename="proposta.pdf",
+    add(conn, "DOC1", 1, media_type="document", filename="proposal.pdf",
         mimetype="application/pdf", file_length=2048)
 
     out = read_one()
 
     assert "[document - Message ID: DOC1 - Chat JID: g@g.us" in out
-    assert "File: proposta.pdf (application/pdf, 2.0 KB)" in out
+    assert "File: proposal.pdf (application/pdf, 2.0 KB)" in out
 
 
 @pytest.mark.parametrize("size, shown", [(512, "512 B"), (1536, "1.5 KB"), (5 * 1024 * 1024, "5.0 MB")])
@@ -64,7 +64,7 @@ def test_size_is_human_readable(conn, size, shown):  # MEDIA-06
     assert f"a.bin ({shown})" in read_one()
 
 
-def test_unknown_size_and_mime_are_left_out(conn):  # MEDIA-06 (file_length 0 ou ausente)
+def test_unknown_size_and_mime_are_left_out(conn):  # MEDIA-06 (file_length 0 or absent)
     add(conn, "D", 1, media_type="document", filename="a.bin", file_length=0)
 
     out = read_one()
@@ -91,24 +91,24 @@ def test_plain_media_is_not_marked(conn):  # MEDIA-07
 
 
 def test_text_message_forwarded_or_reply_is_marked(conn):  # MEDIA-11
-    add(conn, "T1", 1, content="vejam isso", forwarded=1)
-    add(conn, "T2", 2, content="concordo", quoted_id="T1")
-    add(conn, "T3", 3, content="normal")
+    add(conn, "T1", 1, content="look at this", forwarded=1)
+    add(conn, "T2", 2, content="agreed", quoted_id="T1")
+    add(conn, "T3", 3, content="plain")
 
-    lines = {("vejam isso" in l and "T1") or ("concordo" in l and "T2") or ("normal" in l and "T3"): l
+    lines = {("look at this" in l and "T1") or ("agreed" in l and "T2") or ("plain" in l and "T3"): l
              for l in read_one(limit=10).splitlines()}
 
     assert "Forwarded" in lines["T1"] and "Reply to" not in lines["T1"]
     assert "Reply to: T1" in lines["T2"] and "Forwarded" not in lines["T2"]
     assert "Forwarded" not in lines["T3"] and "Reply to" not in lines["T3"]
-    assert "vejam isso" in lines["T1"]  # o texto continua na linha
+    assert "look at this" in lines["T1"]  # the text stays on the line
 
 
 def test_local_path_shown_only_when_file_exists(conn, tmp_path):  # MEDIA-08
-    real = tmp_path / "proposta.pdf"
+    real = tmp_path / "proposal.pdf"
     real.write_bytes(b"x")
-    add(conn, "HAS", 1, media_type="document", filename="proposta.pdf", local_path=str(real))
-    add(conn, "GONE", 2, media_type="document", filename="velho.pdf", local_path=str(tmp_path / "apagado.pdf"))
+    add(conn, "HAS", 1, media_type="document", filename="proposal.pdf", local_path=str(real))
+    add(conn, "GONE", 2, media_type="document", filename="old.pdf", local_path=str(tmp_path / "deleted.pdf"))
 
     lines = {("HAS" in l and "HAS") or ("GONE" in l and "GONE"): l for l in read_one(limit=10).splitlines()}
 
@@ -117,19 +117,19 @@ def test_local_path_shown_only_when_file_exists(conn, tmp_path):  # MEDIA-08
 
 
 def test_context_messages_show_the_same_details(conn):  # MEDIA-10
-    add(conn, "BEFORE", 1, media_type="document", filename="antes.pdf", mimetype="application/pdf",
+    add(conn, "BEFORE", 1, media_type="document", filename="before.pdf", mimetype="application/pdf",
         file_length=1024, forwarded=1)
-    add(conn, "HIT", 2, content="palavra-chave")
-    add(conn, "AFTER", 3, media_type="document", filename="depois.docx", quoted_id="HIT")
+    add(conn, "HIT", 2, content="keyword")
+    add(conn, "AFTER", 3, media_type="document", filename="after.docx", quoted_id="HIT")
 
-    listed = whatsapp.list_messages(chat_jid=CHAT, query="palavra-chave", include_context=True,
+    listed = whatsapp.list_messages(chat_jid=CHAT, query="keyword", include_context=True,
                                     context_before=1, context_after=1)
-    assert "File: antes.pdf (application/pdf, 1.0 KB)" in listed
+    assert "File: before.pdf (application/pdf, 1.0 KB)" in listed
     assert "Forwarded" in listed
-    assert "File: depois.docx" in listed and "Reply to: HIT" in listed
+    assert "File: after.docx" in listed and "Reply to: HIT" in listed
 
     ctx = whatsapp.get_message_context("HIT", before=1, after=1)
-    assert ctx.before[0].filename == "antes.pdf"
+    assert ctx.before[0].filename == "before.pdf"
     assert ctx.before[0].mimetype == "application/pdf"
     assert ctx.before[0].file_length == 1024
     assert ctx.before[0].forwarded is True
@@ -138,34 +138,34 @@ def test_context_messages_show_the_same_details(conn):  # MEDIA-10
 
 
 def test_context_target_media_shows_details(conn):  # MEDIA-10
-    add(conn, "TARGET", 1, media_type="document", filename="alvo.pdf", mimetype="application/pdf",
+    add(conn, "TARGET", 1, media_type="document", filename="target.pdf", mimetype="application/pdf",
         file_length=3072, forwarded=1, quoted_id="Q9")
 
     ctx = whatsapp.get_message_context("TARGET", before=0, after=0)
     out = whatsapp.format_message(ctx.message)
 
-    assert "File: alvo.pdf (application/pdf, 3.0 KB)" in out
+    assert "File: target.pdf (application/pdf, 3.0 KB)" in out
     assert "Forwarded" in out and "Reply to: Q9" in out
 
 
 def test_database_without_new_columns_still_lists(tmp_path, monkeypatch):  # MEDIA-09
     path = str(tmp_path / "old.db")
     c = make_db(path, with_meta=False)
-    add(c, "DOC1", 1, content="legenda", media_type="document", filename="p.pdf", file_length=2048)
-    add(c, "T", 2, content="oi")
+    add(c, "DOC1", 1, content="caption", media_type="document", filename="p.pdf", file_length=2048)
+    add(c, "T", 2, content="hi")
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
 
     out = read_one()
     ctx = whatsapp.get_message_context("DOC1", before=0, after=1)
 
-    assert "[document - Message ID: DOC1 - Chat JID: g@g.us" in out and "legenda" in out
+    assert "[document - Message ID: DOC1 - Chat JID: g@g.us" in out and "caption" in out
     assert "File: p.pdf (2.0 KB)" in out
     assert "Forwarded" not in out and "Reply to" not in out
-    assert ctx.message.mimetype is None and ctx.after[0].content == "oi"
+    assert ctx.message.mimetype is None and ctx.after[0].content == "hi"
 
 
-def test_message_id_and_chat_jid_prefix_is_unchanged(conn):  # compatibilidade do prefixo (Assumptions)
-    add(conn, "IMG", 1, content="legenda", media_type="image", filename="image_IMG.jpg")
+def test_message_id_and_chat_jid_prefix_is_unchanged(conn):  # prefix compatibility (Assumptions)
+    add(conn, "IMG", 1, content="caption", media_type="image", filename="image_IMG.jpg")
 
     assert "[image - Message ID: IMG - Chat JID: g@g.us" in read_one()
-    assert "legenda" in read_one()
+    assert "caption" in read_one()

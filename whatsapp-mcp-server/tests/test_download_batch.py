@@ -1,4 +1,4 @@
-"""Testes do P2-12: download_media_batch (janela, erros por item, limites)."""
+"""P2-12 tests: download_media_batch (window, per-item errors, limits)."""
 import os
 import sqlite3
 import sys
@@ -27,7 +27,7 @@ def conn(tmp_path, monkeypatch):
             is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
             file_enc_sha256 BLOB, file_length INTEGER, local_path TEXT, mimetype TEXT, forwarded BOOLEAN,
             quoted_id TEXT, PRIMARY KEY (id, chat_jid));
-        INSERT INTO chats VALUES ('g@g.us', 'Grupo', NULL), ('o@g.us', 'Outro', NULL);""")
+        INSERT INTO chats VALUES ('g@g.us', 'Group', NULL), ('o@g.us', 'Other', NULL);""")
     c.commit()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
     monkeypatch.delenv("WHATSAPP_TIMEZONE", raising=False)
@@ -52,7 +52,7 @@ def reply(status, payload):
 
 
 class Bridge:
-    """Responde /api/download por message_id e guarda as chamadas na ordem."""
+    """Answers /api/download per message_id and records the calls in order."""
 
     def __init__(self, answers):
         self.answers, self.calls = answers, []
@@ -85,13 +85,13 @@ def test_valid_expired_and_text_in_one_window(conn):  # BATCH-01, BATCH-02, BATC
     out, bridge = run(conn, {"OLD": reply(500, {"success": False, "message": EXPIRED})})
 
     assert out["success"] is True
-    assert [i["message_id"] for i in out["items"]] == ["OK", "OLD", "OK2"]  # cronológico, sem o texto
-    assert [c[0] for c in bridge.calls] == ["OK", "OLD", "OK2"]  # a falha no meio não interrompe
+    assert [i["message_id"] for i in out["items"]] == ["OK", "OLD", "OK2"]  # chronological, without the text message
+    assert [c[0] for c in bridge.calls] == ["OK", "OLD", "OK2"]  # a failure in the middle does not interrupt
     assert statuses(out) == {"OK": "downloaded", "OLD": "failed", "OK2": "downloaded"}
     ok, old = out["items"][0], out["items"][1]
     assert ok["path"] == "/m/OK" and ok["media_type"] == "image" and ok["filename"] == "OK.bin" and ok["timestamp"]
     assert old["path"] is None and old["error_code"] == "LINK_EXPIRED_PHONE_OFFLINE"
-    assert old["message"] == EXPIRED and "celular" in old["hint"]
+    assert old["message"] == EXPIRED and "phone" in old["hint"]
     assert (out["total"], out["downloaded"], out["already_downloaded"], out["failed"], out["skipped"]) == (3, 2, 0, 1, 0)
     assert out["truncated"] is False and out["aborted"] is None
 
@@ -130,7 +130,7 @@ def test_file_already_on_disk_skips_the_bridge(conn, tmp_path):  # BATCH-05
     present = tmp_path / "a.jpg"
     present.write_bytes(b"x")
     add(conn, "HAVE", 1, local_path=str(present))
-    add(conn, "GONE", 2, local_path=str(tmp_path / "apagado.jpg"))  # retenção apagou o arquivo
+    add(conn, "GONE", 2, local_path=str(tmp_path / "deleted.jpg"))  # retention deleted the file
 
     out, bridge = run(conn)
 
@@ -141,8 +141,8 @@ def test_file_already_on_disk_skips_the_bridge(conn, tmp_path):  # BATCH-05
 
 def test_too_large_item_is_skipped_without_calling_the_bridge(conn):  # LIM-01
     add(conn, "BIG", 1, size=30 * 1024 * 1024)
-    add(conn, "EDGE", 2, size=25 * 1024 * 1024)   # exatamente no limite: baixa
-    add(conn, "UNKNOWN", 3, size=0)                # tamanho desconhecido: segue para o bridge
+    add(conn, "EDGE", 2, size=25 * 1024 * 1024)   # exactly at the limit: downloads
+    add(conn, "UNKNOWN", 3, size=0)                # unknown size: goes on to the bridge
 
     out, bridge = run(conn, max_size_mb=25)
 
@@ -181,7 +181,7 @@ def test_default_timeout_is_longer_than_the_media_retry_wait(conn):  # LIM-03
 
     _, bridge = run(conn)
 
-    assert bridge.calls[0][1]["timeout"] == 120  # o bridge espera até 90 s pelo celular
+    assert bridge.calls[0][1]["timeout"] == 120  # the bridge waits up to 90 s for the phone
 
 
 def test_unreachable_bridge_stops_the_batch(conn):  # LIM-04
@@ -198,7 +198,7 @@ def test_unreachable_bridge_stops_the_batch(conn):  # LIM-04
 
 @pytest.mark.parametrize("kwargs", [
     {"types": ["image", "gif"]}, {"max_items": 0}, {"max_items": 201}, {"max_size_mb": 0}, {"max_size_mb": -1},
-    {"timeout_seconds": 0}, {"timeout_seconds": 601}, {"after": "ontem"}, {"before": "amanhã"},
+    {"timeout_seconds": 0}, {"timeout_seconds": 601}, {"after": "yesterday"}, {"before": "tomorrow"},
 ])
 def test_invalid_arguments_are_refused_before_any_call(conn, kwargs):  # LIM-05
     add(conn, "M", 1)
@@ -243,8 +243,8 @@ def test_order_is_by_instant_with_mixed_offsets_and_write_order_on_ties(conn):  
         conn.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, file_length) "
                      "VALUES (?, ?, 's', '', ?, 0, 'image', 'f', 10)", (id, CHAT, ts))
     raw("B", "2026-10-21 10:00:00-03:00")   # 13:00 UTC
-    raw("A", "2026-10-21 12:00:00+00:00")   # 12:00 UTC: antes de B no tempo, embora o texto "12" venha depois de "10"
-    raw("T1", "2026-10-21 13:00:00+00:00")  # mesmo instante de B, gravada depois
+    raw("A", "2026-10-21 12:00:00+00:00")   # 12:00 UTC: earlier than B in time, although the text "12" sorts after "10"
+    raw("T1", "2026-10-21 13:00:00+00:00")  # same instant as B, written later
     conn.commit()
 
     out, _ = run(conn)
@@ -292,7 +292,7 @@ def test_old_database_without_optional_columns_still_downloads(tmp_path, monkeyp
         CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
             is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
             file_enc_sha256 BLOB, file_length INTEGER, PRIMARY KEY (id, chat_jid));
-        INSERT INTO chats VALUES ('g@g.us', 'Grupo', NULL);
+        INSERT INTO chats VALUES ('g@g.us', 'Group', NULL);
         INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, file_length)
             VALUES ('OLD', 'g@g.us', 's', '', '2026-10-21 10:00:00+00:00', 0, 'image', 'a.jpg', 10);""")
     c.commit()

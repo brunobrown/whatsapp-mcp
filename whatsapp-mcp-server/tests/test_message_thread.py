@@ -1,4 +1,4 @@
-"""Testes do get_message_thread: cadeia de respostas, janela do chat e mídia citada."""
+"""get_message_thread tests: reply chain, chat window and quoted media."""
 import os
 import sqlite3
 import sys
@@ -16,7 +16,7 @@ SCHEMA = """
     CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
         is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
         file_enc_sha256 BLOB, file_length INTEGER, local_path TEXT{extra}, PRIMARY KEY (id, chat_jid));
-    INSERT INTO chats VALUES ('a@g.us', 'Projeto Alfa', NULL), ('b@g.us', 'Família', NULL);"""
+    INSERT INTO chats VALUES ('a@g.us', 'Project Alpha', NULL), ('b@g.us', 'Family', NULL);"""
 EXTRA = ", mimetype TEXT, forwarded BOOLEAN, quoted_id TEXT"
 
 
@@ -54,11 +54,11 @@ def by_id(out):
 
 
 def chain(conn):
-    add(conn, "R", 0, content="raiz")
-    add(conn, "A1", 1, quoted="R", content="resposta 1")
-    add(conn, "A2", 2, quoted="R", content="resposta 2")
-    add(conn, "B1", 3, quoted="A1", content="resposta da resposta")
-    add(conn, "OTHER", 4, content="fora da cadeia")
+    add(conn, "R", 0, content="root")
+    add(conn, "A1", 1, quoted="R", content="reply 1")
+    add(conn, "A2", 2, quoted="R", content="reply 2")
+    add(conn, "B1", 3, quoted="A1", content="reply to the reply")
+    add(conn, "OTHER", 4, content="outside the chain")
 
 
 def test_thread_from_any_message_returns_the_whole_chain_in_order(conn):  # THREAD-01
@@ -79,11 +79,11 @@ def test_thread_message_has_every_field(conn):  # THREAD-02, REPL-01, REPL-06
     b1 = msgs["B1"]
     assert set(b1) == {"id", "timestamp", "chat_jid", "chat_name", "sender", "sender_name", "content", "is_from_me",
                        "forwarded", "media", "reply_to", "replies", "thread_root_id", "is_target"}
-    assert b1["timestamp"] == "2026-10-21T10:03:00+00:00" and b1["chat_name"] == "Projeto Alfa"
+    assert b1["timestamp"] == "2026-10-21T10:03:00+00:00" and b1["chat_name"] == "Project Alpha"
     assert b1["is_target"] is True and msgs["R"]["is_target"] is False
     assert b1["thread_root_id"] == "R" and msgs["A1"]["thread_root_id"] == "R" and msgs["R"]["thread_root_id"] == "R"
     assert b1["reply_to"]["id"] == "A1" and b1["reply_to"]["found"] is True
-    assert b1["reply_to"]["content"] == "resposta 1" and b1["reply_to"]["sender"] == "alice"
+    assert b1["reply_to"]["content"] == "reply 1" and b1["reply_to"]["sender"] == "alice"
     assert b1["reply_to"]["timestamp"] == "2026-10-21T10:01:00+00:00" and b1["reply_to"]["is_from_me"] is False
     assert "sender_name" in b1["reply_to"]
     assert msgs["R"]["reply_to"] is None
@@ -104,7 +104,7 @@ def test_ambiguous_or_missing_message(conn):  # THREAD-03
 
 def test_the_chain_never_crosses_chats(conn):  # THREAD-01
     add(conn, "R", 0, chat=A)
-    add(conn, "X", 1, chat=B, quoted="R")  # mesmo ID citado em outro chat: não é resposta
+    add(conn, "X", 1, chat=B, quoted="R")  # same ID quoted in another chat: not a reply
     add(conn, "A1", 2, chat=A, quoted="R")
 
     out = thread(message_id="R", chat_jid=A)
@@ -172,15 +172,15 @@ def test_window_limits_are_exclusive_instants(conn):  # WIN-01
 
 
 def test_window_links_replies_outside_the_window(conn):  # WIN-03
-    add(conn, "OLD", 0, content="antes da janela")
-    add(conn, "MID", 10, quoted="OLD", content="dentro")
-    add(conn, "LATE", 50, quoted="MID", content="depois da janela")
+    add(conn, "OLD", 0, content="before the window")
+    add(conn, "MID", 10, quoted="OLD", content="inside")
+    add(conn, "LATE", 50, quoted="MID", content="after the window")
 
     out = thread(chat_jid=A, after="2026-10-21T10:05:00+00:00", before="2026-10-21T10:20:00+00:00")
 
     assert ids(out) == ["MID"]
     mid = out["messages"][0]
-    assert mid["reply_to"]["id"] == "OLD" and mid["reply_to"]["content"] == "antes da janela"
+    assert mid["reply_to"]["id"] == "OLD" and mid["reply_to"]["content"] == "before the window"
     assert mid["replies"] == ["LATE"] and mid["thread_root_id"] == "OLD"
 
 
@@ -194,7 +194,7 @@ def test_window_has_no_target(conn):  # WIN-01
     {}, {"message_id": "M", "after": "2026-10-21T00:00:00+00:00"}, {"message_id": "M", "before": "2026-10-21T00:00:00+00:00"},
     {"message_id": "M", "limit": 5}, {"message_id": "M", "page": 1}, {"message_id": "M", "order": "desc"},
     {"chat_jid": A, "limit": 0}, {"chat_jid": A, "limit": -1}, {"chat_jid": A, "page": -1}, {"chat_jid": A, "order": "up"},
-    {"chat_jid": A, "after": "ontem"}, {"chat_jid": A, "before": "amanhã"},
+    {"chat_jid": A, "after": "yesterday"}, {"chat_jid": A, "before": "tomorrow"},
 ])
 def test_invalid_arguments(conn, kwargs):  # WIN-04
     add(conn, "M", 1)
@@ -205,7 +205,7 @@ def test_invalid_arguments(conn, kwargs):  # WIN-04
 
 
 def test_missing_parent_is_not_found_and_becomes_its_own_root(conn):  # REPL-02
-    add(conn, "ORPHAN", 1, quoted="GONE", content="resposta")
+    add(conn, "ORPHAN", 1, quoted="GONE", content="reply")
 
     out = thread(message_id="ORPHAN", chat_jid=A)
 
@@ -215,17 +215,17 @@ def test_missing_parent_is_not_found_and_becomes_its_own_root(conn):  # REPL-02
 
 
 def test_reply_to_a_media_shows_its_kind_and_caption(conn):  # REPL-03
-    add(conn, "DOC", 1, content="legenda do documento", media_type="document", filename="proposta.pdf",
+    add(conn, "DOC", 1, content="document caption", media_type="document", filename="proposal.pdf",
         mimetype="application/pdf", file_length=2048)
-    add(conn, "IMG", 2, content="", media_type="image", filename="foto.jpg", mimetype="image/jpeg", file_length=10)
-    add(conn, "R1", 3, quoted="DOC", content="li o documento")
-    add(conn, "R2", 4, quoted="IMG", content="linda foto")
+    add(conn, "IMG", 2, content="", media_type="image", filename="photo.jpg", mimetype="image/jpeg", file_length=10)
+    add(conn, "R1", 3, quoted="DOC", content="read the document")
+    add(conn, "R2", 4, quoted="IMG", content="nice photo")
 
     msgs = by_id(thread(chat_jid=A))
 
-    assert msgs["R1"]["reply_to"]["media"] == {"type": "document", "filename": "proposta.pdf",
+    assert msgs["R1"]["reply_to"]["media"] == {"type": "document", "filename": "proposal.pdf",
                                                "mimetype": "application/pdf", "size": 2048}
-    assert msgs["R1"]["reply_to"]["content"] == "legenda do documento"
+    assert msgs["R1"]["reply_to"]["content"] == "document caption"
     assert msgs["R2"]["reply_to"]["media"]["type"] == "image" and msgs["R2"]["reply_to"]["content"] == ""
     assert msgs["R1"]["media"] is None
 
@@ -245,7 +245,7 @@ def test_message_media_block_and_local_path(conn, tmp_path):  # REPL-04
 
 
 def test_forwarded_is_on_the_message_with_or_without_media(conn):  # REPL-05
-    add(conn, "TXT", 1, content="encaminhada", forwarded=1)
+    add(conn, "TXT", 1, content="forwarded text", forwarded=1)
     add(conn, "PLAIN", 2)
 
     msgs = by_id(thread(chat_jid=A))
@@ -254,10 +254,10 @@ def test_forwarded_is_on_the_message_with_or_without_media(conn):  # REPL-05
     assert msgs["PLAIN"]["forwarded"] is False
 
 
-def test_old_database_without_quoted_id_still_works(tmp_path, monkeypatch):  # banco de um bridge antigo
+def test_old_database_without_quoted_id_still_works(tmp_path, monkeypatch):  # database from an old bridge
     c = make(tmp_path, monkeypatch, extra="")
     c.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) "
-              "VALUES ('M', 'a@g.us', 's', 'oi', '2026-10-21 10:00:00+00:00', 0)")
+              "VALUES ('M', 'a@g.us', 's', 'hi', '2026-10-21 10:00:00+00:00', 0)")
     c.commit()
 
     window = thread(chat_jid=A)
@@ -277,23 +277,23 @@ def test_missing_database_is_reported_and_not_created(tmp_path, monkeypatch):
 
 
 def test_mentions_in_content_show_names(conn):
-    add(conn, "M", 1, content="oi @5511999990000")
+    add(conn, "M", 1, content="hi @5511999990000")
     conn.executescript("""
         CREATE TABLE contacts_identity (id INTEGER PRIMARY KEY, lid TEXT UNIQUE, phone TEXT UNIQUE,
             full_name TEXT, push_name TEXT);
         INSERT INTO contacts_identity (phone, full_name) VALUES ('5511999990000', 'Ana Souza');""")
 
-    assert thread(chat_jid=A)["messages"][0]["content"] == "oi @Ana Souza"
+    assert thread(chat_jid=A)["messages"][0]["content"] == "hi @Ana Souza"
 
 
 def test_mention_of_a_name_that_already_starts_with_at_is_not_doubled(conn):
-    add(conn, "M", 1, content="oi @5511999990000")
+    add(conn, "M", 1, content="hi @5511999990000")
     conn.executescript("""
         CREATE TABLE contacts_identity (id INTEGER PRIMARY KEY, lid TEXT UNIQUE, phone TEXT UNIQUE,
             full_name TEXT, push_name TEXT);
-        INSERT INTO contacts_identity (phone, push_name) VALUES ('5511999990000', '@usuario');""")
+        INSERT INTO contacts_identity (phone, push_name) VALUES ('5511999990000', '@user');""")
 
-    assert thread(chat_jid=A)["messages"][0]["content"] == "oi @usuario"
+    assert thread(chat_jid=A)["messages"][0]["content"] == "hi @user"
 
 
 def test_tool_documents_both_uses():
@@ -303,7 +303,7 @@ def test_tool_documents_both_uses():
         assert expected in doc
 
 
-def test_deep_chain_root_is_the_same_for_every_message(conn):  # THREAD-01 (subida limitada a 50 níveis)
+def test_deep_chain_root_is_the_same_for_every_message(conn):  # THREAD-01 (climb limited to 50 levels)
     add(conn, "M0", 0, hour=0)
     for n in range(1, 120):
         add(conn, f"M{n}", n % 60, hour=n // 60, quoted=f"M{n - 1}")
@@ -311,7 +311,7 @@ def test_deep_chain_root_is_the_same_for_every_message(conn):  # THREAD-01 (subi
     out = thread(message_id="M119", chat_jid=A)
 
     roots = {m["thread_root_id"] for m in out["messages"]}
-    assert roots == {out["root_id"]} and out["root_id"] == "M69"  # 119 - 50 níveis
+    assert roots == {out["root_id"]} and out["root_id"] == "M69"  # 119 - 50 levels
     assert out["root_id"] in ids(out)
 
 
@@ -327,12 +327,12 @@ def test_circle_has_one_deterministic_root_the_oldest(conn):  # THREAD-05
 def test_target_beyond_the_500th_replaces_the_last_one(conn):  # THREAD-04
     add(conn, "M0", 0, hour=0)
     for n in range(1, 520):
-        add(conn, f"M{n}", n % 60, hour=n // 60, quoted="M0")  # 519 respostas diretas à raiz
+        add(conn, f"M{n}", n % 60, hour=n // 60, quoted="M0")  # 519 direct replies to the root
 
     out = thread(message_id="M515", chat_jid=A)
 
     assert out["truncated"] is True and out["total"] == 500 and "M515" in ids(out) and "M499" not in ids(out)
-    assert ids(out) == sorted(ids(out), key=lambda i: int(i[1:]))  # segue cronológica
+    assert ids(out) == sorted(ids(out), key=lambda i: int(i[1:]))  # still chronological
 
 
 def test_chain_order_uses_instants_across_offsets_and_write_order(conn):  # THREAD-01
@@ -341,14 +341,14 @@ def test_chain_order_uses_instants_across_offsets_and_write_order(conn):  # THRE
                      "VALUES (?, ?, 's', '', ?, 0, ?)", (id, A, ts, quoted))
     raw("R", "2026-10-21 09:00:00+00:00")
     raw("LATE", "2026-10-21 10:00:00-03:00", "R")   # 13:00 UTC
-    raw("EARLY", "2026-10-21 12:00:00+00:00", "R")  # 12:00 UTC: antes, embora o texto "12" venha depois de "10"
-    raw("TIE", "2026-10-21 13:00:00+00:00", "R")    # mesmo instante de LATE, gravada depois
+    raw("EARLY", "2026-10-21 12:00:00+00:00", "R")  # 12:00 UTC: earlier, although the text "12" sorts after "10"
+    raw("TIE", "2026-10-21 13:00:00+00:00", "R")    # same instant as LATE, written later
     conn.commit()
 
     assert ids(thread(message_id="R", chat_jid=A)) == ["R", "EARLY", "LATE", "TIE"]
 
 
-def test_replies_of_more_than_400_messages(conn):  # THREAD-01 (IN em blocos)
+def test_replies_of_more_than_400_messages(conn):  # THREAD-01 (IN in chunks)
     add(conn, "R", 0, hour=0)
     for n in range(1, 450):
         add(conn, f"C{n}", n % 60, hour=1 + n // 60, quoted="R")

@@ -1,4 +1,4 @@
-"""Testes do P2-10: saída estruturada, paginação, contexto cronológico por chat e filtros com fuso."""
+"""P2-10 tests: structured output, pagination, chronological context per chat and timezone-aware filters."""
 import os
 import sqlite3
 import sys
@@ -22,7 +22,7 @@ def conn(tmp_path, monkeypatch):
             is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
             file_enc_sha256 BLOB, file_length INTEGER, local_path TEXT, mimetype TEXT, forwarded BOOLEAN,
             quoted_id TEXT, PRIMARY KEY (id, chat_jid));
-        INSERT INTO chats VALUES ('a@g.us', 'Projeto Alfa', NULL), ('b@g.us', 'Família', NULL);
+        INSERT INTO chats VALUES ('a@g.us', 'Project Alpha', NULL), ('b@g.us', 'Family', NULL);
     """)
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
     monkeypatch.delenv("WHATSAPP_TIMEZONE", raising=False)
@@ -50,20 +50,20 @@ def five(conn):
 
 
 def test_structured_message_has_the_planned_fields(conn):  # QUERY-01, QUERY-07
-    add(conn, A, "M1", "2026-10-21 10:00:00-03:00", content="olá", sender="5511999990000")
+    add(conn, A, "M1", "2026-10-21 10:00:00-03:00", content="hello", sender="5511999990000")
 
     out = structured(chat_jid=A)
 
     assert (out["total"], out["page"], out["limit"], out["has_more"], out["next_page"]) == (1, 0, 20, False, None)
     msg = out["messages"][0]
-    assert msg["id"] == "M1" and msg["chat_jid"] == A and msg["chat_name"] == "Projeto Alfa"
-    assert msg["sender"] == "5511999990000" and msg["content"] == "olá"
+    assert msg["id"] == "M1" and msg["chat_jid"] == A and msg["chat_name"] == "Project Alpha"
+    assert msg["sender"] == "5511999990000" and msg["content"] == "hello"
     assert msg["is_from_me"] is False and msg["is_match"] is True and msg["media"] is None
     assert "sender_name" in msg
     assert msg["timestamp"] == "2026-10-21T10:00:00-03:00"
 
 
-def test_structured_timestamp_without_stored_offset_is_utc(conn):  # QUERY-07 (SQLite lê hora sem fuso como UTC)
+def test_structured_timestamp_without_stored_offset_is_utc(conn):  # QUERY-07 (SQLite reads a time without an offset as UTC)
     add(conn, A, "M1", "2026-10-21 10:00:00")
 
     assert structured(chat_jid=A)["messages"][0]["timestamp"] == "2026-10-21T10:00:00+00:00"
@@ -80,17 +80,17 @@ def test_structured_media_block(conn, tmp_path):  # QUERY-02
 
     assert by_id["D1"] == {"type": "document", "filename": "doc.pdf", "mimetype": "application/pdf", "size": 2048,
                            "forwarded": True, "quoted_message_id": "Q1", "local_path": str(present)}
-    assert by_id["D2"]["local_path"] is None  # arquivo apagado não é oferecido
+    assert by_id["D2"]["local_path"] is None  # a deleted file is not offered
 
 
 def test_text_is_still_the_default(conn):  # QUERY-03
-    add(conn, A, "M1", "2026-10-21 10:00:00+00:00", content="texto simples")
+    add(conn, A, "M1", "2026-10-21 10:00:00+00:00", content="plain text")
 
     out = whatsapp.list_messages(chat_jid=A, include_context=False)
 
     assert isinstance(out, str)
     assert out == whatsapp.list_messages(chat_jid=A, include_context=False, format="text")
-    assert "Chat: Projeto Alfa" in out and "texto simples" in out and ">>" not in out
+    assert "Chat: Project Alpha" in out and "plain text" in out and ">>" not in out
 
 
 def test_pagination_walks_every_message_once(conn):  # QUERY-04
@@ -129,7 +129,7 @@ def test_order_desc_is_default_and_asc_reverses_it(conn):  # QUERY-05
 
 def test_order_uses_the_instant_not_the_text(conn):  # QUERY-05
     add(conn, A, "LATE", "2026-10-21 10:00:00-03:00")   # 13:00 UTC
-    add(conn, A, "EARLY", "2026-10-21 11:00:00+00:00")  # 11:00 UTC: antes, embora o texto "11" venha depois de "10"
+    add(conn, A, "EARLY", "2026-10-21 11:00:00+00:00")  # 11:00 UTC: earlier, although the text "11" sorts after "10"
 
     assert ids(structured(chat_jid=A, order="asc")) == ["EARLY", "LATE"]
 
@@ -141,64 +141,64 @@ def test_invalid_format_or_order_raises(conn, kwargs):  # QUERY-06
 
 
 def test_context_comes_from_the_matching_chat_even_with_a_repeated_id(conn):  # CTX-01
-    add(conn, A, "SAME", "2026-10-21 10:05:00+00:00", content="alvo A")
-    add(conn, A, "A1", "2026-10-21 10:04:00+00:00", content="antes em A")
-    add(conn, B, "SAME", "2026-10-21 09:00:00+00:00", content="outro B")
-    add(conn, B, "B1", "2026-10-21 08:59:00+00:00", content="antes em B")
+    add(conn, A, "SAME", "2026-10-21 10:05:00+00:00", content="target A")
+    add(conn, A, "A1", "2026-10-21 10:04:00+00:00", content="earlier in A")
+    add(conn, B, "SAME", "2026-10-21 09:00:00+00:00", content="other B")
+    add(conn, B, "B1", "2026-10-21 08:59:00+00:00", content="earlier in B")
 
-    out = structured(chat_jid=A, query="alvo A", include_context=True, context_before=1, context_after=0)
+    out = structured(chat_jid=A, query="target A", include_context=True, context_before=1, context_after=0)
 
     assert [(m["chat_jid"], m["id"]) for m in out["messages"]] == [(A, "A1"), (A, "SAME")]
 
 
 def test_context_is_grouped_by_chat_and_chronological(conn):  # CTX-02
-    add(conn, A, "A0", "2026-10-21 10:00:00+00:00", content="a antes")
-    add(conn, A, "A1", "2026-10-21 10:01:00+00:00", content="FICOU BOM em A")
-    add(conn, A, "A2", "2026-10-21 10:02:00+00:00", content="a depois")
-    add(conn, B, "B0", "2026-10-21 12:00:00+00:00", content="b antes")
-    add(conn, B, "B1", "2026-10-21 12:01:00+00:00", content="FICOU BOM em B")
-    add(conn, B, "B2", "2026-10-21 12:02:00+00:00", content="b depois")
+    add(conn, A, "A0", "2026-10-21 10:00:00+00:00", content="a before")
+    add(conn, A, "A1", "2026-10-21 10:01:00+00:00", content="LOOKS GOOD em A")
+    add(conn, A, "A2", "2026-10-21 10:02:00+00:00", content="a after")
+    add(conn, B, "B0", "2026-10-21 12:00:00+00:00", content="b before")
+    add(conn, B, "B1", "2026-10-21 12:01:00+00:00", content="LOOKS GOOD em B")
+    add(conn, B, "B2", "2026-10-21 12:02:00+00:00", content="b after")
 
-    out = structured(query="ficou bom", include_context=True, order="desc")
+    out = structured(query="looks good", include_context=True, order="desc")
 
-    # B tem o resultado mais recente, então o grupo dele vem primeiro; cada grupo em ordem cronológica
+    # B has the most recent result, so its group comes first; each group is in chronological order
     assert [(m["chat_jid"], m["id"]) for m in out["messages"]] == [
         (B, "B0"), (B, "B1"), (B, "B2"), (A, "A0"), (A, "A1"), (A, "A2")]
-    out = structured(query="ficou bom", include_context=True, order="asc")
+    out = structured(query="looks good", include_context=True, order="asc")
     assert [m["chat_jid"] for m in out["messages"]] == [A, A, A, B, B, B]
 
 
 def test_overlapping_contexts_show_each_message_once(conn):  # CTX-03
     for n in range(4):
-        add(conn, A, f"M{n}", f"2026-10-21 10:0{n}:00+00:00", content=f"alvo {n}" if n in (1, 2) else "nada")
+        add(conn, A, f"M{n}", f"2026-10-21 10:0{n}:00+00:00", content=f"target {n}" if n in (1, 2) else "nothing")
 
-    out = structured(chat_jid=A, query="alvo", include_context=True, context_before=1, context_after=1, order="asc")
+    out = structured(chat_jid=A, query="target", include_context=True, context_before=1, context_after=1, order="asc")
 
     assert ids(out) == ["M0", "M1", "M2", "M3"]
     assert [m["is_match"] for m in out["messages"]] == [False, True, True, False]
 
 
 def test_found_message_is_marked_in_text(conn):  # CTX-04
-    add(conn, A, "M0", "2026-10-21 10:00:00+00:00", content="antes")
-    add(conn, A, "M1", "2026-10-21 10:01:00+00:00", content="achei")
-    add(conn, A, "M2", "2026-10-21 10:02:00+00:00", content="depois")
+    add(conn, A, "M0", "2026-10-21 10:00:00+00:00", content="before")
+    add(conn, A, "M1", "2026-10-21 10:01:00+00:00", content="found")
+    add(conn, A, "M2", "2026-10-21 10:02:00+00:00", content="after")
 
-    lines = whatsapp.list_messages(chat_jid=A, query="achei", include_context=True).splitlines()
+    lines = whatsapp.list_messages(chat_jid=A, query="found", include_context=True).splitlines()
 
     marked = [l for l in lines if l.startswith(">>")]
-    assert len(marked) == 1 and "achei" in marked[0]
-    messages = [l for l in lines if "antes" in l or "achei" in l or "depois" in l]
-    assert [("antes" in l, "achei" in l, "depois" in l) for l in messages] == [
+    assert len(marked) == 1 and "found" in marked[0]
+    messages = [l for l in lines if "before" in l or "found" in l or "after" in l]
+    assert [("before" in l, "found" in l, "after" in l) for l in messages] == [
         (True, False, False), (False, True, False), (False, False, True)]
     assert [l.startswith(">>") for l in messages] == [False, True, False]
 
 
 def test_context_boundary_uses_instant_and_write_order_on_ties(conn):  # CTX-05
-    add(conn, A, "T1", "2026-10-21 10:00:00-03:00", content="primeira")   # 13:00 UTC
-    add(conn, A, "T2", "2026-10-21 13:00:00+00:00", content="segunda")    # mesmo instante, gravada depois
-    add(conn, A, "T3", "2026-10-21 12:30:00+00:00", content="antes de ambas")  # 12:30 UTC, texto maior em '12' > '10'
+    add(conn, A, "T1", "2026-10-21 10:00:00-03:00", content="first")   # 13:00 UTC
+    add(conn, A, "T2", "2026-10-21 13:00:00+00:00", content="second")    # same instant, written later
+    add(conn, A, "T3", "2026-10-21 12:30:00+00:00", content="before both")  # 12:30 UTC, larger text since '12' > '10'
 
-    out = structured(chat_jid=A, query="segunda", include_context=True, context_before=5, context_after=5)
+    out = structured(chat_jid=A, query="second", include_context=True, context_before=5, context_after=5)
 
     assert ids(out) == ["T3", "T1", "T2"]
 
@@ -207,15 +207,15 @@ def test_chat_name_filter_is_a_case_insensitive_fragment(conn):  # FILT-01
     add(conn, A, "A1", "2026-10-21 10:00:00+00:00")
     add(conn, B, "B1", "2026-10-21 10:01:00+00:00")
 
-    assert ids(structured(chat_name="alfa")) == ["A1"]
-    assert ids(structured(chat_name="FAMÍLIA")) == ["B1"]
-    assert structured(chat_name="não existe")["messages"] == []
-    assert structured(chat_name="alfa", chat_jid=B)["messages"] == []  # os dois filtros valem juntos
-    assert ids(structured(chat_name="alfa", chat_jid=A)) == ["A1"]
+    assert ids(structured(chat_name="alpha")) == ["A1"]
+    assert ids(structured(chat_name="FAMILY")) == ["B1"]
+    assert structured(chat_name="does not exist")["messages"] == []
+    assert structured(chat_name="alpha", chat_jid=B)["messages"] == []  # both filters apply together
+    assert ids(structured(chat_name="alpha", chat_jid=A)) == ["A1"]
 
 
 def test_after_and_before_compare_instants_across_offsets(conn):  # FILT-02
-    add(conn, A, "UTC", "2026-10-21 13:30:00+00:00")   # 10:30 em -03:00
+    add(conn, A, "UTC", "2026-10-21 13:30:00+00:00")   # 10:30 at -03:00
     add(conn, A, "BR", "2026-10-21 09:59:00-03:00")    # 12:59 UTC
 
     after = structured(chat_jid=A, after="2026-10-21T10:00:00-03:00", order="asc")
@@ -234,8 +234,8 @@ def test_date_filter_keeps_sub_second_precision(conn):  # FILT-02
 
 def test_date_without_zone_uses_whatsapp_timezone(conn, monkeypatch):  # FILT-03
     monkeypatch.setenv("WHATSAPP_TIMEZONE", "America/Recife")
-    add(conn, A, "IN", "2026-10-21 12:30:00+00:00")  # 09:30 em Recife
-    add(conn, A, "OUT", "2026-10-21 11:30:00+00:00")  # 08:30 em Recife
+    add(conn, A, "IN", "2026-10-21 12:30:00+00:00")  # 09:30 in Recife
+    add(conn, A, "OUT", "2026-10-21 11:30:00+00:00")  # 08:30 in Recife
 
     assert ids(structured(chat_jid=A, after="2026-10-21T09:00:00")) == ["IN"]
     monkeypatch.setenv("WHATSAPP_TIMEZONE", "UTC")
@@ -247,8 +247,8 @@ def test_date_without_zone_falls_back_to_system_zone(conn, monkeypatch):  # FILT
     import time
     time.tzset()
     try:
-        add(conn, A, "IN", "2026-10-21 01:30:00+00:00")   # 10:30 em Tóquio
-        add(conn, A, "OUT", "2026-10-21 00:30:00+00:00")  # 09:30 em Tóquio
+        add(conn, A, "IN", "2026-10-21 01:30:00+00:00")   # 10:30 in Tokyo
+        add(conn, A, "OUT", "2026-10-21 00:30:00+00:00")  # 09:30 in Tokyo
 
         assert ids(structured(chat_jid=A, after="2026-10-21T10:00:00")) == ["IN"]
     finally:
@@ -257,7 +257,7 @@ def test_date_without_zone_falls_back_to_system_zone(conn, monkeypatch):  # FILT
 
 
 def test_unknown_timezone_names_the_variable(conn, monkeypatch):  # FILT-04
-    monkeypatch.setenv("WHATSAPP_TIMEZONE", "Marte/Olympus")
+    monkeypatch.setenv("WHATSAPP_TIMEZONE", "Mars/Olympus")
 
     with pytest.raises(ValueError, match="WHATSAPP_TIMEZONE"):
         structured(after="2026-10-21T09:00:00")
@@ -272,13 +272,13 @@ def test_tool_description_documents_dates_and_options():  # FILT-05
 
 
 def test_context_neighbours_never_come_from_another_chat(conn):  # CTX-01
-    add(conn, A, "A1", "2026-10-21 10:00:00+00:00", content="antes em A")
-    add(conn, A, "SAME", "2026-10-21 10:10:00+00:00", content="alvo A")
-    add(conn, A, "A3", "2026-10-21 10:20:00+00:00", content="depois em A")
-    add(conn, B, "B1", "2026-10-21 10:05:00+00:00", content="intruso antes")
-    add(conn, B, "B2", "2026-10-21 10:15:00+00:00", content="intruso depois")
+    add(conn, A, "A1", "2026-10-21 10:00:00+00:00", content="earlier in A")
+    add(conn, A, "SAME", "2026-10-21 10:10:00+00:00", content="target A")
+    add(conn, A, "A3", "2026-10-21 10:20:00+00:00", content="later in A")
+    add(conn, B, "B1", "2026-10-21 10:05:00+00:00", content="intruder before")
+    add(conn, B, "B2", "2026-10-21 10:15:00+00:00", content="intruder after")
 
-    out = structured(chat_jid=A, query="alvo A", include_context=True, context_before=1, context_after=1)
+    out = structured(chat_jid=A, query="target A", include_context=True, context_before=1, context_after=1)
 
     assert [(m["chat_jid"], m["id"]) for m in out["messages"]] == [(A, "A1"), (A, "SAME"), (A, "A3")]
     ctx = whatsapp.get_message_context("SAME", before=1, after=1, chat_jid=A)
@@ -287,7 +287,7 @@ def test_context_neighbours_never_come_from_another_chat(conn):  # CTX-01
 
 def test_pagination_with_equal_instants_neither_repeats_nor_skips(conn):  # QUERY-04
     for n in range(5):
-        add(conn, A, f"T{n}", "2026-10-21 10:00:00+00:00")  # mesmo instante: desempata a ordem de gravação
+        add(conn, A, f"T{n}", "2026-10-21 10:00:00+00:00")  # same instant: ties are broken by write order
 
     seen = []
     for p in range(3):
@@ -296,10 +296,10 @@ def test_pagination_with_equal_instants_neither_repeats_nor_skips(conn):  # QUER
     assert seen == ["T0", "T1", "T2", "T3", "T4"]
 
 
-@pytest.mark.parametrize("name, wanted", [("100%", "P"), ("a_b", "U"), ("a\\b", "S"), ("ÁLFA", "C")])
+@pytest.mark.parametrize("name, wanted", [("100%", "P"), ("a_b", "U"), ("a\\b", "S"), ("CAFÉ", "C")])
 def test_chat_name_treats_wildcards_literally_and_ignores_case(conn, name, wanted):  # FILT-01
-    for jid, chat in (("p@g.us", "Meta 100% batida"), ("u@g.us", "Grupo a_b"), ("s@g.us", "Pasta a\\b"),
-                      ("c@g.us", "Álfa"), ("x@g.us", "Meta 1000 batida"), ("y@g.us", "Grupo axb")):
+    for jid, chat in (("p@g.us", "Goal 100% met"), ("u@g.us", "Group a_b"), ("s@g.us", "Folder a\\b"),
+                      ("c@g.us", "Café"), ("x@g.us", "Goal 1000 met"), ("y@g.us", "Group axb")):
         conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", (jid, chat))
         add(conn, jid, jid[0].upper(), "2026-10-21 10:00:00+00:00")
 
