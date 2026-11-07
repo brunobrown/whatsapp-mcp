@@ -22,7 +22,7 @@ ABSENT = "absent"      # the version of a file that does not exist
 
 @dataclass
 class Loaded:
-    values: Dict[str, Any]
+    values: Dict[str, Any] = field(repr=False)     # may hold secrets: never printed
     version: str
     errors: List[Problem] = field(default_factory=list)
     exists: bool = False

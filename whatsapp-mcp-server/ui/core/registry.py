@@ -40,6 +40,7 @@ class Field:
     bounds: Optional[Tuple[float, float]] = None   # int and float: smallest and largest value
     max_length: int = _MAX_TEXT               # text and each item of a list
     fields: Tuple["Field", ...] = ()          # records: the fields of each record
+    id_key: Optional[str] = None              # records: the sub-field that names a record (to keep its secret when records move)
     readonly: bool = False                    # shown, never edited
     risk: Optional[str] = None                # what to tell the operator before a value that weakens a defence
 
@@ -59,6 +60,8 @@ class Field:
         keys = [f.key for f in self.fields]
         if len(set(keys)) != len(keys):
             raise ValueError(f"field {self.key!r}: a key is repeated among its fields")
+        if self.id_key is not None and self.id_key not in keys:
+            raise ValueError(f"field {self.key!r}: id_key {self.id_key!r} is not one of its fields")
 
 
 @dataclass(frozen=True)
