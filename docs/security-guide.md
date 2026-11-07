@@ -16,6 +16,16 @@ This guide is for anyone who lets an AI agent read WhatsApp through this project
 
 `approval_token` in a profile is **a speed bump**. It stops an agent from sending a draft by accident, because the agent must ask you for the value. It is not a security boundary: it sits in `monitor_profiles.json`, readable by anything that runs as you. Never put a token you use elsewhere there, never paste it into a chat with the agent in advance, and do not treat a correct token as proof that a human approved. The real approval is your MCP client asking you to allow each `monitor_reply` / `send_*` call: do not set those tools to "always allow" for an agent that reads untrusted text.
 
+## Break the trifecta first
+
+The three legs are: private data, text from strangers, a way out. Remove one and prompt injection cannot leak anything.
+
+- **An agent that only reads or summarizes** gets `WHATSAPP_MCP_MODE=read_only`: no tool reaches anyone.
+- **An agent that must send** keeps the session taint on (the default): after it has read a chat it can only send to that same chat. Do not turn it off for an agent that reads groups with strangers. A send to another chat needs the send policy's `override_token`, which you give for that one send.
+- **Run separate instances** for separate jobs (one read-only for research, one with a narrow profile for answering one group) instead of one agent with everything.
+
+Details and limits: [Protecting an agent from prompt injection](../README.md#protecting-an-agent-from-prompt-injection).
+
 ## Rules that keep an agent safe
 
 1. **Start in `draft`.** Replies go out only with the token. Review them with `list_pending_drafts`.
