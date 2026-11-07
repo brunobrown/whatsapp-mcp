@@ -45,18 +45,19 @@ const (
 
 // The event types an endpoint can ask for.
 const (
-	eventMessage     = "message"
-	eventPollCreated = "poll_created"
-	eventPollVote    = "poll_vote"
-	eventReaction    = "reaction"
-	eventMessageEdit = "message_edit"
-	eventConnection  = "connection"
-	eventPing        = "ping"
+	eventMessage        = "message"
+	eventPollCreated    = "poll_created"
+	eventPollVote       = "poll_vote"
+	eventReaction       = "reaction"
+	eventMessageEdit    = "message_edit"
+	eventMessageDeleted = "message_deleted"
+	eventConnection     = "connection"
+	eventPing           = "ping"
 )
 
 var webhookEventTypes = map[string]bool{
 	eventMessage: true, eventPollCreated: true, eventPollVote: true, eventReaction: true,
-	eventMessageEdit: true, eventConnection: true, eventPing: true,
+	eventMessageEdit: true, eventMessageDeleted: true, eventConnection: true, eventPing: true,
 }
 
 // webhookBackoff is the wait before each repetition: one attempt and five repetitions in all.

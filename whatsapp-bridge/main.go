@@ -263,6 +263,7 @@ var messageColumns = []struct{ name, ddl string }{
 	{"mimetype", "TEXT"},
 	{"forwarded", "BOOLEAN"},
 	{"quoted_id", "TEXT"},
+	{"deleted_at", "TEXT"},
 }
 
 // ensureMessageColumns adds the columns of messageColumns that a database created by an older
@@ -784,6 +785,14 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
+
+	// A deletion for everyone is not a message and must not move the chat's last message time
+	if isRevoke, target, updated := applyRevoke(messageStore, chatJID, sender, msg.Info.Timestamp, msg.Message, logger); isRevoke {
+		if updated {
+			messageStore.webhooks.Emit(messageDeletedWebhookEvent(msg, target))
+		}
+		return
+	}
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
 	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)

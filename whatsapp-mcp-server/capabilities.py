@@ -2,7 +2,7 @@
 from typing import Any, Dict, List
 
 # The features of this code (not of the configuration). Names are stable; add one when a feature ships.
-FEATURES: List[str] = ["poll_deadline_and_quiz", "poll_vote_watch", "webhooks", "message_monitor", "watch_cli", "pending_drafts", "metrics", "export_conversation"]
+FEATURES: List[str] = ["poll_deadline_and_quiz", "poll_vote_watch", "webhooks", "message_monitor", "watch_cli", "pending_drafts", "metrics", "export_conversation", "deleted_messages"]
 
 
 def describe(version: str, status: Dict[str, Any]) -> Dict[str, Any]:
