@@ -150,3 +150,33 @@ func TestGroupVoteIsNeverMovedToAPersonsChat(t *testing.T) { // DM-05
 		t.Errorf("votes under the person's chat = %v, want none", got)
 	}
 }
+
+func TestVoteStaysInTheEventChatWhenThePollIsStoredUnderBothAddresses(t *testing.T) { // DM-02
+	store := directPollStore(t, dmPhoneChat)
+	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: dmLIDChat, Author: "5511900000000", Question: "Lunch?",
+		Options: []string{"Yes", "No"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	castVote(store, dmLIDChat, "100000000000003@lid")
+
+	if got := votersIn(t, store, dmLIDChat); len(got) != 1 {
+		t.Errorf("votes under the event chat = %v, want the vote: the poll is there, no lookup is needed", got)
+	}
+	if got := votersIn(t, store, dmPhoneChat); len(got) != 0 {
+		t.Errorf("votes under the other address = %v, want none", got)
+	}
+}
+
+func TestGroupWhoseIDEqualsAKnownPersonIsNotLookedUpAsAPerson(t *testing.T) { // DM-05
+	store := directPollStore(t, dmPhoneChat)
+
+	castVote(store, "100000000000003@g.us", "100000000000003@lid")
+
+	if got := votersIn(t, store, "100000000000003@g.us"); len(got) != 1 {
+		t.Errorf("votes under the group = %v, want the vote: a group has one address", got)
+	}
+	if got := votersIn(t, store, dmPhoneChat); len(got) != 0 {
+		t.Errorf("votes under the person's chat = %v, want none", got)
+	}
+}
