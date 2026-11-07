@@ -66,7 +66,7 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate", cfg)
+	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate&_journal_mode=WAL&_synchronous=NORMAL", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -129,6 +129,14 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	if err := ensureMessageColumns(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
+	}
+
+	// With WAL the new pages can stay in messages.db-wal and the main file stay empty, and an empty file is
+	// read as "no database yet" (the MCP server would open an encrypted database as plain text). Moving the
+	// schema into the main file once, at start, rules that out.
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to checkpoint the message database: %v", err)
 	}
 
 	// The database file now exists: keep it, and everything else in the store, private to the owner.
