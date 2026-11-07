@@ -7,6 +7,7 @@ import { CheckboxGroup, RadioGroup, Select, Switch } from "@/components/ui/contr
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ListField } from "./ListField";
+import { RecordsField } from "./RecordsField";
 import { SecretField } from "./SecretField";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,8 @@ export interface FieldRendererProps {
   state?: FieldState | undefined;
   /** The message the server gave for this field. */
   error?: string | undefined;
+  /** Every message of the section by dotted key; records read their cards' messages from it. */
+  errors?: Readonly<Record<string, string>>;
   /** Makes ids unique when the same field appears on several cards. */
   idPrefix?: string;
   onChange: (value: EditorValue) => void;
@@ -137,7 +140,7 @@ function Control({
  * lock when the environment sets it, the warning of a risky value, the server's message and the way back to the
  * default. A kind this version does not know shows a notice instead of a control.
  */
-export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "", onChange, onRestore }: FieldRendererProps) {
+export function FieldRenderer({ field, value, loaded, state, error, errors, idPrefix = "", onChange, onRestore }: FieldRendererProps) {
   const t = useT();
   const base = `${idPrefix}${useId()}`;
   const [pendingRisk, setPendingRisk] = useState<EditorValue>(undefined);
@@ -156,7 +159,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
       .join(" ") || undefined;
   const wiring: Wiring = { id: base, describedBy, invalid: Boolean(error), locked };
 
-  const known = ["bool", "int", "float", "text", "choice", "multichoice", "secret", "list"].includes(field.kind);
+  const known = ["bool", "int", "float", "text", "choice", "multichoice", "secret", "list", "records"].includes(field.kind);
   const asksFirst = field.kind === "bool" || field.kind === "choice";
 
   const commit = (next: EditorValue): void => {
@@ -205,6 +208,20 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
         onChange={commit}
       />
     );
+  } else if (field.kind === "records") {
+    control = (
+      <div role="group" aria-labelledby={`${base}-label`} aria-describedby={describedBy}>
+        <RecordsField
+          field={field}
+          value={value}
+          loaded={loaded}
+          {...(errors !== undefined && { errors })}
+          id={base}
+          disabled={locked}
+          onChange={commit}
+        />
+      </div>
+    );
   } else if (field.kind === "multichoice") {
     control = (
       <CheckboxGroup
@@ -233,7 +250,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
     control = <Control field={field} value={value} wiring={wiring} commit={commit} />;
   }
 
-  const labelled = known && field.kind !== "multichoice" && field.kind !== "secret" && field.kind !== "list" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
+  const labelled = known && field.kind !== "multichoice" && field.kind !== "secret" && field.kind !== "list" && field.kind !== "records" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
   const inline = field.kind === "bool";
 
   return (
@@ -243,7 +260,7 @@ export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "
           {field.label}
         </label>
       ) : null}
-      {!known || field.kind === "secret" || field.kind === "list" ? (
+      {!known || field.kind === "secret" || field.kind === "list" || field.kind === "records" ? (
         <p id={`${base}-label`} className="m-0 font-medium">
           {field.label}
         </p>
