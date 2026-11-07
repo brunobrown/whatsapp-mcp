@@ -624,11 +624,29 @@ Everything the bridge prints also goes to `whatsapp-bridge/store/bridge.log` (ro
 
 ### Web interface
 
-The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). It needs the Python environment of the server (`cd whatsapp-mcp-server && uv sync`).
+The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). The interface is in English; more languages are planned (Portuguese among them), and every text already comes from one catalog so a language is a new catalog, not a rewrite.
+
+It is a React page served by the same Python process that answers its JSON API (`python -m ui`), so one port serves both. The Python side needs only the environment of the server (`cd whatsapp-mcp-server && uv sync`); Node is needed only to build the page yourself.
+
+**Getting the page.** The built page lives in `whatsapp-mcp-server/ui/web/` and is not kept in git. There are two ways to get it:
+
+1. **From a release (no Node needed).** Download `whatsapp-mcp-ui-dist.tar.gz` from the release of the version you run and extract it inside `whatsapp-mcp-server/`, which creates `whatsapp-mcp-server/ui/web/`:
+
+   ```bash
+   tar -xzf whatsapp-mcp-ui-dist.tar.gz -C whatsapp-mcp-server
+   ```
+
+2. **Build it (Node 24).**
+
+   ```bash
+   cd whatsapp-mcp-server/frontend && npm ci && npm run build     # writes ../ui/web
+   ```
+
+**Without the page** the interface still starts and its API answers; the root address shows a short plain page that says the pages are missing and how to get them (the two ways above), and the log carries the same notice. Nothing else breaks.
 
 When the port is taken, the bridge logs why and goes on without the interface. `WHATSAPP_UI=off` keeps it from starting.
 
-**First access.** There is no default password. While none exists, the log of the bridge (the terminal where it runs, or `store/bridge.log`) holds a *setup code* that lives 15 minutes and works once; type it in the screen, choose a password of 12 to 256 characters and you are in. Only a scrypt hash is kept, in `ui_auth.json` (`0600`). A wrong password is answered the same way every time and each failure lengthens the wait before the next try; a session ends after 30 minutes without activity or when you sign out. Reloading the page asks for the password again.
+**First access.** There is no default password. While none exists, the log of the bridge (the terminal where it runs, or `store/bridge.log`) holds a *setup code* that lives 15 minutes and works once; type it in the screen, choose a password of 12 to 256 characters and you are in. Only a scrypt hash is kept, in `ui_auth.json` (`0600`). A wrong password is answered the same way every time and each failure lengthens the wait before the next try; a session ends after 30 minutes without activity or when you sign out.
 
 **What it does.** It edits `send_policy.json`, `monitor_profiles.json`, `webhooks.json` and `channel.json` with the validation the project already has (the webhooks file is checked by the bridge itself), and the settings that were only environment variables (media download, retention, deleted content, the log, the time zone, draft validity, read-only mode, session taint, where the interface listens). Each field shows its value, its default and where the value comes from (default, file, or environment variable). A field the environment defines is locked and names the variable; the environment always wins. A change that needs a restart says which process: the bridge, or the MCP server (the interface sees which MCP servers are running and still hold an older value). A file edited by hand since the screen loaded is not overwritten: the save is refused and the changes stay on screen. Secrets (the tokens and webhook secrets) are never sent to the browser, only whether they are set; leaving a secret box empty keeps the stored one.
 
@@ -637,6 +655,16 @@ The variables are kept in `ui_settings.json` (`0600`) in the configuration direc
 **What it does not do.** It does not send, vote, react, delete or approve a draft. It shows the bridge's state, the counters, the pending drafts (without their text) and the audit logs, read-only. Whoever is signed in to it controls the send policy and the profiles, so treat its password like the other tokens of this project: an obstacle, not a barrier (see [the security guide](docs/security-guide.md)).
 
 **Exposure.** It listens on `127.0.0.1`. `WHATSAPP_UI_HOST` outside loopback also needs `WHATSAPP_UI_ALLOW_REMOTE=true` in the environment of the bridge (the interface cannot set it for itself), and it has no TLS: put a reverse proxy with HTTPS in front. `WHATSAPP_UI_PORT` changes the port.
+
+**API security contract.** The page talks to the server only through `/api`, under these rules:
+
+- The session is the cookie `wmcp_session`: `HttpOnly`, `SameSite=Strict`, path `/`, and `Secure` when the interface is remote and the proxy says HTTPS (`X-Forwarded-Proto`). Signing in replaces the session id.
+- Every write (anything but `GET`, `HEAD` and `OPTIONS`) needs the session's CSRF token in the `X-CSRF-Token` header, and a body must be sent as `Content-Type: application/json`. A write without them is refused and changes nothing.
+- The `Host` header must name this server and, when the request has an `Origin`, it must match the `Host`; otherwise it is refused (a defence against DNS rebinding and cross-site requests). Loopback names are served on the interface port; with `WHATSAPP_UI_ALLOW_REMOTE=true` the bind address itself is served too.
+- Every response carries a Content-Security-Policy (`default-src 'self'`, `frame-ancestors 'none'`, no inline script) and no CORS header is ever sent.
+- A request to `/api` without a signed-in session gets `401` with no configuration in the body.
+
+**Host names behind a proxy.** `WHATSAPP_UI_ALLOWED_HOSTS` lists the names the interface answers to besides loopback and its bind address, comma separated, each `name` or `name:port` (for example `wmcp.example.org,wmcp.lan:8443`). It is read only from the environment of the process, never from the interface. With a wildcard bind (`0.0.0.0` or `::`) only loopback names are served until the names people really use are listed here.
 
 **Under the systemd unit** the sandbox lets the service write only `store/` and the configuration directory. The unit runs the interface with the environment prepared by `uv sync` (`make install-service` says so), and the interface can edit only files in the configuration directory: `send_policy.json` and `monitor_profiles.json` live next to the server code, which the unit keeps read-only, so for the interface to edit them point `WHATSAPP_SEND_POLICY` and `WHATSAPP_MONITOR_CONFIG` at files in the configuration directory, in the unit and in the `env` of your MCP client (both must name the same files).
 
@@ -675,6 +703,7 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_UI_HOST` | bridge, web interface | `127.0.0.1` | The address the web interface listens on. Outside loopback it also needs `WHATSAPP_UI_ALLOW_REMOTE=true` |
 | `WHATSAPP_UI_PORT` | bridge, web interface | `8765` | The port of the web interface (1024 to 65535) |
 | `WHATSAPP_UI_ALLOW_REMOTE` | bridge, web interface | off | `true` lets the interface listen outside loopback. It has a password but no TLS: put a reverse proxy with HTTPS in front. Only the environment of the process sets it, never the interface itself |
+| `WHATSAPP_UI_ALLOWED_HOSTS` | web interface | - | Extra host names the interface answers to (`name` or `name:port`, comma separated). Needed behind a reverse proxy, and for any name at all when the bind is a wildcard (`0.0.0.0`, `::`). Only the environment sets it |
 | `WHATSAPP_UI_COMMAND` | bridge | `uv run --directory ../whatsapp-mcp-server python -m ui` | The command the bridge runs for the interface, split at spaces (no quoting) |
 
 The bridge also needs to be **restarted after updating it** for new behaviour to apply: recording of file name, MIME type, forwarded and reply information, automatic download, mentions and replies, polls and votes, deleting messages, the status endpoint and the log all live in the bridge.
