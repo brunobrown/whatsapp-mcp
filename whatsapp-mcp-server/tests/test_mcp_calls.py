@@ -74,6 +74,8 @@ def arguments(files):
         "send_audio_message": {"recipient": GROUP, "media_path": files["audio"]},
         "send_poll": {"recipient": GROUP, "question": "Q?", "options": ["A", "B"]},
         "vote_poll": {"chat_jid": GROUP, "message_id": "P1", "options": ["Sim"]},
+        "react_to_message": {"chat_jid": GROUP, "message_id": "M1", "emoji": "👍"},
+        "get_message_reactions": {"message_id": "M1", "chat_jid": GROUP},
         "delete_message": {"chat_jid": GROUP, "message_id": "MINE"},
         "monitor_reply": {"profile": "nenhum", "chat_jid": GROUP, "message_id": "M1", "text": "oi"},
         "download_media": {"message_id": "M1", "chat_jid": GROUP},

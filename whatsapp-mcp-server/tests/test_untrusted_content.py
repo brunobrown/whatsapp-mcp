@@ -51,6 +51,7 @@ def test_dictionary_reads_that_carry_other_peoples_text_are_marked(tmp_path, mon
         "get_message_thread": main.get_message_thread(message_id="P1", chat_jid=A),
         "get_poll_results": main.get_poll_results("P1", A),
         "list_polls": main.list_polls(A),
+        "get_message_reactions": main.get_message_reactions("P1", A),
     }.items():
         assert result["success"] is True and result["untrusted_content"] is True, name
 
@@ -62,5 +63,6 @@ def test_an_error_result_is_not_marked(tmp_path, monkeypatch):  # UNT-02
         "get_message_thread": main.get_message_thread(message_id="NOPE", chat_jid=A),
         "get_poll_results": main.get_poll_results("NOPE", A),
         "list_polls": main.list_polls(A, limit=0),
+        "get_message_reactions": main.get_message_reactions("NOPE", A),
     }.items():
         assert result["success"] is False and "untrusted_content" not in result, name

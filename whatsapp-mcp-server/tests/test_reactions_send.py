@@ -125,3 +125,15 @@ def test_missing_arguments(db, post):  # REACT-01
     assert whatsapp.react_to_message("", "M1", "👍").success is False
     assert whatsapp.react_to_message(GROUP, "", "👍").success is False
     post.assert_not_called()
+
+
+def test_react_to_message_answers_like_the_other_send_tools(db, post):  # REACT-01, REACT-05
+    import main
+    sent_ok = main.react_to_message(GROUP, "M1", "👍")
+    dry = main.react_to_message(GROUP, "M1", "👍", dry_run=True)
+    bad = main.react_to_message(GROUP, "M1", "👍 👍")
+
+    assert sent_ok["success"] is True and sent_ok["message_id"] == "R1"
+    assert dry["dry_run"] is True and dry["preview"]["emoji"] == "👍"
+    assert bad["success"] is False and bad["error_code"] == "INVALID_EMOJI"
+    assert post.call_count == 1

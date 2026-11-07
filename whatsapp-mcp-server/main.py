@@ -23,6 +23,8 @@ from whatsapp import (
     get_message_thread as whatsapp_get_message_thread,
     send_poll as whatsapp_send_poll,
     get_poll_results as whatsapp_get_poll_results,
+    react_to_message as whatsapp_react_to_message,
+    get_message_reactions as whatsapp_get_message_reactions,
     list_polls as whatsapp_list_polls,
     vote_poll as whatsapp_vote_poll,
     delete_message as whatsapp_delete_message
@@ -484,6 +486,46 @@ def vote_poll(
         does not have, a repeated one, or several in a single-answer poll; nothing was sent), SEND_BLOCKED_BY_POLICY
     """
     return send_response(whatsapp_vote_poll(chat_jid, message_id, options, override_token, dry_run))
+
+@mcp.tool(annotations=WRITES)
+def react_to_message(
+    chat_jid: str,
+    message_id: str,
+    emoji: str,
+    override_token: Optional[str] = None,
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """React to a message with an emoji, change your reaction, or take it back.
+
+    Args:
+        chat_jid: The chat of the message (a JID, or the exact name of a chat)
+        message_id: The ID of the message to react to; it must be one the bridge has stored
+        emoji: The emoji, up to 16 characters and no spaces. An empty string takes your reaction back.
+               Your new reaction replaces the previous one
+        override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
+        dry_run: Returns the preview (chat, message text and emoji) and sends nothing. The send policy still applies
+
+    Returns:
+        success, message and, when sent, message_id and chat_jid. A dry run returns dry_run=true and preview.
+        Errors: success=false with error_code INVALID_EMOJI (nothing was sent), MESSAGE_NOT_FOUND, SEND_BLOCKED_BY_POLICY
+    """
+    return send_response(whatsapp_react_to_message(chat_jid, message_id, emoji, override_token, dry_run))
+
+@mcp.tool(annotations=READ_ONLY)
+def get_message_reactions(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
+    """Read the reactions that stand on a message.
+
+    Args:
+        message_id: The ID of the message
+        chat_jid: Optional chat JID, for when the same ID exists in more than one chat
+
+    Returns:
+        success, message_id, chat_jid, chat_name, total, reactions (reactor, reactor_name, emoji, timestamp; oldest first)
+        and counts (how many of each emoji). Each person counts once, with their latest reaction; a reaction taken back counts
+        for nothing. Only reactions the bridge received while it was running are known.
+        Errors: success=false with error_code MESSAGE_NOT_FOUND, AMBIGUOUS_MESSAGE or DIRECTORY_UNAVAILABLE
+    """
+    return mark_untrusted(whatsapp_get_message_reactions(message_id, chat_jid))
 
 @mcp.tool(annotations=DESTROYS)
 def delete_message(
