@@ -150,3 +150,21 @@ def test_the_unsaved_mark_cannot_be_set_without_a_session(state):  # CFG-06
     state.set_dirty(True)
 
     assert state.dirty is False
+
+
+def test_a_session_that_lapsed_says_why_and_a_new_one_forgets_it(state, clock):  # AUTH-05
+    state.sign_in()
+    clock.now += 61
+
+    state.check_idle()
+
+    assert "inatividade" in state.ended
+    state.sign_in()
+    assert state.ended is None
+
+
+def test_signing_out_by_choice_leaves_no_reason(state):  # AUTH-05
+    state.sign_in()
+    state.sign_out()
+
+    assert state.ended is None

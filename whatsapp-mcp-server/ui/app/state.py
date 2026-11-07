@@ -25,6 +25,7 @@ class AppState:
     data: Dict[str, Dict[str, Any]] = field(default_factory=dict)      # masked values by section id
     restart: List[str] = field(default_factory=list)                    # "bridge" and/or "server": what must restart
     dirty: bool = False                                                 # the open form has changes that were not saved
+    ended: Optional[str] = None                                         # why the last session ended, for the login screen to say
     idle: IdleClock = field(default_factory=IdleClock, repr=False)
 
     def _require(self) -> None:
@@ -33,6 +34,7 @@ class AppState:
 
     def sign_in(self) -> None:
         self.idle = IdleClock(self.idle.limit, clock=self.idle._clock)
+        self.ended = None
         self.authenticated = True
 
     def sign_out(self) -> None:
@@ -51,6 +53,7 @@ class AppState:
         """End the session if it lapsed; True when it did."""
         if self.authenticated and self.idle.expired:
             self.sign_out()
+            self.ended = "Sua sessão terminou por inatividade. Entre de novo."
             return True
         return False
 

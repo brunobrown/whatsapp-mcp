@@ -142,3 +142,22 @@ def test_importing_the_launcher_does_not_load_flet():
     done = subprocess.run([sys.executable, "-I", "-c", code])
 
     assert done.returncode == 0
+
+
+def test_the_settings_carry_the_environment_as_it_was_before_the_file_was_applied(tmp_path):  # CFG-04
+    import json
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "ui_settings.json").write_text(json.dumps({"env": {"WHATSAPP_UI_PORT": "9123", "WHATSAPP_AUTO_DOWNLOAD_MAX_MB": "50"}}))
+    os.chmod(config / "ui_settings.json", 0o600)
+    environ = {"KEEP": "1"}
+    seen = []
+
+    launcher.main(environ=environ, runner=seen.append, probe=lambda *_: None)
+
+    assert seen[0].port == 9123 and environ["WHATSAPP_AUTO_DOWNLOAD_MAX_MB"] == "50"        # applied to the process
+    assert seen[0].startup_environ == {"KEEP": "1"}                                          # but remembered as it was
+
+
+def test_the_assets_folder_is_the_one_inside_the_package():
+    assert os.path.isfile(os.path.join(launcher.ASSETS_DIR, "fonts", "OFL.txt"))

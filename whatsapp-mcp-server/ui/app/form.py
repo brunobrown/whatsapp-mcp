@@ -5,7 +5,6 @@ is where a click becomes a call (and where a question to the operator is asked b
 risky). SectionForm is the thin component that keeps a flow alive, loads it off the event loop and shows the dialog.
 """
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -50,7 +49,7 @@ class FormActions:
 
     def _file_name(self) -> str:
         storage = self.section.storage
-        return os.path.basename(storage.path()) if isinstance(storage, JsonFile) else "ui_settings.json"
+        return storage.path().replace("\\", "/").rsplit("/", 1)[-1] if isinstance(storage, JsonFile) else "ui_settings.json"
 
     # -- editing ------------------------------------------------------------------------------------
     def change(self, key: str) -> Callable[[Any], None]:

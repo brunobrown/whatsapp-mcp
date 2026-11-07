@@ -37,7 +37,7 @@ def _card(controls) -> ft.Control:
 
 
 def login_view(mode: str, values: Dict[str, str], error: Optional[str], busy: bool, on_edit: Editor, on_submit: Callable[[], Any],
-               on_new_code: Callable[[], Any]) -> ft.Control:
+               on_new_code: Callable[[], Any], notice: Optional[str] = None) -> ft.Control:
     if mode == "broken":
         body = [_heading("Senha indisponível"), ft.Text(error or "", size=16, selectable=True)]
     elif mode == "setup":
@@ -60,6 +60,8 @@ def login_view(mode: str, values: Dict[str, str], error: Optional[str], busy: bo
                 ft.FilledButton(content="Entrar", height=MIN_TARGET, disabled=busy, on_click=lambda e: on_submit()),
                 *([ft.ProgressRing(width=24, height=24, stroke_width=3)] if busy else [])]),
         ]
+    if notice:
+        body.insert(1, _live(notice, ft.Colors.TERTIARY))
     if mode != "broken":
         body.append(_live(error if mode == "setup" else None))
     elif error is None:
@@ -83,7 +85,7 @@ def account_view(values: Dict[str, str], error: Optional[str], busy: bool, on_ed
 
 
 @ft.component
-def LoginScreen(make_flow: Callable[[], LoginFlow], announce_initial: bool = True):
+def LoginScreen(make_flow: Callable[[], LoginFlow], notice: Optional[str] = None):
     flow, _ = ft.use_state(lambda: make_flow())
     values, set_values = ft.use_state({})
     error, set_error = ft.use_state(None)
@@ -111,7 +113,7 @@ def LoginScreen(make_flow: Callable[[], LoginFlow], announce_initial: bool = Tru
         result = flow.request_code()
         set_error(None if result.announced else result.message)
 
-    return login_view(mode, values, error, busy, edit, lambda: ft.context.page.run_task(submit), new_code)
+    return login_view(mode, values, error, busy, edit, lambda: ft.context.page.run_task(submit), new_code, notice)
 
 
 @ft.component

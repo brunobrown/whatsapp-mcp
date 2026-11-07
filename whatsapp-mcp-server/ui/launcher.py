@@ -9,8 +9,8 @@ import ipaddress
 import os
 import socket
 import sys
-from dataclasses import dataclass
-from typing import Callable, MutableMapping, Optional
+from dataclasses import dataclass, field, replace
+from typing import Callable, Dict, MutableMapping, Optional
 
 import uisettings
 
@@ -24,11 +24,17 @@ class LaunchError(Exception):
     """The interface cannot start; the message says why and what to change."""
 
 
+ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str
     port: int
     remote: bool = False
+    # The environment as the process was started, before ui_settings.json filled in what it lacked: the interface needs
+    # it to tell a variable of the environment from a value of the file.
+    startup_environ: Dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def url(self) -> str:
@@ -96,9 +102,10 @@ def run_app(settings: Settings) -> None:
 def main(environ: Optional[MutableMapping[str, str]] = None, runner: Callable[[Settings], None] = run_app,
          probe: Callable[[str, int], None] = check_port_free) -> int:
     environ = os.environ if environ is None else environ
+    startup = dict(environ)
     uisettings.apply(environ)            # the port and host saved by the interface; the environment still wins
     try:
-        settings = resolve(environ)
+        settings = replace(resolve(environ), startup_environ=startup)
         probe(settings.host, settings.port)
     except LaunchError as e:
         print(f"ui: {e}", file=sys.stderr)
