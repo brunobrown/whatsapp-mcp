@@ -1,1 +1,119 @@
 @import "tailwindcss";
+
+/*
+ * Visual tokens. Every colour is a light-dark() pair, so one declaration serves both themes:
+ * the browser picks by color-scheme, which follows the system until the operator forces a theme
+ * (data-theme on <html>, set by lib/theme.ts). No webfont: the system font stack only.
+ *
+ * Contrast notes (tests/tokens.test.ts holds the 4.5:1 floor for every text pair):
+ *  - accent-ink light is #00765f, not #008069: #008069 reads 4.36:1 on the #f0f2f5 surface.
+ *  - muted dark is #9aa8b1, not #8696a0: #8696a0 reads 3.91:1 on the #2a3942 hover row.
+ *  - white on #00a884 is 3.0:1, so a solid accent button uses #008069 (light) or dark ink on #00a884 (dark).
+ */
+:root {
+  color-scheme: light dark;
+
+  --surface: light-dark(#f0f2f5, #111b21);
+  --panel: light-dark(#ffffff, #202c33);
+  --hover: light-dark(#f5f6f6, #2a3942);
+  --selected: light-dark(#e9edef, #2a3942);
+  --line: light-dark(#e9edef, #2a3942);
+  --ink: light-dark(#111b21, #e9edef);
+  --muted: light-dark(#54656f, #9aa8b1);
+
+  --accent: light-dark(#00a884, #00a884);
+  --accent-ink: light-dark(#00765f, #35d6b0);
+  --accent-soft: light-dark(#e7f5f1, #0f3a30);
+  --accent-solid: light-dark(#008069, #00a884);
+  --accent-solid-hover: light-dark(#006b58, #00bf96);
+  --on-accent: light-dark(#ffffff, #0b141a);
+
+  --danger-ink: light-dark(#b3261e, #ff8a80);
+  --danger-soft: light-dark(#fdecea, #3a2326);
+  --warning-ink: light-dark(#7a4f00, #f5c26b);
+  --warning-soft: light-dark(#fff4d6, #3a3320);
+
+  --focus: var(--accent-ink);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Segoe UI", "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+
+  --color-surface: var(--surface);
+  --color-panel: var(--panel);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-solid: var(--accent-solid);
+  --color-accent-solid-hover: var(--accent-solid-hover);
+  --color-on-accent: var(--on-accent);
+  --color-danger-ink: var(--danger-ink);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning-ink: var(--warning-ink);
+  --color-warning-soft: var(--warning-soft);
+
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --min-target: 2.75rem;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    background-color: var(--surface);
+    color: var(--ink);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background-color: var(--surface);
+    color: var(--ink);
+  }
+
+  /* 16 px keeps iOS from zooming into a focused field. */
+  input,
+  select,
+  textarea {
+    font: inherit;
+    font-size: 1rem;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--accent);
+    color: var(--on-accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
