@@ -123,6 +123,13 @@ def test_exactly_twelve_characters_are_enough(auth):  # AUTH-06
     assert auth.create(auth.start_setup(), "a" * MIN_PASSWORD_LENGTH).ok
 
 
+def test_twelve_characters_are_counted_after_normalisation(auth, tmp_path):  # AUTH-06
+    decomposed = "a\u0301" * 6                       # twelve code points, six visible characters
+
+    assert auth.create(auth.start_setup(), decomposed).reason == "weak_password" and not path(tmp_path).exists()
+    assert auth.create(auth.start_setup(), "a\u0301" * MIN_PASSWORD_LENGTH).ok          # twelve visible characters are enough
+
+
 def test_twelve_characters_means_characters_not_bytes(auth):  # AUTH-06
     assert auth.create(auth.start_setup(), "é" * MIN_PASSWORD_LENGTH).ok
 
@@ -201,6 +208,9 @@ def test_changing_the_password_requires_the_current_one(auth):  # AUTH-07
 def test_change_password_requires_current_password(auth):  # AUTH-07
     auth.create(auth.start_setup(), GOOD)
 
+    assert auth.change("not the current one", "a brand new password").reason == "wrong_password"
+    assert auth.change("", "a brand new password").reason == "wrong_password"
+    assert auth.verify(GOOD) is True and auth.verify("a brand new password") is False       # a refused change changes nothing
     assert auth.change(GOOD, "a brand new password").ok
     assert auth.verify("a brand new password") is True and auth.verify(GOOD) is False
 

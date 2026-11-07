@@ -106,8 +106,10 @@ class AuthStore:
     # -- rules for the password --------------------------------------------------------------------
     @staticmethod
     def _password_problem(password: Any) -> Optional[str]:
-        if (not isinstance(password, str) or len(password) < MIN_PASSWORD_LENGTH or len(password) > MAX_PASSWORD_LENGTH
-                or "\x00" in password or not password.strip()):
+        if not isinstance(password, str) or "\x00" in password or not password.strip():
+            return "weak_password"
+        length = len(unicodedata.normalize("NFC", password))        # the length that is hashed, not the code points typed
+        if length < MIN_PASSWORD_LENGTH or length > MAX_PASSWORD_LENGTH:
             return "weak_password"
         return None
 
