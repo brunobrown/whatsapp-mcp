@@ -175,6 +175,11 @@ Every tool declares what it does through MCP tool annotations: the readers are m
 - **monitor_reply**: Answer one of those messages, in its chat and quoting it, under the guardrails of a profile (approval, trusted senders, rate limits, audit).
 - **get_monitor_profiles**: List the monitoring profiles and their guardrails.
 
+**Webhooks** (see [Webhooks](#webhooks))
+
+- **get_webhook_status**: Are the webhooks on, how are the deliveries going (delivered, failed, dropped, queued, last error) for each endpoint.
+- **test_webhook**: Send one signed ping to an endpoint and report its answer.
+
 **Diagnostics**
 
 - **get_connection_status**: Is the bridge running and connected to WhatsApp? Returns the number, uptime, the time of the last event and message, pending media retries. See [Checking the bridge](#checking-the-bridge).
@@ -388,6 +393,80 @@ download_media_batch(chat_jid="<JID>", after="2026-10-20T22:12:00-03:00", types=
 
 Downloads the media of that chat inside the window (same `after`/`before` rules as `list_messages`), oldest first, **one at a time**. `types` is any of `image`, `video`, `audio`, `document` (default all). Limits: `max_size_mb` (default 25; larger media is skipped, nothing is downloaded), `max_items` (default 50, up to 200; `truncated=true` when more were left out) and `timeout_seconds` per item (default 120, up to 600). The result has `total`, `downloaded`, `already_downloaded`, `failed`, `skipped`, `truncated`, `aborted` and `items`; each item has `message_id`, `timestamp`, `media_type`, `filename`, `status` (`downloaded`, `already_downloaded`, `failed`, `skipped`), `path` and, when it did not download, `error_code`, `message` and `hint`. One failed item does not stop the batch; a bridge that does not answer does (`aborted="BRIDGE_UNREACHABLE"`, the rest `skipped`). Bad arguments return `error_code=INVALID_ARGUMENT`.
 
+### Webhooks
+
+MCP cannot push events to an agent, so by default the agent asks (`monitor_messages`, `watch_poll`). The bridge can instead **tell a program of yours** when something happens, with a signed HTTP POST. It is **off**: nothing leaves the bridge unless `webhooks.json` exists in the configuration directory (next to `api_token` and `db.key`, `~/.config/whatsapp-mcp/` by default). The bridge refuses the file if other users can read it (`chmod 600`), and it reads it only at start.
+
+```json
+{
+  "endpoints": [
+    {
+      "name": "agent",
+      "url": "http://127.0.0.1:9000/hook",
+      "secret": "<at least 32 random bytes, e.g. openssl rand -hex 32>",
+      "events": ["message", "poll_vote"],
+      "chats": ["120363000000000000@g.us"],
+      "include_content": false,
+      "include_own": false
+    }
+  ]
+}
+```
+
+| Field | Meaning |
+| ----- | ------- |
+| `name`, `url`, `secret`, `events` | Required. `events` lists names from the table below, or `["*"]` for all. The secret has at least 32 bytes (use random ASCII, such as the output of `openssl rand -hex 32`) |
+| `chats` | Optional. Only events of these chats (a JID or its number); events without a chat, like `connection`, always pass. **Use it together with `include_content`** |
+| `include_content` | Default `false`: the event carries ids, type, chat, sender, time and `content_length`, **not** the text, the question or the option names, the emoji or the file name. `true` adds them and marks the event `untrusted_content` |
+| `include_own` | Default `false`: what this account sends is not delivered, so an agent does not answer itself |
+| `allow_private_network` | Default `false`. See the destination rules |
+| `"enabled": false` (top level) | Turns everything off |
+
+| Event | When |
+| ----- | ---- |
+| `message` | A new message arrives (history re-sent by WhatsApp and anything older than an hour is not news) |
+| `poll_created`, `poll_vote` | A poll arrives; a vote is stored, changed or retracted (`retracted`). In an anonymous poll `voter` is `null` |
+| `reaction`, `message_edit` | A reaction (`retracted` when taken back) or an edit of a stored message |
+| `connection` | `connected`, `disconnected`, `logged_out` |
+| `ping` | `test_webhook` |
+
+Deleted messages are not an event: the bridge does not process them.
+
+**Body**: `event_id` (the same across attempts and across WhatsApp redeliveries: **deduplicate on it**), `type`, `occurred_at` (UTC), `delivery_attempt` and `data`. **Signature**: `X-Webhook-Timestamp` (seconds) and `X-Webhook-Signature: sha256=<hex>`, the HMAC-SHA256 of `<timestamp>.<raw body>` with the endpoint's `secret`. Recompute it over the raw bytes, compare in constant time and refuse a timestamp more than 5 minutes off; the bridge does not do the replay check for you.
+
+**Delivery** is at least once. Each attempt has a 5 s limit; a network error, 5xx, 408 or 429 is repeated after 1 s, 4 s, 16 s, 1 min and 5 min (six attempts, about 6 minutes), any other 4xx is dropped, and a redirect is **not followed**. The queue is in memory, one per endpoint, 1000 events: when it is full the oldest is dropped (`dropped` in the status). A slow endpoint does not hold up the others or the reception of messages. A restart loses what was waiting, but nothing is lost for good: messages and votes are in the database, so a receiver catches up with `monitor_messages` or `watch_poll`. A body over 64 KiB is sent with `truncated: true` and without the text.
+
+**Destinations**: `https://` to any host; `http://` only to a loopback address (`127.0.0.0/8`, `::1`) or `localhost`; no user name or password in the URL; never the bridge's own API. The bridge checks the address it actually connects to: a loopback destination reaches only loopback, and every other one is refused if it resolves to loopback, a private network, link-local (cloud metadata) or multicast, unless `allow_private_network` is `true`, which lifts the private-network refusal (it also lets public addresses through, as before, but never loopback, link-local, multicast, `0.0.0.0/8` or the IPv6 forms that embed an IPv4 address: NAT64 and 6to4).
+
+**Watching it**: `get_webhook_status` (or `webhooks` in `/api/status`) shows, per endpoint, `delivered`, `failed`, `dropped`, `queued`, `last_error` and `last_success_at`, and, if `webhooks.json` was refused, `error`. Neither the address nor the secret is ever shown. `test_webhook(name)` sends one ping. The bridge log has a line per delivery (endpoint, host, event id, type, attempts, HTTP code), never the body, the secret or the full URL.
+
+**Risk**: the text of messages comes from other people and, with `include_content`, leaves the bridge. A receiver that pastes it into an agent's prompt is open to prompt injection: the event says `untrusted_content`, so treat the text as data. Prefer the default (no text) and let the agent read the message with the MCP tools, which mark it the same way.
+
+A receiver can be a few lines. This one (Python, standard library) checks the signature and deduplicates:
+
+```python
+import hashlib, hmac, json, time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+SECRET = b"<the endpoint's secret>"
+seen = set()
+
+class Hook(BaseHTTPRequestHandler):
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        stamp = self.headers.get("X-Webhook-Timestamp", "0")
+        good = "sha256=" + hmac.new(SECRET, stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(good, self.headers.get("X-Webhook-Signature", "")) or abs(time.time() - int(stamp)) > 300:
+            self.send_response(401); self.end_headers(); return
+        event = json.loads(raw)
+        if event["event_id"] not in seen:
+            seen.add(event["event_id"])
+            print(event["type"], event["data"])   # wake your agent here
+        self.send_response(204); self.end_headers()
+
+HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
+```
+
 ### Checking the bridge
 
 `get_connection_status` (or `GET http://127.0.0.1:8080/api/status`) returns `connected`, `logged_in`, `phone`, `version`, `started_at`, `uptime_seconds`, `last_event_at`, `last_message_at`, `last_connected_at`, `last_disconnected_at` (all in UTC, `null` if it has not happened since the bridge started) and `pending_media_retries`. If the bridge does not answer, the tool returns `connected=false`, `bridge_reachable=false`, `error_code=BRIDGE_UNREACHABLE`, the time of the newest stored message (`last_message_at`) and the last write to the bridge log (`last_log_at`).
@@ -439,6 +518,7 @@ Polls: `INVALID_POLL`, `INVALID_VOTE`, `POLL_NOT_FOUND`, `AMBIGUOUS_MESSAGE`, `M
 Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
 Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
 Status: `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
+Webhooks: `ENDPOINT_NOT_FOUND`, `INVALID_ARGUMENT`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
 Database: `DATABASE_KEY_UNAVAILABLE`, `DATABASE_UNREADABLE` (the MCP server cannot open an encrypted database).
 
 ## Security of your data

@@ -22,7 +22,6 @@ import (
 	"syscall"
 	"time"
 
-
 	"bytes"
 
 	"go.mau.fi/whatsmeow"
@@ -47,7 +46,8 @@ type Message struct {
 
 // Database handler for storing message history
 type MessageStore struct {
-	db *sql.DB
+	db       *sql.DB
+	webhooks *webhookDispatcher // nil-safe: nothing is delivered when it is off
 }
 
 // Initialize message store
@@ -200,7 +200,6 @@ func (store *MessageStore) RepairChatTimes() (int, error) {
 	n, err := res.RowsAffected()
 	return int(n), err
 }
-
 
 // TouchChat records activity in a chat, creating it (named after its JID) if unknown and
 // keeping the name of a known chat, which StoreChat would overwrite.
@@ -801,6 +800,8 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 			logger.Warnf("Failed to apply edit: %v", err)
 		} else if !updated {
 			logger.Infof("Ignoring edit of unknown message, or by a sender other than its author")
+		} else if target, ok := editTarget(msg.Message); ok {
+			messageStore.webhooks.Emit(messageEditWebhookEvent(msg, target, extractTextContent(msg.Message)))
 		}
 		return
 	}
@@ -872,6 +873,7 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 	if err != nil {
 		logger.Warnf("Failed to store message: %v", err)
 	} else {
+		messageStore.webhooks.Emit(messageWebhookEvent(msg, content, mediaType, filename))
 		// Log message reception
 		timestamp := msg.Info.Timestamp.Format("2006-01-02 15:04:05")
 		direction := "←"
@@ -1016,6 +1018,7 @@ func handleMediaRetryNotification(evt *events.MediaRetry) {
 // (phone number vs. WhatsApp's newer privacy-preserving LID) has to be reconstructed:
 //   - A real phone number JID (with country code) is at most 13 digits.
 //   - A LID (as WhatsApp currently issues them) is longer than that.
+//
 // A request built with the wrong addressing mode goes unanswered rather than erroring, which is
 // otherwise indistinguishable from the phone genuinely being unreachable.
 func resolveSenderJID(client *whatsmeow.Client, sender string) types.JID {
@@ -1594,6 +1597,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 
 	// Handler for the bridge status
 	mux.HandleFunc("/api/status", handleStatus(status, state, bridgeVersion()))
+	mux.HandleFunc("/api/webhooks/test", handleWebhookTest(messageStore))
 
 	// Handler for sending messages
 	mux.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
@@ -1826,51 +1830,19 @@ func main() {
 		logger.Infof("Repaired last_message_time of %d chats", n)
 	}
 
+	// Webhooks: off unless webhooks.json exists in the configuration directory
+	defer setupWebhooks(messageStore, state, logger)()
+
 	// Setup event handling for messages and history sync
-	client.AddEventHandler(recordingHandler(state, func(evt interface{}) {
-		switch v := evt.(type) {
-		case *events.Message:
-			// Learn who the sender is (LID, phone, push name) before storing the message
-			if err := recordMessageIdentity(messageStore, v.Info); err != nil {
-				logger.Warnf("Failed to record sender identity: %v", err)
-			}
-			// Process regular messages
-			handleMessage(client, messageStore, v, logger)
-
-		case *events.PushName:
-			if err := recordPushNameEvent(messageStore, v); err != nil {
-				logger.Warnf("Failed to record push name: %v", err)
-			}
-
-		case *events.Contact:
-			if err := recordContactEvent(messageStore, v); err != nil {
-				logger.Warnf("Failed to record contact: %v", err)
-			}
-
-		case *events.HistorySync:
-			// Process history sync events
-			handleHistorySync(client, messageStore, v, logger)
-
-		case *events.MediaRetry:
-			// Response to a SendMediaRetryReceipt request (expired media link recovery)
-			handleMediaRetryNotification(v)
-
-		case *events.Connected:
-			logger.Infof("Connected to WhatsApp")
-			// In the background: it reads every contact and can take a while
-			go func() {
-				n, err := syncIdentities(context.Background(), messageStore, whatsmeowIdentitySource{client}, logger)
-				if err != nil {
-					logger.Warnf("Identity sync failed: %v", err)
-					return
-				}
-				logger.Infof("Identity sync recorded %d identities", n)
-			}()
-
-		case *events.LoggedOut:
-			logger.Warnf("Device logged out, please scan QR code to log in again")
+	client.AddEventHandler(recordingHandler(state, clientEventHandler(client, messageStore, func() {
+		// It reads every contact and can take a while
+		n, err := syncIdentities(context.Background(), messageStore, whatsmeowIdentitySource{client}, logger)
+		if err != nil {
+			logger.Warnf("Identity sync failed: %v", err)
+			return
 		}
-	}))
+		logger.Infof("Identity sync recorded %d identities", n)
+	}, logger)))
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)
@@ -1937,7 +1909,7 @@ func main() {
 		return
 	}
 	logger.Infof("The REST API token is in %s", filepath.Join(apiConfigDir, apiTokenFile))
-	startRESTServer(client, messageStore, state, 8080, apiToken, logger)
+	startRESTServer(client, messageStore, state, defaultRESTPort, apiToken, logger)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)

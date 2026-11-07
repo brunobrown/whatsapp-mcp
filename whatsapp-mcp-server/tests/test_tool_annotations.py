@@ -12,8 +12,8 @@ import main  # noqa: E402
 READ = {"search_contacts", "list_messages", "list_chats", "get_chat", "get_direct_chat_by_contact",
         "get_contact_chats", "get_last_interaction", "get_message_context", "get_message_thread",
         "get_poll_results", "watch_poll", "list_polls", "get_message_reactions", "get_monitor_profiles", "monitor_messages",
-        "get_group_participants", "get_connection_status"}
-SEND = {"send_message", "send_file", "send_audio_message", "send_poll", "vote_poll", "react_to_message", "monitor_reply"}
+        "get_group_participants", "get_connection_status", "get_webhook_status"}
+SEND = {"test_webhook", "send_message", "send_file", "send_audio_message", "send_poll", "vote_poll", "react_to_message", "monitor_reply"}
 DELETE = {"delete_message"}
 DOWNLOAD = {"download_media", "download_media_batch"}
 
