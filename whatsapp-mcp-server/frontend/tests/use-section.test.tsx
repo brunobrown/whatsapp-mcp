@@ -97,6 +97,17 @@ describe("loading and dirty", () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  it("tells the shell while the draft holds unsaved edits, and stops when the form goes away", async () => {
+    const { result, unmount } = await mount();
+    expect(useUiStore.getState().draftDirty).toBe(false);
+    act(() => {
+      result.current.setField("name", "beta");
+    });
+    expect(useUiStore.getState().draftDirty).toBe(true);
+    unmount();
+    expect(useUiStore.getState().draftDirty).toBe(false);
+  });
+
   it("is dirty only while the draft differs from the loaded values", async () => {
     const { result } = await mount();
     act(() => {

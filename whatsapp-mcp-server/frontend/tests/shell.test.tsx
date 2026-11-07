@@ -88,7 +88,7 @@ describe("wide screens (600 px and more)", () => {
   });
 
   it("shows the pending-restart marker only on a section whose restart is pending", async () => {
-    useUiStore.getState().addRestart(["bridge"]);
+    useUiStore.getState().addRestart(["bridge"], "media");
     open("/s/send_policy");
     const nav = await listed();
     expect(within(within(nav).getByRole("link", { name: /Media downloads/ })).getByText("Restart needed")).toBeInTheDocument();
@@ -110,9 +110,23 @@ describe("wide screens (600 px and more)", () => {
   });
 
   it("shows the marker in the header of the open section too", async () => {
-    useUiStore.getState().addRestart(["bridge"]);
+    useUiStore.getState().addRestart(["bridge"], "media");
     open("/s/media");
     expect(await screen.findAllByText("Restart needed")).toHaveLength(2);
+  });
+
+  it("marks only the section that was saved, not the others that restart the same process", async () => {
+    server.use(
+      http.get("*/api/sections", () =>
+        HttpResponse.json([...sections, { ...sections[2], id: "webhooks", title: "Webhooks", order: 75 }]),
+      ),
+    );
+    useUiStore.getState().addRestart(["bridge"], "media");
+    open("/s/media");
+    const nav = await listed();
+    await within(nav).findByRole("link", { name: /Webhooks/ });
+    expect(within(within(nav).getByRole("link", { name: /Media downloads/ })).getByText("Restart needed")).toBeInTheDocument();
+    expect(within(within(nav).getByRole("link", { name: /Webhooks/ })).queryByText("Restart needed")).toBeNull();
   });
 
   it("keeps the brand header, the theme and sign-out buttons and the section list in one landmark", async () => {
@@ -226,6 +240,35 @@ describe("states and header actions", () => {
       expect(router.state.location.pathname).toBe("/login");
     });
     expect(deleted).toBe(true);
+  });
+
+  it("asks before signing out with unsaved edits: staying keeps the session, confirming ends it", async () => {
+    let deleted = 0;
+    server.use(
+      http.delete("*/api/session", () => {
+        deleted += 1;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const router = open("/status");
+    await listed();
+    useUiStore.getState().setDraftDirty(true);
+
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Sign out without saving?" });
+    expect(deleted).toBe(0);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(deleted).toBe(0);
+    expect(router.state.location.pathname).toBe("/status");
+
+    server.use(http.get("*/api/session", () => HttpResponse.json({ state: "login", csrf: "c" })));
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard and sign out" }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/login");
+    });
+    expect(deleted).toBe(1);
   });
 
   it("offers a skip link to the content", async () => {

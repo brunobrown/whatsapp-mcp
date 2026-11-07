@@ -46,7 +46,7 @@ export function useSaveSection(id: string) {
         if (unexplained && outcome.general.length > 0) raiseNotice("saveFailed");
         return;
       }
-      if (outcome.restarts.length > 0) useUiStore.getState().addRestart(outcome.restarts);
+      if (outcome.restarts.length > 0) useUiStore.getState().addRestart(outcome.restarts, id);
       if (!outcome.unchanged) raiseNotice("saved");
       await client.invalidateQueries({ queryKey: keys.section(id) });
     },
@@ -70,6 +70,14 @@ export function useSection(id: string) {
   const base = useMemo(() => baseDraft(snapshot), [snapshot]);
   const editKeys = Object.keys(edits).filter((key) => !same(edits[key], base[key]));
   const dirty = editKeys.length > 0 || restored.length > 0;
+
+  // The shell needs to know, to ask before a sign-out drops the draft.
+  useEffect(() => {
+    useUiStore.getState().setDraftDirty(dirty);
+    return () => {
+      useUiStore.getState().setDraftDirty(false);
+    };
+  }, [dirty]);
 
   // Adopt a newer read of the section only while there is nothing to lose.
   if (query.data !== undefined && query.data !== snapshot && (snapshot === undefined || !dirty)) {

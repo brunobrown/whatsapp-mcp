@@ -51,10 +51,15 @@ interface UiState {
   theme: Theme;
   mobilePane: MobilePane;
   restart: RestartScope[];
+  /** Sections whose saved value waits for a restart; the marker belongs to them, not to every section of the scope. */
+  restartSections: string[];
+  /** Whether the open section holds edits that were not saved; signing out asks before dropping them. */
+  draftDirty: boolean;
+  setDraftDirty: (dirty: boolean) => void;
   notices: Notice[];
   setTheme: (theme: Theme) => void;
   setMobilePane: (pane: MobilePane) => void;
-  addRestart: (scopes: readonly RestartScope[]) => void;
+  addRestart: (scopes: readonly RestartScope[], sectionId?: string) => void;
   clearRestart: (scope?: RestartScope) => void;
   pushNotice: (notice: NewNotice) => void;
   dismissNotice: (id: number) => void;
@@ -73,6 +78,11 @@ export const useUiStore = create<UiState>()(
       theme: "system",
       mobilePane: "list",
       restart: [],
+      restartSections: [],
+      draftDirty: false,
+      setDraftDirty: (draftDirty) => {
+        set({ draftDirty });
+      },
       notices: [],
       setTheme: (theme) => {
         set({ theme });
@@ -80,11 +90,17 @@ export const useUiStore = create<UiState>()(
       setMobilePane: (mobilePane) => {
         set({ mobilePane });
       },
-      addRestart: (scopes) => {
-        set((state) => ({ restart: [...new Set([...state.restart, ...scopes])] }));
+      addRestart: (scopes, sectionId) => {
+        set((state) => ({
+          restart: [...new Set([...state.restart, ...scopes])],
+          restartSections: sectionId === undefined ? state.restartSections : [...new Set([...state.restartSections, sectionId])],
+        }));
       },
       clearRestart: (scope) => {
-        set((state) => ({ restart: scope === undefined ? [] : state.restart.filter((s) => s !== scope) }));
+        set((state) => ({
+          restart: scope === undefined ? [] : state.restart.filter((s) => s !== scope),
+          restartSections: scope === undefined ? [] : state.restartSections,
+        }));
       },
       pushNotice: (notice) => {
         set((state) => ({

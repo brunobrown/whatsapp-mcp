@@ -20,10 +20,11 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { useSessionWatch } from "@/features/auth/useSessionWatch";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
@@ -109,27 +110,45 @@ function ThemeButton() {
 function SignOutButton() {
   const t = useT();
   const navigate = useNavigate();
+  const [asking, setAsking] = useState(false);
+  const signOut = () => {
+    void sessionService
+      .logout()
+      .catch(() => undefined)
+      .then(() => navigate({ to: "/login", replace: true }));
+  };
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      aria-label={t("shell.signOut")}
-      onClick={() => {
-        void sessionService
-          .logout()
-          .catch(() => undefined)
-          .then(() => navigate({ to: "/login", replace: true }));
-      }}
-    >
-      <LogOut aria-hidden="true" />
-    </Button>
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={t("shell.signOut")}
+        onClick={() => {
+          if (useUiStore.getState().draftDirty) setAsking(true);
+          else signOut();
+        }}
+      >
+        <LogOut aria-hidden="true" />
+      </Button>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={t("guard.signOut.title")}
+        description={t("guard.signOut.description")}
+        destructive
+        consequence={t("guard.consequence")}
+        confirmLabel={t("guard.signOut.confirm")}
+        cancelLabel={t("guard.stay")}
+        onConfirm={signOut}
+      />
+    </>
   );
 }
 
 function ListPane({ onOpen }: { onOpen: () => void }) {
   const t = useT();
   const sections = useSections();
-  const restart = useUiStore((state) => state.restart);
+  const restartSections = useUiStore((state) => state.restartSections);
   return (
     <aside aria-label={t("shell.panel")} className="flex min-h-0 min-w-0 flex-1 flex-col bg-panel">
       <div className="flex h-16 shrink-0 items-center gap-1 border-b border-line bg-surface pr-2 pl-4">
@@ -162,7 +181,7 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
               <li key={entry.id} className="border-b border-line">
                 <SectionLink
                   entry={entry}
-                  pending={entry.pending || (entry.restart !== null && restart.includes(entry.restart))}
+                  pending={entry.pending || restartSections.includes(entry.id)}
                   onOpen={onOpen}
                 />
               </li>
@@ -176,8 +195,8 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
 
 function DetailPane({ active, showBack, onBack }: { active: SectionSummary | undefined; showBack: boolean; onBack: () => void }) {
   const t = useT();
-  const restart = useUiStore((state) => state.restart);
-  const pending = active !== undefined && (active.pending || (active.restart !== null && restart.includes(active.restart)));
+  const restartSections = useUiStore((state) => state.restartSections);
+  const pending = active !== undefined && (active.pending || restartSections.includes(active.id));
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 sm:px-4">
