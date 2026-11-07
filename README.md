@@ -13,7 +13,7 @@ It connects to your **personal WhatsApp account** directly through the WhatsApp 
 ## Contents
 
 - [What this fork adds](#what-this-fork-adds)
-- [Installation](#installation) · [Architecture](#architecture-overview) · [Usage](#usage) (tools, reading, monitoring, sending, reactions, polls, media, webhooks, channel, watch)
+- [Installation](#installation) · [Architecture](#architecture-overview) · [Usage](#usage) (tools, reading, monitoring, sending, reactions, polls, media, webhooks, channel, watch, web interface)
 - [Configuration](#configuration) · [Error codes](#error-codes) · [Security of your data](#security-of-your-data) · [Troubleshooting](#troubleshooting)
 - More documents: [security guide for agents](docs/security-guide.md), [example monitor profiles](docs/profile-examples.md)
 
@@ -622,6 +622,30 @@ The path of the project must be made of letters, digits and `_ . / -` (the targe
 
 Everything the bridge prints also goes to `whatsapp-bridge/store/bridge.log` (rotated at 5 MB, 3 old files kept, mode 0600). The pairing QR code is shown on the terminal only. The log contains message text, like the database does.
 
+### Web interface
+
+The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). It is built with [Flet](https://flet.dev) 1.1 in its declarative mode, and the dependencies live in an optional group:
+
+```bash
+cd whatsapp-mcp-server && uv sync --group ui     # once; the MCP server itself does not need Flet
+```
+
+Without that group, or when the port is taken, the bridge logs why and goes on without the interface. `WHATSAPP_UI=off` keeps it from starting.
+
+**First access.** There is no default password. While none exists, the log of the bridge (the terminal where it runs, or `store/bridge.log`) holds a *setup code* that lives 15 minutes and works once; type it in the screen, choose a password of 12 to 256 characters and you are in. Only a scrypt hash is kept, in `ui_auth.json` (`0600`). A wrong password is answered the same way every time and each failure lengthens the wait before the next try; a session ends after 30 minutes without activity or when you sign out. Reloading the page asks for the password again.
+
+**What it does.** It edits `send_policy.json`, `monitor_profiles.json`, `webhooks.json` and `channel.json` with the validation the project already has (the webhooks file is checked by the bridge itself), and the settings that were only environment variables (media download, retention, deleted content, the log, the time zone, draft validity, read-only mode, session taint, where the interface listens). Each field shows its value, its default and where the value comes from (default, file, or environment variable). A field the environment defines is locked and names the variable; the environment always wins. A change that needs a restart says which process: the bridge, or the MCP server (the interface sees which MCP servers are running and still hold an older value). A file edited by hand since the screen loaded is not overwritten: the save is refused and the changes stay on screen. Secrets (the tokens and webhook secrets) are never sent to the browser, only whether they are set; leaving a secret box empty keeps the stored one.
+
+The variables are kept in `ui_settings.json` (`0600`) in the configuration directory, and the bridge and the MCP server fill in, at start, the ones the environment lacks. Never editable there: keys, the configuration directory, paths of other files, the database encryption switch and `WHATSAPP_UI_ALLOW_REMOTE`.
+
+**What it does not do.** It does not send, vote, react, delete or approve a draft. It shows the bridge's state, the counters, the pending drafts (without their text) and the audit logs, read-only. Whoever is signed in to it controls the send policy and the profiles, so treat its password like the other tokens of this project: an obstacle, not a barrier (see [the security guide](docs/security-guide.md)).
+
+**Exposure.** It listens on `127.0.0.1`. `WHATSAPP_UI_HOST` outside loopback also needs `WHATSAPP_UI_ALLOW_REMOTE=true` in the environment of the bridge (the interface cannot set it for itself), and it has no TLS: put a reverse proxy with HTTPS in front. `WHATSAPP_UI_PORT` changes the port.
+
+**Under the systemd unit** the sandbox lets the service write only `store/` and the configuration directory. The unit runs the interface with the environment prepared by `uv sync --group ui` (`make install-service` says so), and the interface can edit only files in the configuration directory: `send_policy.json` and `monitor_profiles.json` live next to the server code, which the unit keeps read-only, so for the interface to edit them point `WHATSAPP_SEND_POLICY` and `WHATSAPP_MONITOR_CONFIG` at files in the configuration directory, in the unit and in the `env` of your MCP client (both must name the same files).
+
+`make ui` (in `whatsapp-bridge/`) runs the interface alone, for working on it. Flutter draws the page itself, so the accessibility tree that screen readers use is only built when it is asked for (a screen reader does it; the page also has an "Enable accessibility" control for that). Controls have labels and every colour pair is tested for contrast, but it has not been tried with a real screen reader.
+
 ## Configuration
 
 Environment variables are read **only when the process starts**: after changing one, restart the bridge (or the MCP server, for the ones it reads).
@@ -651,6 +675,11 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_MONITOR_CONFIG` | MCP server | `whatsapp-mcp-server/monitor_profiles.json` | Path of the monitoring profiles |
 | `WHATSAPP_MONITOR_AUDIT_LOG` | MCP server | `whatsapp-mcp-server/monitor_audit.log` | Path of the monitor's reply audit log (also where its rate limits are counted) |
 | `WHATSAPP_OWN_NUMBER` | MCP server | the number the bridge reports | The account's number for the `"me"` target, when the bridge is not running |
+| `WHATSAPP_UI` | bridge | on | `off`, `false` or `0` stop the bridge from starting the web interface |
+| `WHATSAPP_UI_HOST` | bridge, web interface | `127.0.0.1` | The address the web interface listens on. Outside loopback it also needs `WHATSAPP_UI_ALLOW_REMOTE=true` |
+| `WHATSAPP_UI_PORT` | bridge, web interface | `8765` | The port of the web interface (1024 to 65535) |
+| `WHATSAPP_UI_ALLOW_REMOTE` | bridge, web interface | off | `true` lets the interface listen outside loopback. It has a password but no TLS: put a reverse proxy with HTTPS in front. Only the environment of the process sets it, never the interface itself |
+| `WHATSAPP_UI_COMMAND` | bridge | `uv run --directory ../whatsapp-mcp-server --group ui python -m ui` | The command the bridge runs for the interface, split at spaces (no quoting) |
 
 The bridge also needs to be **restarted after updating it** for new behaviour to apply: recording of file name, MIME type, forwarded and reply information, automatic download, mentions and replies, polls and votes, deleting messages, the status endpoint and the log all live in the bridge.
 
@@ -733,7 +762,7 @@ The bridge keeps a random token in `api_token` (same directory as `db.key`, `060
 
 ### Files with tokens
 
-`send_policy.json` and `monitor_profiles.json` hold tokens (and `webhooks.json` holds secrets; the bridge refuses it if others can read it). `channel.json`, `monitor_drafts.json`, the cursor files of `watch.py` and the exports are also private (`0600`); the channel refuses a `channel.json` that others can read. If other users can read them, the server logs a warning, and `get_monitor_profiles` lists `warnings`, with the `chmod 600` to run.
+`send_policy.json` and `monitor_profiles.json` hold tokens (and `webhooks.json` holds secrets; `ui_auth.json` holds the interface's password hash and `ui_settings.json` its saved settings, both `0600`; the bridge refuses it if others can read it). `channel.json`, `monitor_drafts.json`, the cursor files of `watch.py` and the exports are also private (`0600`); the channel refuses a `channel.json` that others can read. If other users can read them, the server logs a warning, and `get_monitor_profiles` lists `warnings`, with the `chmod 600` to run.
 
 ### As a service
 

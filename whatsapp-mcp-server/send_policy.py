@@ -119,16 +119,8 @@ def resolve_target(recipient: str, directory: Directory) -> Target:
     return Target(True, jids[0], jids[0], directory.name_of(jids[0]))
 
 
-def _load() -> Tuple[Optional[dict], Optional[str]]:
-    """The policy, or (None, None) when there is no file, or (None, problem) when it is unusable."""
-    filemode.warn_if_open(POLICY_PATH)   # the override token must not be readable by other users
-    try:
-        with open(POLICY_PATH, encoding="utf-8") as f:
-            policy = json.load(f)
-    except FileNotFoundError:
-        return None, None
-    except (OSError, ValueError) as e:
-        return None, f"cannot read {os.path.basename(POLICY_PATH)}: {e}"
+def parse_policy(policy) -> Tuple[Optional[dict], Optional[str]]:
+    """Validate an already parsed policy: (policy, None), or (None, the problem). Reads no file."""
     if not isinstance(policy, dict):
         return None, "the policy file must contain a JSON object"
     if policy.get("mode", "denylist") not in _MODES:
@@ -145,6 +137,19 @@ def _load() -> Tuple[Optional[dict], Optional[str]]:
     if token is not None and not isinstance(token, str):
         return None, '"override_token" must be a text'
     return policy, None
+
+
+def _load() -> Tuple[Optional[dict], Optional[str]]:
+    """The policy, or (None, None) when there is no file, or (None, problem) when it is unusable."""
+    filemode.warn_if_open(POLICY_PATH)   # the override token must not be readable by other users
+    try:
+        with open(POLICY_PATH, encoding="utf-8") as f:
+            policy = json.load(f)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as e:
+        return None, f"cannot read {os.path.basename(POLICY_PATH)}: {e}"
+    return parse_policy(policy)
 
 
 def _same_chat(a: str, b: str, directory: Directory) -> bool:

@@ -81,24 +81,10 @@ def _number(raw: dict, key: str, default, low, high, whole=False):
     return int(value) if whole else float(value)
 
 
-def load_config(path: Optional[str] = None) -> Config:
-    """The channel's configuration. No file is a quiet 'off'; a file that cannot be used is 'off' with the reason."""
-    path = path or config_path()
-    try:
-        mode = stat.S_IMODE(os.stat(path).st_mode)
-    except FileNotFoundError:
-        return Config()
-    except OSError as e:
-        return _refused(f"cannot read {os.path.basename(path)}: {e.strerror}")
-    if sys.platform != "win32" and mode & 0o077:
-        return _refused(f"{os.path.basename(path)} can be read by other users (mode {mode:04o}); run chmod 600")
-    try:
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except (OSError, ValueError, RecursionError):
-        return _refused(f"{os.path.basename(path)} is not valid JSON")
+def parse_config(raw, name: str = CONFIG_FILE) -> Config:
+    """Validate an already parsed file: the Config, off with the reason when it cannot be used. Reads no file."""
     if not isinstance(raw, dict):
-        return _refused(f"{os.path.basename(path)} must be a JSON object")
+        return _refused(f"{name} must be a JSON object")
     unknown = sorted(set(raw) - _KEYS)
     if unknown:
         return _refused(f"unknown key {unknown[0]!r}")
@@ -126,6 +112,25 @@ def load_config(path: Optional[str] = None) -> Config:
     except ValueError as e:
         return _refused(str(e))
     return cfg
+
+
+def load_config(path: Optional[str] = None) -> Config:
+    """The channel's configuration. No file is a quiet 'off'; a file that cannot be used is 'off' with the reason."""
+    path = path or config_path()
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        return Config()
+    except OSError as e:
+        return _refused(f"cannot read {os.path.basename(path)}: {e.strerror}")
+    if sys.platform != "win32" and mode & 0o077:
+        return _refused(f"{os.path.basename(path)} can be read by other users (mode {mode:04o}); run chmod 600")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError, RecursionError):
+        return _refused(f"{os.path.basename(path)} is not valid JSON")
+    return parse_config(raw, os.path.basename(path))
 
 
 _status: Dict[str, Any] = {"enabled": False, "error": None}
