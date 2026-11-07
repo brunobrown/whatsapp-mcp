@@ -20,7 +20,7 @@ test:
 
 # The web interface alone, without the bridge (the bridge starts it by itself; this is for working on it).
 ui:
-	cd $(SERVER_DIR) && uv run --group ui python -m ui
+	cd $(SERVER_DIR) && uv run python -m ui
 
 # Writes the systemd --user unit for this directory. Then: systemctl --user enable --now whatsapp-bridge
 install-service: build
@@ -29,7 +29,7 @@ install-service: build
 	mkdir -p $(SERVICE_DIR)
 	sed -e 's|@DIR@|$(CURDIR)|g' -e 's|@CONFIG@|$(CONFIG_DIR)|g' -e 's|@SERVER@|$(SERVER_DIR)|g' $(SERVICE).in > $(SERVICE_DIR)/$(SERVICE)
 	@echo "Wrote $(SERVICE_DIR)/$(SERVICE)"
-	@echo "For the web interface under this unit, run once: (cd $(SERVER_DIR) && uv sync --group ui)"
+	@echo "For the web interface under this unit, run once: (cd $(SERVER_DIR) && uv sync)"
 	@echo "Next: systemctl --user daemon-reload && systemctl --user enable --now whatsapp-bridge"
 
 # Overwrites with zeros and removes the plaintext copies left behind when the databases were encrypted.

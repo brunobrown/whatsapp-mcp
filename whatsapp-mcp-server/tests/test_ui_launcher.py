@@ -1,88 +1,94 @@
-"""The launcher of the web interface: where it listens, and what it refuses (UI-03..UI-06)."""
+"""The launcher (UI-01, UI-04, UI-05, UI-06): where the interface listens, what it refuses, how it ends."""
 import json
 import os
+import re
+import signal
 import socket
 import subprocess
 import sys
+import time
 
+import httpx
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from ui import launcher
+from ui.api.services import Settings
 
-from ui import launcher  # noqa: E402
+SERVER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_main(environ, probe=lambda *_: None):
-    """main() with a runner that records the settings instead of starting Flet, and no real port check."""
+    """main() with a runner that records the settings instead of serving, and no real port check."""
     seen = []
     code = launcher.main(environ=environ, runner=seen.append, probe=probe)
     return code, seen
 
 
-def test_launcher_default_host_is_loopback():  # UI-05
+def free_port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    if port < 1024:
+        pytest.skip("ephemeral port below 1024")
+    return port
+
+
+def test_port_and_remote_bind_rules():
+    refused_ports = ["abc", "0", "80", "1023", "65536", "-1", "8765.5",
+                     "9_000", "+9000", "８７６５", "٩٠٠٠", "9000\n", "90\n00", "0x2000", "9 000", "1e4"]
+    for port in refused_ports:
+        with pytest.raises(launcher.LaunchError, match="WHATSAPP_UI_PORT"):
+            launcher.resolve({"WHATSAPP_UI_PORT": port})
+    for port, expected in (("1024", 1024), ("65535", 65535), (" 9000 ", 9000), ("\t9000", 9000)):
+        assert launcher.resolve({"WHATSAPP_UI_PORT": port}).port == expected
+
+    for host in ("0.0.0.0", "::", "192.168.1.20", "example.com", "10.0.0.5"):
+        with pytest.raises(launcher.LaunchError) as raised:
+            launcher.resolve({"WHATSAPP_UI_HOST": host})
+        assert "WHATSAPP_UI_ALLOW_REMOTE=true" in str(raised.value) and host in str(raised.value)
+        for flag in ("false", "1", "yes", "", "TRUE-ish"):
+            with pytest.raises(launcher.LaunchError):
+                launcher.resolve({"WHATSAPP_UI_HOST": host, "WHATSAPP_UI_ALLOW_REMOTE": flag})
+    allowed = launcher.resolve({"WHATSAPP_UI_HOST": "0.0.0.0", "WHATSAPP_UI_ALLOW_REMOTE": "True"})
+    assert allowed.host == "0.0.0.0" and allowed.remote is True
+    assert "TLS" in launcher.remote_warning(allowed)
+    for host in ("127.0.0.1", "127.0.0.2", "::1", "localhost"):
+        assert launcher.resolve({"WHATSAPP_UI_HOST": host}).host == host
+
+
+def test_the_default_bind_is_loopback_on_8765():
     settings = launcher.resolve({})
 
-    assert (settings.host, settings.port) == ("127.0.0.1", 8765)
-
-
-def test_launcher_uses_port_from_environment():  # UI-04
-    assert launcher.resolve({"WHATSAPP_UI_PORT": "9123"}).port == 9123
-
-
-@pytest.mark.parametrize("port, expected", [("1024", 1024), ("65535", 65535), (" 9000 ", 9000)])
-def test_the_first_and_last_usable_ports_are_accepted(port, expected):  # UI-04 (1024 to 65535)
-    assert launcher.resolve({"WHATSAPP_UI_PORT": port}).port == expected
-
-
-@pytest.mark.parametrize("port", ["abc", "0", "80", "1023", "65536", "-1", "8765.5"])
-def test_a_port_that_is_not_usable_is_refused_not_replaced_by_the_default(port):  # UI-04
-    with pytest.raises(launcher.LaunchError, match="WHATSAPP_UI_PORT"):
-        launcher.resolve({"WHATSAPP_UI_PORT": port})
+    assert (settings.host, settings.port, settings.remote) == ("127.0.0.1", 8765, False)
+    assert settings.url == "http://127.0.0.1:8765"
 
 
 @pytest.mark.parametrize("blank", ["", "  "])
-def test_a_blank_port_or_host_means_the_default(blank):  # UI-04, UI-05
+def test_a_blank_port_or_host_means_the_default(blank):
     settings = launcher.resolve({"WHATSAPP_UI_PORT": blank, "WHATSAPP_UI_HOST": blank})
 
     assert (settings.host, settings.port) == (launcher.DEFAULT_HOST, launcher.DEFAULT_PORT)
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.2", "::1", "localhost"])
-def test_a_loopback_host_needs_no_opt_in(host):  # UI-05
-    assert launcher.resolve({"WHATSAPP_UI_HOST": host}).host == host
+def test_the_url_of_an_ipv6_host_has_brackets():
+    assert launcher.resolve({"WHATSAPP_UI_HOST": "::1"}).url == "http://[::1]:8765"
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "example.com", "10.0.0.5"])
-def test_launcher_refuses_remote_host_without_opt_in(host):  # UI-06
-    with pytest.raises(launcher.LaunchError) as raised:
-        launcher.resolve({"WHATSAPP_UI_HOST": host})
+def test_a_refused_port_exits_1_with_the_reason_and_serves_nothing(capsys):
+    code, seen = run_main({"WHATSAPP_UI_PORT": "80"})
 
-    assert "WHATSAPP_UI_ALLOW_REMOTE=true" in str(raised.value) and host in str(raised.value)
-
-
-@pytest.mark.parametrize("flag", ["false", "1", "yes", "", "TRUE-ish"])
-def test_only_true_allows_a_remote_host(flag):  # UI-06
-    with pytest.raises(launcher.LaunchError):
-        launcher.resolve({"WHATSAPP_UI_HOST": "0.0.0.0", "WHATSAPP_UI_ALLOW_REMOTE": flag})
+    assert code == 1 and seen == []
+    assert "WHATSAPP_UI_PORT" in capsys.readouterr().err
 
 
-def test_a_remote_host_with_the_opt_in_is_accepted_and_warns_about_the_missing_tls():  # UI-06
-    settings = launcher.resolve({"WHATSAPP_UI_HOST": "0.0.0.0", "WHATSAPP_UI_ALLOW_REMOTE": "True"})
+def test_a_remote_host_without_permission_exits_1_with_the_reason(capsys):
+    code, seen = run_main({"WHATSAPP_UI_HOST": "0.0.0.0"})
 
-    assert settings.host == "0.0.0.0" and settings.remote
-    assert "TLS" in launcher.remote_warning(settings)
-
-
-def test_launcher_clears_flet_server_environment():  # UI-06
-    environ = {"FLET_SERVER_IP": "0.0.0.0", "FLET_SERVER_PORT": "80", "FLET_SERVER_UDS_PATH": "/tmp/x.sock",
-               "KEEP": "1"}
-
-    launcher.prepare_environment(environ)
-
-    assert environ == {"KEEP": "1", "FLET_FORCE_WEB_SERVER": "true"}
+    assert code == 1 and seen == []
+    assert "WHATSAPP_UI_ALLOW_REMOTE" in capsys.readouterr().err
 
 
-def test_launcher_port_in_use_exits_with_reason(capsys):  # UI-03
+def test_a_busy_port_exits_1_with_the_message(capsys):
     with socket.socket() as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
@@ -94,15 +100,11 @@ def test_launcher_port_in_use_exits_with_reason(capsys):  # UI-03
 
     err = capsys.readouterr().err
     assert code == 1 and seen == []
-    assert str(port) in err and "already in use" in err
+    assert str(port) in err and "already in use" in err and "WHATSAPP_UI_PORT" in err
 
 
-def test_a_free_port_starts_the_runner_with_the_settings(capsys):  # UI-04
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    if port < 1024:
-        pytest.skip("ephemeral port below 1024")
+def test_a_free_port_starts_the_runner_with_the_settings_and_prints_the_url(capsys):
+    port = free_port()
 
     code, seen = run_main({"WHATSAPP_UI_PORT": str(port)})
 
@@ -110,59 +112,118 @@ def test_a_free_port_starts_the_runner_with_the_settings(capsys):  # UI-04
     assert f"http://127.0.0.1:{port}" in capsys.readouterr().out
 
 
-def test_main_refuses_a_remote_host_with_a_message_and_code_1(capsys):  # UI-06
-    code, seen = run_main({"WHATSAPP_UI_HOST": "0.0.0.0"})
+def test_a_remote_bind_with_permission_warns_about_the_missing_tls(capsys):
+    code, seen = run_main({"WHATSAPP_UI_HOST": "0.0.0.0", "WHATSAPP_UI_ALLOW_REMOTE": "true"})
 
-    assert code == 1 and seen == []
-    assert "WHATSAPP_UI_ALLOW_REMOTE" in capsys.readouterr().err
-
-
-def test_a_stray_flet_variable_cannot_move_the_bind(capsys):  # UI-06
-    environ = {"FLET_SERVER_IP": "0.0.0.0", "FLET_SERVER_PORT": "80"}
-
-    code, seen = run_main(environ)
-
-    assert code == 0 and seen[0].host == "127.0.0.1"
-    assert "FLET_SERVER_IP" not in environ and "FLET_SERVER_PORT" not in environ
+    assert code == 0 and seen[0].remote is True
+    assert "TLS" in capsys.readouterr().err
 
 
-def test_the_port_saved_by_the_interface_is_used_and_the_environment_wins(tmp_path, capsys):  # UI-04
+def test_whatsapp_ui_variables_keep_their_meaning(tmp_path):
     config = tmp_path / "config"
     config.mkdir()
-    (config / "ui_settings.json").write_text(json.dumps({"env": {"WHATSAPP_UI_PORT": "9123", "WHATSAPP_UI_HOST": "localhost"}}))
+    saved = {"env": {"WHATSAPP_UI_PORT": "9123", "WHATSAPP_UI_HOST": "localhost", "WHATSAPP_UI_ALLOW_REMOTE": "true"}}
+    (config / "ui_settings.json").write_text(json.dumps(saved))
     os.chmod(config / "ui_settings.json", 0o600)
 
-    from_file = launcher.main(environ={}, runner=(seen := []).append, probe=lambda *_: None)
-    in_env = launcher.main(environ={"WHATSAPP_UI_PORT": "9456"}, runner=(seen2 := []).append, probe=lambda *_: None)
+    from_file = run_main({})[1][0]
+    env_wins = run_main({"WHATSAPP_UI_PORT": "9456"})[1][0]
+    remote_not_from_file = run_main({"WHATSAPP_UI_HOST_FILE_CANNOT_OPEN": "x", "WHATSAPP_UI_HOST": "0.0.0.0"})
 
-    assert from_file == in_env == 0
-    assert (seen[0].host, seen[0].port) == ("localhost", 9123)
-    assert (seen2[0].host, seen2[0].port) == ("localhost", 9456)
-
-
-def test_importing_the_launcher_does_not_load_flet():
-    root = os.path.dirname(os.path.dirname(__file__))
-    code = f"import sys; sys.path.insert(0, {root!r}); import ui.launcher; sys.exit(1 if 'flet' in sys.modules else 0)"
-
-    done = subprocess.run([sys.executable, "-I", "-c", code])
-
-    assert done.returncode == 0
+    assert (from_file.host, from_file.port) == ("localhost", 9123)
+    assert (env_wins.host, env_wins.port) == ("localhost", 9456)
+    assert remote_not_from_file[0] == 1 and remote_not_from_file[1] == []   # the opt-in is never read from the file
+    assert launcher.resolve({"WHATSAPP_UI_PORT": "9000"}).port == 9000
+    assert launcher.resolve({"WHATSAPP_UI_HOST": "10.1.2.3", "WHATSAPP_UI_ALLOW_REMOTE": "true"}).remote is True
+    assert run_main({"WHATSAPP_UI_PORT": "9500"})[1][0].startup_environ == {"WHATSAPP_UI_PORT": "9500"}
 
 
-def test_the_settings_carry_the_environment_as_it_was_before_the_file_was_applied(tmp_path):  # CFG-04
-    import json
-    config = tmp_path / "config"
-    config.mkdir()
-    (config / "ui_settings.json").write_text(json.dumps({"env": {"WHATSAPP_UI_PORT": "9123", "WHATSAPP_AUTO_DOWNLOAD_MAX_MB": "50"}}))
-    os.chmod(config / "ui_settings.json", 0o600)
-    environ = {"KEEP": "1"}
-    seen = []
+# -- running ---------------------------------------------------------------------------------------
+def test_run_app_serves_the_app_with_uvicorn_and_the_agreed_options(monkeypatch, capsys):
+    import uvicorn
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs)))
+    settings = Settings(host="127.0.0.1", port=9777, startup_environ={"WHATSAPP_TIMEZONE": "UTC"})
 
-    launcher.main(environ=environ, runner=seen.append, probe=lambda *_: None)
+    launcher.run_app(settings)
 
-    assert seen[0].port == 9123 and environ["WHATSAPP_AUTO_DOWNLOAD_MAX_MB"] == "50"        # applied to the process
-    assert seen[0].startup_environ == {"KEEP": "1"}                                          # but remembered as it was
+    (app, kwargs), = calls
+    assert kwargs == {"host": "127.0.0.1", "port": 9777, "log_level": "warning", "server_header": False,
+                      "proxy_headers": False, "access_log": False}
+    from starlette.testclient import TestClient
+    body = TestClient(app, base_url="http://127.0.0.1:9777").get("/api/session").json()
+    assert body["state"] == "setup"
+    assert re.search(r"[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}", capsys.readouterr().out)    # the setup code is in the log
 
 
-def test_the_assets_folder_is_the_one_inside_the_package():
-    assert os.path.isfile(os.path.join(launcher.ASSETS_DIR, "fonts", "OFL.txt"))
+def test_run_app_prints_no_code_when_a_password_exists(monkeypatch, capsys):
+    import uvicorn
+    from ui_api_rig import install_password
+    install_password()
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: None)
+
+    launcher.run_app(Settings(host="127.0.0.1", port=9777))
+
+    assert "setup code" not in capsys.readouterr().out
+
+
+def spawn(port, extra_env=None):
+    env = {**os.environ, "WHATSAPP_UI_PORT": str(port), **(extra_env or {})}
+    env.pop("WHATSAPP_UI_HOST", None)
+    return subprocess.Popen([sys.executable, "-m", "ui"], cwd=SERVER_DIR, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+
+
+def wait_until_up(port, process, seconds=30):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise AssertionError(f"the process ended early: {process.stderr.read()}")
+        try:
+            return httpx.get(f"http://127.0.0.1:{port}/api/session", timeout=1)
+        except httpx.HTTPError:
+            time.sleep(0.1)
+    raise AssertionError("the interface did not come up")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM is not delivered to a child like this on Windows")
+def test_the_module_serves_on_the_port_and_sigterm_ends_it_cleanly():
+    port = free_port()
+    process = spawn(port)
+    try:
+        answer = wait_until_up(port, process)
+        assert answer.status_code == 200 and answer.json()["state"] == "setup"
+        process.send_signal(signal.SIGTERM)
+        code = process.wait(timeout=15)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+    out = process.stdout.read()
+    assert code == 0
+    assert f"http://127.0.0.1:{port}" in out and "setup code" in out
+
+
+def test_the_module_exits_1_with_a_message_when_the_port_is_busy():
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        if port < 1024:
+            pytest.skip("ephemeral port below 1024")
+        process = spawn(port)
+        _, err = process.communicate(timeout=30)
+
+    assert process.returncode == 1 and "already in use" in err
+
+
+def test_the_warning_for_a_wildcard_bind_says_which_host_names_are_served():
+    wildcard = launcher.Settings(host="0.0.0.0", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" in launcher.remote_warning(wildcard)
+
+    listed = launcher.Settings(host="0.0.0.0", port=8765, remote=True,
+                               startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true", "WHATSAPP_UI_ALLOWED_HOSTS": "mcp.example.net"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" not in launcher.remote_warning(listed)
+
+    named = launcher.Settings(host="192.168.1.20", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" not in launcher.remote_warning(named)

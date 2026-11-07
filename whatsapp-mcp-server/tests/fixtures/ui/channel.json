@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "profiles": [
+    "assistant"
+  ],
+  "polls": [],
+  "include_excerpt": false,
+  "excerpt_chars": 120,
+  "batch_seconds": 2.0,
+  "min_interval_seconds": 5.0,
+  "max_batch": 10,
+  "poll_interval_seconds": 1.0
+}

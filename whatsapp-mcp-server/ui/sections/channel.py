@@ -1,35 +1,46 @@
-"""Claude Code channel: tells an open session that something arrived (channel.json). Off by default; read when the server starts."""
+"""The Claude Code channel (channel.json, read by the MCP server at start).
+
+The rules come from channel.py: the values are given to its parser and its reason is shown beside the field.
+"""
+import re
+from typing import Any, Dict, List
+
 import channel
-from ui.core.problems import from_message
-from ui.core.registry import Field, JsonFile, Section, register
+from ui.config.fields import Field, Problem
+from ui.config.registry import JsonFile, Section
 
-_KEYS = ("enabled", "profiles", "polls", "include_excerpt", "excerpt_chars", "batch_seconds", "min_interval_seconds",
-         "max_batch", "poll_interval_seconds")
-_DEFAULTS = channel.Config()
+FIELDS = (
+    Field("enabled", "Enabled", "bool", default=False,
+          help="The channel is off unless this is on. It lets a notice wake an open Claude Code session.",
+          risk="A notice from WhatsApp can wake an agent session that nobody is watching.", risk_when=(True,)),
+    Field("profiles", "Monitor profiles", "list", max_items=20,
+          help="Names of the monitor profiles whose messages are announced, one per line."),
+    Field("polls", "Polls", "list", max_items=20, help="Message ids of the polls whose votes are announced, one per line."),
+    Field("include_excerpt", "Include an excerpt", "bool", default=False,
+          help="Add a short piece of the message text to the notice. It is another person's words.",
+          risk="A piece of the text of messages reaches the agent inside the notice.", risk_when=(True,)),
+    Field("excerpt_chars", "Excerpt length", "int", default=120, bounds=(1, 280)),
+    Field("batch_seconds", "Batch window in seconds", "float", default=3, bounds=(0, 60),
+          help="Messages that arrive within this time are announced together."),
+    Field("min_interval_seconds", "Minimum seconds between notices", "float", default=5, bounds=(0, 3600)),
+    Field("max_batch", "Largest batch", "int", default=20, bounds=(1, 100)),
+    Field("poll_interval_seconds", "Seconds between checks", "float", default=2, bounds=(0.05, 60)),
+)
+_KEYS = {f.key for f in FIELDS}
 
 
-def validate(values):
-    cfg = channel.parse_config(values)
-    return [from_message(cfg.error, _KEYS)] if cfg.error else []
+def _validate(values: Dict[str, Any]) -> List[Problem]:
+    error = channel.parse_config(values).error
+    if error is None:
+        return []
+    word = re.match(r"[a-z_]+", error)
+    key = word.group(0) if word and word.group(0) in _KEYS else None
+    if key is None and error.startswith("list at least one"):
+        key = "profiles"
+    return [Problem(key, error)]
 
 
-SECTION = register(Section(
-    id="channel", title="Canal do Claude Code", icon="notifications", order=40, restart="server",
-    description="Avisa uma sessão aberta do Claude Code, só com ids e horários, quando um perfil do monitor ou uma enquete tem novidade. Pesquisa em andamento; vem desligado.",
-    storage=JsonFile(channel.config_path), validate=validate,
-    fields=(
-        Field("enabled", "Canal ativo", "bool", default=False,
-              help="Só vale se o Claude Code for iniciado com o servidor como canal de desenvolvimento."),
-        Field("profiles", "Perfis do monitor", "list", default=[], max_length=100,
-              help="Os perfis são o único controle sobre o que vira aviso: conversas, remetentes, gatilhos e assuntos. Até 20."),
-        Field("polls", "Enquetes", "list", default=[], max_length=100, help="Ids de mensagens de enquete cujos votos e encerramento são avisados. Até 20."),
-        Field("include_excerpt", "Incluir um trecho do texto", "bool", default=_DEFAULTS.include_excerpt, risk_when=(True,),
-              risk="O trecho é texto de um desconhecido colocado diante do agente. Deixe desligado, a menos que aceite esse risco.",
-              help="Desligado, o aviso leva só ids, tipos e horários."),
-        Field("excerpt_chars", "Tamanho do trecho", "int", default=_DEFAULTS.excerpt_chars, bounds=(1, 280)),
-        Field("batch_seconds", "Agrupar avisos em (s)", "float", default=_DEFAULTS.batch_seconds, bounds=(0, 60)),
-        Field("min_interval_seconds", "Intervalo mínimo entre avisos (s)", "float", default=_DEFAULTS.min_interval_seconds, bounds=(0, 3600)),
-        Field("max_batch", "Eventos por aviso", "int", default=_DEFAULTS.max_batch, bounds=(1, 100)),
-        Field("poll_interval_seconds", "Consulta às enquetes (s)", "float", default=_DEFAULTS.poll_interval_seconds, bounds=(0.05, 60)),
-    ),
-))
+SECTION = Section(
+    id="channel", title="Claude Code channel", order=40, icon="radio", storage=JsonFile(channel.config_path),
+    restart="server", fields=FIELDS, validator=_validate,
+    description="Tell an open Claude Code session that something happened. Off by default; read by the MCP server at start.")

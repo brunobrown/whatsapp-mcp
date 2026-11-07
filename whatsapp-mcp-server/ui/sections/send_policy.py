@@ -1,40 +1,44 @@
-"""Send policy: which chats the agent may send to (send_policy.json). Read at every send, so no restart."""
+"""The send policy: who the MCP server may send to (send_policy.json, read on every send).
+
+The rules come from send_policy.py, so the interface never carries its own copy of them.
+"""
+import re
+from typing import Any, Dict, List
+
 import send_policy
-from ui.core.problems import from_message
-from ui.core.registry import Field, JsonFile, Problem, Section, register
+from ui.config.fields import Field, Problem
+from ui.config.registry import JsonFile, Section
 
-_KEYS = ("mode", "allow", "deny", "override_token", "session_taint")
-_ENTRY = 200
-
-
-def validate(values):
-    policy, message = send_policy.parse_policy(values)
-    if message:
-        return [from_message(message, _KEYS)]
-    problems = []
-    if values.get("session_taint") not in (None, "block", "off"):
-        problems.append(Problem("session_taint", "deve ser block ou off"))
-    if values.get("override_token") in send_policy.PLACEHOLDER_TOKENS:
-        problems.append(Problem("override_token", "ainda é o valor do arquivo de exemplo, que não libera nada: escolha o seu"))
-    return problems
+_QUOTED_KEY = re.compile(r'^"([a-z_]+)"')
 
 
-SECTION = register(Section(
-    id="send_policy", title="Política de envio", icon="shield", order=10,
-    description="Define para quais conversas o agente pode enviar mensagens. É lida a cada envio.",
-    storage=JsonFile(lambda: send_policy.POLICY_PATH),
-    validate=validate,
-    fields=(
-        Field("mode", "Modo", "choice", default="denylist", options=("denylist", "allowlist"),
-              help="denylist: envia a todos, menos aos da lista de bloqueio. allowlist: envia só aos da lista de permissão."),
-        Field("allow", "Lista de permissão", "list", default=[], max_length=_ENTRY,
-              help="Nomes de conversas, números ou JIDs (123@g.us). Vale no modo allowlist."),
-        Field("deny", "Lista de bloqueio", "list", default=[], max_length=_ENTRY,
-              help="Nomes de conversas, números ou JIDs. Vale nos dois modos e vence a lista de permissão."),
-        Field("override_token", "Token de liberação", "secret",
-              help="Quem o informa em um envio libera aquele envio bloqueado. É um obstáculo, não uma barreira."),
-        Field("session_taint", "Contaminação da sessão", "choice", default="block", options=("block", "off"), risk_when=("off",),
-              risk="Com off, o agente pode enviar a uma conversa o que leu em outra: uma mensagem maliciosa pode levá-lo a vazar dados.",
-              help="block impede enviar a uma conversa diferente das que a sessão já leu. A variável WHATSAPP_SESSION_TAINT, se definida, vence este valor."),
-    ),
-))
+def _validate(values: Dict[str, Any]) -> List[Problem]:
+    _, problem = send_policy.parse_policy(values)
+    if problem is None:
+        return []
+    named = _QUOTED_KEY.match(problem)
+    key = named.group(1) if named and named.group(1) in {f.key for f in FIELDS} else None
+    return [Problem(key, problem)]
+
+
+FIELDS = (
+    Field("mode", "Mode", "choice", default="denylist", options=("denylist", "allowlist"),
+          help="Denylist sends anywhere that is not denied. Allowlist sends only to the chats listed under Allow."),
+    Field("allow", "Allow", "list",
+          help="Chats the server may send to when the mode is allowlist. One per line: a chat name, a phone number or a JID."),
+    Field("deny", "Deny", "list",
+          help="Chats the server never sends to. Deny always wins. One per line: a chat name, a phone number or a JID."),
+    Field("override_token", "Override token", "secret",
+          help="A value the agent can pass to release one blocked send. A deliberate speed bump, not a security boundary: "
+               "whoever can read the file can read the token."),
+    Field("session_taint", "Session taint", "choice", default="block", options=("block", "off"),
+          help="Block sending to a different chat than the ones read in the session. The environment variable "
+               "WHATSAPP_SESSION_TAINT wins over this value.",
+          risk="Turning this off lets text read in one chat make the agent pass its content to another chat.",
+          risk_when=("off",)),
+)
+
+SECTION = Section(
+    id="send_policy", title="Send policy", order=10, icon="shield", storage=JsonFile(lambda: send_policy.POLICY_PATH),
+    fields=FIELDS, validator=_validate,
+    description="Where the MCP server may send messages. Read on every send; no restart needed.")
