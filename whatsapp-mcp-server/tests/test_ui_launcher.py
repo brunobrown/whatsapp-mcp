@@ -34,11 +34,12 @@ def free_port():
 
 
 def test_port_and_remote_bind_rules():
-    refused_ports = ["abc", "0", "80", "1023", "65536", "-1", "8765.5"]
+    refused_ports = ["abc", "0", "80", "1023", "65536", "-1", "8765.5",
+                     "9_000", "+9000", "８７６５", "٩٠٠٠", "9000\n", "90\n00", "0x2000", "9 000", "1e4"]
     for port in refused_ports:
         with pytest.raises(launcher.LaunchError, match="WHATSAPP_UI_PORT"):
             launcher.resolve({"WHATSAPP_UI_PORT": port})
-    for port, expected in (("1024", 1024), ("65535", 65535), (" 9000 ", 9000)):
+    for port, expected in (("1024", 1024), ("65535", 65535), (" 9000 ", 9000), ("\t9000", 9000)):
         assert launcher.resolve({"WHATSAPP_UI_PORT": port}).port == expected
 
     for host in ("0.0.0.0", "::", "192.168.1.20", "example.com", "10.0.0.5"):

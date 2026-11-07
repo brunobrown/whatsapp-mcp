@@ -8,6 +8,7 @@ handler is ours and ends the process with code 0 instead of letting the signal k
 """
 import ipaddress
 import os
+import re
 import signal
 import socket
 import sys
@@ -40,10 +41,9 @@ def resolve(environ: MutableMapping[str, str]) -> Settings:
     raw_port = environ.get("WHATSAPP_UI_PORT")
     port = DEFAULT_PORT
     if raw_port is not None and raw_port.strip() != "":
-        try:
-            port = int(raw_port.strip())
-        except ValueError:
-            port = 0
+        digits = raw_port.strip(" \t")
+        # Plain ASCII digits only: int() would also take 9_000, +9000, fullwidth and Arabic-Indic digits.
+        port = int(digits) if re.fullmatch(r"[0-9]+", digits) else 0
         if not MIN_PORT <= port <= MAX_PORT:
             raise LaunchError(f"WHATSAPP_UI_PORT must be a whole number from {MIN_PORT} to {MAX_PORT} (got {raw_port!r})")
     remote = not _is_loopback(host)
