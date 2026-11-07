@@ -31,3 +31,40 @@ def test_a_new_push_to_a_pull_request_cancels_the_run_it_replaces_but_pushes_to_
     # cancelling is conditional: only for pull_request events, so a merged commit on main or dev is checked to the end
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
     assert "cancel-in-progress: true" not in text
+
+
+def frontend_steps():
+    text = read()
+    assert re.search(r"^  frontend:\s*$", text, re.M), "the workflow needs a frontend job"
+    job = re.split(r"^  frontend:\s*$", text, flags=re.M)[1]
+    job = re.split(r"^  \w[\w-]*:\s*$", job, flags=re.M)[0]            # up to the next job
+    return job
+
+
+def test_ci_runs_vitest_for_the_spa():  # MIG-11
+    job = frontend_steps()
+    assert re.search(r'node-version:\s*"?24"?', job)
+    assert re.search(r"run:\s*npm ci\b", job)
+    assert re.search(r"run:\s*npx vitest run\b.*--coverage", job)
+    assert "working-directory: whatsapp-mcp-server/frontend" in job
+
+
+def test_ci_runs_playwright_with_no_retries():  # MIG-12
+    job = frontend_steps()
+    assert re.search(r"run:\s*npx playwright install\b.*chromium", job)
+    assert re.search(r"run:\s*npx playwright test\s*$", job, re.M)    # no flag turns retries on
+    assert "--retries" not in job
+    config = open(os.path.join(os.path.dirname(__file__), "..", "frontend", "playwright.config.ts"), encoding="utf-8").read()
+    assert re.search(r"^\s*retries:\s*0,", config, re.M)
+    # the pages are built before the browser tests, which serve them from ui/web
+    assert job.index("npx vite build") < job.index("npx playwright test")
+
+
+def test_ci_fails_on_type_lint_or_build_errors():  # MIG-13
+    job = frontend_steps()
+    for command in ("npx tsc --noEmit", "npx eslint .", "npx vite build"):
+        assert re.search(r"run:\s*" + re.escape(command) + r"\s*$", job, re.M), command
+    # nothing may swallow a failure: no continue-on-error, no "|| true", no step-level shell override
+    assert "continue-on-error" not in job
+    assert "|| true" not in job and "|| :" not in job
+    assert not re.search(r"^\s*shell:", job, re.M)

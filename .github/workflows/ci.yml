@@ -56,3 +56,45 @@ jobs:
         run: uv sync --locked
       - name: Test
         run: uv run pytest -q
+
+  frontend:
+    name: Web interface
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The end-to-end tests start the real interface (python -m ui), so the Python environment is needed too.
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: whatsapp-mcp-server/uv.lock
+      - name: Install the Python environment
+        run: uv sync --locked
+        working-directory: whatsapp-mcp-server
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: whatsapp-mcp-server/frontend/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Types
+        run: npx tsc --noEmit
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Lint
+        run: npx eslint .
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Unit tests
+        run: npx vitest run --coverage
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Build
+        run: npx vite build
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+        working-directory: whatsapp-mcp-server/frontend
+      - name: End-to-end tests
+        run: npx playwright test
+        working-directory: whatsapp-mcp-server/frontend
