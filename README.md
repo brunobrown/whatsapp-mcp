@@ -576,6 +576,8 @@ Database: `DATABASE_KEY_UNAVAILABLE`, `DATABASE_UNREADABLE` (the MCP server cann
 
 ## Security of your data
 
+Using an agent on top of this? Read the [security guide for agents](docs/security-guide.md) (threat model, what the approval token is and is not, how to separate a test group from production) and the [example profiles](docs/profile-examples.md).
+
 Everything the bridge stores is yours and stays on your machine. These are the protections, and their limits.
 
 | Protected | How |
