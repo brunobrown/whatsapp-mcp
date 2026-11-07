@@ -10,6 +10,7 @@ import pollwatch
 import capabilities
 import drafts
 import metrics
+import export
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -739,6 +740,39 @@ def get_metrics(window_hours: float = 24) -> Dict[str, Any]:
         endpoints; null when the bridge does not answer). Chat ids, names and senders are never included.
     """
     return metrics.collect(window_hours, bridge_status=whatsapp_get_connection_status())
+
+@mcp.tool(annotations=READ_ONLY)
+def export_conversation(
+    chat_jid: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    anonymize: bool = False,
+    include_polls: bool = True,
+    include_reactions: bool = True,
+    limit: int = 500,
+    save_as: Optional[str] = None
+) -> Dict[str, Any]:
+    """Export a window of one chat (messages, polls with their votes, reactions) as structured data for archiving.
+
+    Read only. Oldest first; when there is more, has_more is true and next_after is the value to pass as `after`.
+
+    Args:
+        chat_jid: The chat
+        after: ISO-8601 start (exclusive); a date without a zone uses WHATSAPP_TIMEZONE or the system zone
+        before: ISO-8601 end (exclusive)
+        anonymize: People become P1, P2, ... (Me stays Me), the chat id and name become [chat], @mentions and phone-like
+                   numbers in the text are masked and media file names are dropped. Names written inside message
+                   text are not found: review before sharing
+        include_polls: Polls created in the window, with options, votes and who voted (pseudonyms when anonymized)
+        include_reactions: The reactions that stand on the messages of the window
+        limit: At most this many messages (1 to 2000, default 500)
+        save_as: Also write the result to <configuration directory>/exports/<save_as>.json (mode 0600). Letters, digits, . - _
+
+    Returns:
+        success, chat, range, count, has_more, next_after, messages, polls, reactions, untrusted_content and notice,
+        plus saved_to when save_as was given. Errors: INVALID_ARGUMENT, CHAT_NOT_FOUND, AMBIGUOUS_CHAT, DIRECTORY_UNAVAILABLE
+    """
+    return export.export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit, save_as)
 
 @mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:

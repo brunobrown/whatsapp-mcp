@@ -467,6 +467,12 @@ class Hook(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 ```
 
+### Exporting a conversation
+
+`export_conversation(chat_jid, after, before, anonymize=False, include_polls=True, include_reactions=True, limit=500, save_as=None)` returns a window of one chat, oldest first, as structured data: `messages` (id, time with zone, sender, text, media type and size, quoted message, forwarded), `polls` created in the window (options, who voted for what, retractions) and `reactions`. `has_more` and `next_after` page through a long chat (pass `next_after` as `after`). With `save_as="name"` the result is also written to `exports/name.json` in the configuration directory (directory 0700, file 0600; the file is not encrypted). It is read only and the output is marked `untrusted_content`.
+
+`anonymize=true` replaces each person with a stable pseudonym (`P1`, `P2`, ... in order of first appearance; the account is `Me`), the chat id and name with `[chat]`, `@<id>` mentions with the person's pseudonym, phone-like numbers in the text and in poll questions with `[number]`, and drops sender names and media file names. It **cannot find names written inside the text of a message** (a person greeted by name, a signature): read the export before sharing it.
+
 ### Metrics
 
 `get_metrics(window_hours=24)` returns counters for diagnosing the setup, never text, names, chat ids or senders: `messages` (received and from this account), `monitor_replies` (per profile: sent, blocked, failed, from `monitor_audit.log`, and a count per error code), `sends` (by result, and how many used an override token, from `send_audit.log`), `pending_drafts` and `webhooks` (delivered, failed, dropped and queued, summed over the endpoints; `null` if the bridge does not answer). `get_connection_status` also reports `server_version`, `features` and `enabled`, so a client connected to an older server is recognised by their absence.
