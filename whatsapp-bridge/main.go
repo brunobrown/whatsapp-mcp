@@ -812,13 +812,6 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 		return
 	}
 	if recordReaction(messageStore, own, msg, logger) {
-		who := msg.Info.Sender.User
-		if msg.Info.IsFromMe && own != "" {
-			who = own
-		}
-		if evt, ok := reactionWebhookEvent(msg, who); ok {
-			messageStore.webhooks.Emit(evt)
-		}
 		return
 	}
 	if !recordPoll(messageStore, own, decrypt.vote, msg, logger) {
@@ -1838,64 +1831,18 @@ func main() {
 	}
 
 	// Webhooks: off unless webhooks.json exists in the configuration directory
-	if cfgDir, dirErr := configDir(); dirErr != nil {
-		messageStore.webhooks = &webhookDispatcher{now: time.Now, err: "no configuration directory for webhooks.json"}
-	} else {
-		messageStore.webhooks = loadWebhooks(cfgDir, logger)
-	}
-	defer messageStore.webhooks.Close(5 * time.Second)
-	state.webhooks = messageStore.webhooks.Status
+	defer setupWebhooks(messageStore, state, logger)()
 
 	// Setup event handling for messages and history sync
-	client.AddEventHandler(recordingHandler(state, func(evt interface{}) {
-		switch v := evt.(type) {
-		case *events.Message:
-			// Learn who the sender is (LID, phone, push name) before storing the message
-			if err := recordMessageIdentity(messageStore, v.Info); err != nil {
-				logger.Warnf("Failed to record sender identity: %v", err)
-			}
-			// Process regular messages
-			handleMessage(client, messageStore, v, logger)
-
-		case *events.PushName:
-			if err := recordPushNameEvent(messageStore, v); err != nil {
-				logger.Warnf("Failed to record push name: %v", err)
-			}
-
-		case *events.Contact:
-			if err := recordContactEvent(messageStore, v); err != nil {
-				logger.Warnf("Failed to record contact: %v", err)
-			}
-
-		case *events.HistorySync:
-			// Process history sync events
-			handleHistorySync(client, messageStore, v, logger)
-
-		case *events.MediaRetry:
-			// Response to a SendMediaRetryReceipt request (expired media link recovery)
-			handleMediaRetryNotification(v)
-
-		case *events.Connected:
-			logger.Infof("Connected to WhatsApp")
-			messageStore.webhooks.Emit(connectionWebhookEvent("connected", time.Now()))
-			// In the background: it reads every contact and can take a while
-			go func() {
-				n, err := syncIdentities(context.Background(), messageStore, whatsmeowIdentitySource{client}, logger)
-				if err != nil {
-					logger.Warnf("Identity sync failed: %v", err)
-					return
-				}
-				logger.Infof("Identity sync recorded %d identities", n)
-			}()
-
-		case *events.Disconnected:
-			messageStore.webhooks.Emit(connectionWebhookEvent("disconnected", time.Now()))
-
-		case *events.LoggedOut:
-			logger.Warnf("Device logged out, please scan QR code to log in again")
-			messageStore.webhooks.Emit(connectionWebhookEvent("logged_out", time.Now()))
+	client.AddEventHandler(recordingHandler(state, clientEventHandler(client, messageStore, func() {
+		// It reads every contact and can take a while
+		n, err := syncIdentities(context.Background(), messageStore, whatsmeowIdentitySource{client}, logger)
+		if err != nil {
+			logger.Warnf("Identity sync failed: %v", err)
+			return
 		}
-	}))
+		logger.Infof("Identity sync recorded %d identities", n)
+	}, logger)))
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)

@@ -111,11 +111,15 @@ func validateWebhookURL(raw string, restPort int) error {
 	default:
 		return errors.New("url must be http (loopback only) or https")
 	}
-	port := u.Port()
-	if port == "" {
-		port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
+	port := map[string]int{"http": 80, "https": 443}[u.Scheme]
+	if text := u.Port(); text != "" {
+		n, err := strconv.Atoi(text) // numeric, so 08080 is 8080 too
+		if err != nil || n < 1 || n > 65535 {
+			return errors.New("url has an invalid port")
+		}
+		port = n
 	}
-	if isLoopbackHost(host) && port == strconv.Itoa(restPort) {
+	if isLoopbackHost(host) && port == restPort {
 		return errors.New("url points at the bridge's own API")
 	}
 	return nil
@@ -264,7 +268,7 @@ func webhookIPAllowed(ip net.IP, loopbackDest, allowPrivate bool) bool {
 		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
 		return false
 	}
-	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1]&0xc0 == 64 { // 100.64.0.0/10, carrier-grade NAT
+	if v4 := ip.To4(); v4 != nil && (v4[0] == 0 || (v4[0] == 100 && v4[1]&0xc0 == 64)) { // 0.0.0.0/8; 100.64.0.0/10, carrier-grade NAT
 		return false
 	}
 	return true

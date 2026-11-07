@@ -93,8 +93,12 @@ func recordReaction(store *MessageStore, own string, evt *events.Message, logger
 		logger.Warnf("A reaction in %s names no message", evt.Info.Chat)
 		return true
 	}
-	if _, err := store.StoreReaction(target, evt.Info.Chat.String(), who, reaction.GetText(), at); err != nil {
+	if stored, err := store.StoreReaction(target, evt.Info.Chat.String(), who, reaction.GetText(), at); err != nil {
 		logger.Warnf("Failed to store a reaction to %s: %v", target, err)
+	} else if stored { // an older reaction than the one we have is not news
+		if hook, ok := reactionWebhookEvent(evt, who); ok {
+			store.webhooks.Emit(hook)
+		}
 	}
 	return true
 }
