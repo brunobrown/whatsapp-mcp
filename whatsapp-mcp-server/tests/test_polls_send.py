@@ -325,3 +325,15 @@ def test_the_tool_takes_quiz_answer_and_closes_in_minutes(db, post):  # QUIZ-01,
     schema = {t.name: t.input_schema for t in asyncio.run(main.mcp.list_tools())}["send_poll"]
     assert {"quiz_answer", "closes_in_minutes"} <= set(schema["properties"])
     assert not {"quiz_answer", "closes_in_minutes"} & set(schema["required"])
+
+
+def test_the_tool_forwards_quiz_answer_and_closes_in_minutes_to_the_bridge(db, post):  # QUIZ-01, END-01
+    import main
+    out = main.send_poll(GROUP, "Q", ["Alpha", "Beta"], quiz_answer="beta", closes_in_minutes=5)
+    assert out["success"] is True
+    assert sent(post)["quiz_answer"] == "Beta" and sent(post)["closes_in_minutes"] == 5
+
+
+def test_spaces_around_the_quiz_answer_are_ignored(db, post):  # QUIZ-01
+    assert whatsapp.send_poll(GROUP, "Q", ["A", "B"], quiz_answer=" b ").success is True
+    assert sent(post)["quiz_answer"] == "B"
