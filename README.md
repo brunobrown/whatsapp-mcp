@@ -624,13 +624,9 @@ Everything the bridge prints also goes to `whatsapp-bridge/store/bridge.log` (ro
 
 ### Web interface
 
-The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). It is built with [Flet](https://flet.dev) 1.1 in its declarative mode, and the dependencies live in an optional group:
+The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). It needs the Python environment of the server (`cd whatsapp-mcp-server && uv sync`).
 
-```bash
-cd whatsapp-mcp-server && uv sync --group ui     # once; the MCP server itself does not need Flet
-```
-
-Without that group, or when the port is taken, the bridge logs why and goes on without the interface. `WHATSAPP_UI=off` keeps it from starting.
+When the port is taken, the bridge logs why and goes on without the interface. `WHATSAPP_UI=off` keeps it from starting.
 
 **First access.** There is no default password. While none exists, the log of the bridge (the terminal where it runs, or `store/bridge.log`) holds a *setup code* that lives 15 minutes and works once; type it in the screen, choose a password of 12 to 256 characters and you are in. Only a scrypt hash is kept, in `ui_auth.json` (`0600`). A wrong password is answered the same way every time and each failure lengthens the wait before the next try; a session ends after 30 minutes without activity or when you sign out. Reloading the page asks for the password again.
 
@@ -642,9 +638,9 @@ The variables are kept in `ui_settings.json` (`0600`) in the configuration direc
 
 **Exposure.** It listens on `127.0.0.1`. `WHATSAPP_UI_HOST` outside loopback also needs `WHATSAPP_UI_ALLOW_REMOTE=true` in the environment of the bridge (the interface cannot set it for itself), and it has no TLS: put a reverse proxy with HTTPS in front. `WHATSAPP_UI_PORT` changes the port.
 
-**Under the systemd unit** the sandbox lets the service write only `store/` and the configuration directory. The unit runs the interface with the environment prepared by `uv sync --group ui` (`make install-service` says so), and the interface can edit only files in the configuration directory: `send_policy.json` and `monitor_profiles.json` live next to the server code, which the unit keeps read-only, so for the interface to edit them point `WHATSAPP_SEND_POLICY` and `WHATSAPP_MONITOR_CONFIG` at files in the configuration directory, in the unit and in the `env` of your MCP client (both must name the same files).
+**Under the systemd unit** the sandbox lets the service write only `store/` and the configuration directory. The unit runs the interface with the environment prepared by `uv sync` (`make install-service` says so), and the interface can edit only files in the configuration directory: `send_policy.json` and `monitor_profiles.json` live next to the server code, which the unit keeps read-only, so for the interface to edit them point `WHATSAPP_SEND_POLICY` and `WHATSAPP_MONITOR_CONFIG` at files in the configuration directory, in the unit and in the `env` of your MCP client (both must name the same files).
 
-`make ui` (in `whatsapp-bridge/`) runs the interface alone, for working on it. Flutter draws the page itself, so the accessibility tree that screen readers use is only built when it is asked for (a screen reader does it; the page also has an "Enable accessibility" control for that). Controls have labels and every colour pair is tested for contrast, but it has not been tried with a real screen reader.
+`make ui` (in `whatsapp-bridge/`) runs the interface alone, for working on it. Controls have labels and every colour pair is tested for contrast, but it has not been tried with a real screen reader.
 
 ## Configuration
 
@@ -679,7 +675,7 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_UI_HOST` | bridge, web interface | `127.0.0.1` | The address the web interface listens on. Outside loopback it also needs `WHATSAPP_UI_ALLOW_REMOTE=true` |
 | `WHATSAPP_UI_PORT` | bridge, web interface | `8765` | The port of the web interface (1024 to 65535) |
 | `WHATSAPP_UI_ALLOW_REMOTE` | bridge, web interface | off | `true` lets the interface listen outside loopback. It has a password but no TLS: put a reverse proxy with HTTPS in front. Only the environment of the process sets it, never the interface itself |
-| `WHATSAPP_UI_COMMAND` | bridge | `uv run --directory ../whatsapp-mcp-server --group ui python -m ui` | The command the bridge runs for the interface, split at spaces (no quoting) |
+| `WHATSAPP_UI_COMMAND` | bridge | `uv run --directory ../whatsapp-mcp-server python -m ui` | The command the bridge runs for the interface, split at spaces (no quoting) |
 
 The bridge also needs to be **restarted after updating it** for new behaviour to apply: recording of file name, MIME type, forwarded and reply information, automatic download, mentions and replies, polls and votes, deleting messages, the status endpoint and the log all live in the bridge.
 
