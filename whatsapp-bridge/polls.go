@@ -58,6 +58,9 @@ type Poll struct {
 	SelectableCount int
 	AllowAddOption  bool
 	HideVoterNames  bool
+	EndsAtMs        int64  // the deadline set when it was created, in Unix milliseconds; 0 for none
+	Quiz            bool   // a quiz poll
+	CorrectAnswer   string // the right option of a quiz, when the message says it
 }
 
 // PollVote is the current choice of one person: hex hashes of the options, none once retracted.
@@ -71,19 +74,25 @@ type PollVote struct {
 // updates the poll and keeps its votes, but only for its author: anyone else sending a poll with
 // the ID of an existing one must not rewrite its question or options.
 func (store *MessageStore) StorePoll(p Poll) (bool, error) {
+	if deleted, err := store.isDeleted(p.ID, p.ChatJID); err != nil || deleted { // a deleted poll does not come back
+		return false, err
+	}
 	options, err := json.Marshal(p.Options)
 	if err != nil {
 		return false, err
 	}
 	res, err := store.db.Exec(
-		`INSERT INTO polls (id, chat_jid, author, question, options_json, selectable_count, allow_add_option, hide_voter_names)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO polls (id, chat_jid, author, question, options_json, selectable_count, allow_add_option, hide_voter_names,
+			ends_at_ms, quiz, correct_answer)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, chat_jid) DO UPDATE SET
 			question = excluded.question, options_json = excluded.options_json,
 			selectable_count = excluded.selectable_count, allow_add_option = excluded.allow_add_option,
-			hide_voter_names = excluded.hide_voter_names
+			hide_voter_names = excluded.hide_voter_names,
+			ends_at_ms = excluded.ends_at_ms, quiz = excluded.quiz, correct_answer = excluded.correct_answer
 		WHERE polls.author = excluded.author`,
 		p.ID, p.ChatJID, p.Author, p.Question, string(options), p.SelectableCount, p.AllowAddOption, p.HideVoterNames,
+		p.EndsAtMs, p.Quiz, p.CorrectAnswer,
 	)
 	if err != nil {
 		return false, err
@@ -115,6 +124,9 @@ func (store *MessageStore) GetPoll(id, chatJID string) (Poll, bool, error) {
 // StorePollVote records the choice of voter, which replaces the one before it only when it is newer.
 // It reports whether the vote was stored. An empty hashes list retracts the vote.
 func (store *MessageStore) StorePollVote(pollID, chatJID, voter string, hashes []string, at time.Time) (bool, error) {
+	if deleted, err := store.isDeleted(pollID, chatJID); err != nil || deleted {
+		return false, err
+	}
 	if hashes == nil {
 		hashes = []string{}
 	}
@@ -198,6 +210,8 @@ func pollFromMessage(chatJID, id, author string, msg *waE2E.Message) (Poll, bool
 		ID: id, ChatJID: chatJID, Author: author, Question: creation.GetName(), Options: options,
 		SelectableCount: int(creation.GetSelectableOptionsCount()),
 		AllowAddOption:  creation.GetAllowAddOption(), HideVoterNames: creation.GetHideParticipantName(),
+		EndsAtMs: sanePollEnd(creation.GetEndTime(), time.Now()), Quiz: creation.GetPollType() == waE2E.PollType_QUIZ,
+		CorrectAnswer: creation.GetCorrectAnswer().GetOptionName(),
 	}, true
 }
 
@@ -661,4 +675,18 @@ func deleteMessage(env pollEnv, store *MessageStore, req DeleteMessageRequest, l
 func jsonOptions(options []string) (string, error) {
 	encoded, err := json.Marshal(options)
 	return string(encoded), err
+}
+
+// maxPollEndAhead is how far in the future a received poll's deadline may be. The field comes from whoever
+// sent the poll, so a nonsense value (negative, or so large that it cannot be shown as a date) is dropped.
+const maxPollEndAhead = 10 * 365 * 24 * time.Hour
+
+// sanePollEnd returns endMs when it is a plausible deadline (after 2000-01-01 and not more than maxPollEndAhead
+// from now), else 0, which means "no deadline".
+func sanePollEnd(endMs int64, now time.Time) int64 {
+	const year2000Ms = 946684800000
+	if endMs < year2000Ms || endMs > now.Add(maxPollEndAhead).UnixMilli() {
+		return 0
+	}
+	return endMs
 }

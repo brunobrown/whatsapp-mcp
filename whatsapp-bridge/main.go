@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -66,7 +67,7 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate&_journal_mode=WAL&_synchronous=NORMAL", cfg)
+	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate&_journal_mode=WAL&_synchronous=NORMAL&_secure_delete=true", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -126,6 +127,10 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create messages index: %v", err)
 	}
 
+	if err := ensurePollColumns(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to migrate polls table: %v", err)
+	}
 	if err := ensureMessageColumns(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
@@ -223,6 +228,14 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		return nil
 	}
 
+	// A message its author deleted for everyone stays deleted: a second delivery (history sync, an offline
+	// replay) must not bring the erased text or media back.
+	if deleted, err := store.isDeleted(id, chatJID); err != nil {
+		return err
+	} else if deleted {
+		return errMessageDeleted
+	}
+
 	// An upsert instead of INSERT OR REPLACE: storing a message again (echo, history sync)
 	// must not wipe its local_path.
 	_, err := store.db.Exec(
@@ -233,7 +246,8 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 			sender = excluded.sender, content = excluded.content, timestamp = excluded.timestamp,
 			is_from_me = excluded.is_from_me, media_type = excluded.media_type, filename = excluded.filename,
 			url = excluded.url, media_key = excluded.media_key, file_sha256 = excluded.file_sha256,
-			file_enc_sha256 = excluded.file_enc_sha256, file_length = excluded.file_length`,
+			file_enc_sha256 = excluded.file_enc_sha256, file_length = excluded.file_length
+		WHERE COALESCE(messages.deleted_at, '') = ''`,
 		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
 	)
 	return err
@@ -243,7 +257,7 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 // whether it was updated. Only the original sender may edit a message, so an
 // edit naming someone else's message ID leaves it untouched.
 func (store *MessageStore) UpdateMessageContent(id, chatJID, sender, content string) (bool, error) {
-	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND sender = ?", content, id, chatJID, sender)
+	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND sender = ? AND COALESCE(deleted_at, '') = ''", content, id, chatJID, sender)
 	if err != nil {
 		return false, err
 	}
@@ -253,7 +267,7 @@ func (store *MessageStore) UpdateMessageContent(id, chatJID, sender, content str
 
 // SetLocalPath records where the media of a message was saved.
 func (store *MessageStore) SetLocalPath(id, chatJID, path string) error {
-	_, err := store.db.Exec("UPDATE messages SET local_path = ? WHERE id = ? AND chat_jid = ?", path, id, chatJID)
+	_, err := store.db.Exec("UPDATE messages SET local_path = ? WHERE id = ? AND chat_jid = ? AND COALESCE(deleted_at, '') = ''", path, id, chatJID)
 	return err
 }
 
@@ -263,6 +277,7 @@ var messageColumns = []struct{ name, ddl string }{
 	{"mimetype", "TEXT"},
 	{"forwarded", "BOOLEAN"},
 	{"quoted_id", "TEXT"},
+	{"deleted_at", "TEXT"},
 }
 
 // ensureMessageColumns adds the columns of messageColumns that a database created by an older
@@ -338,6 +353,9 @@ func extractMessageMeta(msg *waProto.Message) MessageMeta {
 // SetMessageMeta records the metadata of a stored message. Empty values never replace stored
 // ones, so a message that arrives again without metadata keeps what it had.
 func (store *MessageStore) SetMessageMeta(id, chatJID string, meta MessageMeta) error {
+	if deleted, err := store.isDeleted(id, chatJID); err != nil || deleted {
+		return err
+	}
 	_, err := store.db.Exec(
 		`UPDATE messages SET
 			mimetype = COALESCE(NULLIF(?, ''), mimetype),
@@ -785,6 +803,14 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
 
+	// A deletion for everyone is not a message and must not move the chat's last message time
+	if isRevoke, target, updated := applyRevoke(messageStore, chatJID, sender, msg.Info.Timestamp, msg.Message, logger); isRevoke {
+		if updated {
+			messageStore.webhooks.Emit(messageDeletedWebhookEvent(msg, target))
+		}
+		return
+	}
+
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
 	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
 
@@ -848,6 +874,10 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 		fileEncSHA256,
 		fileLength,
 	)
+	if errors.Is(err, errMessageDeleted) {
+		logger.Infof("Ignoring a new delivery of a message that was deleted for everyone")
+		return
+	}
 	if err == nil {
 		if metaErr := messageStore.SetMessageMeta(msg.Info.ID, chatJID, extractMessageMeta(msg.Message)); metaErr != nil {
 			logger.Warnf("Failed to store metadata of %s: %v", msg.Info.ID, metaErr)
@@ -1897,6 +1927,7 @@ func main() {
 
 	// Start REST API server
 	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
+	startPollCloseWatcher(messageStore, logger)
 	// The API is never started without its token: it can send messages as the account.
 	apiConfigDir, err := configDir()
 	if err != nil {

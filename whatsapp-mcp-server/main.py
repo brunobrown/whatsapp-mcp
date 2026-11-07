@@ -1,4 +1,5 @@
 import os
+import sys
 import tomllib
 from dataclasses import fields, is_dataclass
 from datetime import datetime
@@ -7,6 +8,11 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 import monitor
 import pollwatch
+import capabilities
+import drafts
+import metrics
+import channel
+import export
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -76,6 +82,7 @@ def mark_untrusted(result):
 
 # What a tool does to the world, so a client can ask for confirmation before the ones that write or destroy.
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+LOCAL_WRITES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 WRITES = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 DESTROYS = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True)
 DOWNLOADS = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
@@ -700,6 +707,102 @@ def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     return answer
 
 @mcp.tool(annotations=READ_ONLY)
+def list_pending_drafts(profile: Optional[str] = None) -> Dict[str, Any]:
+    """List the replies that monitor_reply could not send because they need the approval token (draft mode).
+
+    Each draft has id, profile, chat_jid, message_id (the message it answers), sender, text, created_at and
+    expires_at. Drafts expire after WHATSAPP_MONITOR_DRAFT_TTL_HOURS (default 24 h) and are removed when the reply
+    is sent. The approval token is never stored. The text was written by the agent and may have been influenced by
+    untrusted messages: review it (untrusted_content is set). To send one, call monitor_reply with the owner's token.
+
+    Args:
+        profile: Only the drafts of this profile
+    """
+    return drafts.listing(profile)
+
+@mcp.tool(annotations=LOCAL_WRITES)
+def discard_pending_draft(draft_id: str) -> Dict[str, Any]:
+    """Delete one pending draft (from list_pending_drafts) without sending anything.
+
+    Returns:
+        success; false with error_code DRAFT_NOT_FOUND when there is no such draft (it may have expired)
+    """
+    if drafts.remove(draft_id):
+        return {"success": True, "message": "Draft discarded. Nothing was sent."}
+    return {"success": False, "error_code": "DRAFT_NOT_FOUND", "message": f"No pending draft {draft_id!r}"}
+
+@mcp.tool(annotations=READ_ONLY)
+def get_metrics(window_hours: float = 24) -> Dict[str, Any]:
+    """Counters for diagnosing the setup over the last window_hours (default 24, at most 2160), with no message text.
+
+    Returns:
+        messages (received and from_this_account, from the database; null if it cannot be read), monitor_replies
+        (per profile: sent, blocked, failed, from the audit log; plus error_codes), sends (by_result and with_override,
+        from the send audit log), pending_drafts, and webhooks (delivered, failed, dropped, queued, summed over the
+        endpoints; null when the bridge does not answer). Chat ids, names and senders are never included.
+    """
+    return metrics.collect(window_hours, bridge_status=whatsapp_get_connection_status())
+
+@mcp.tool(annotations=READ_ONLY)
+def export_conversation(
+    chat_jid: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    anonymize: bool = False,
+    include_polls: bool = True,
+    include_reactions: bool = True,
+    limit: int = 500
+) -> Dict[str, Any]:
+    """Export a window of one chat (messages, polls with their votes, reactions) as structured data for archiving.
+
+    Read only. Oldest first; when there is more, has_more is true and next_after is the value to pass as `after`.
+
+    Args:
+        chat_jid: The chat
+        after: ISO-8601 start (exclusive); a date without a zone uses WHATSAPP_TIMEZONE or the system zone
+        before: ISO-8601 end (exclusive)
+        anonymize: People become P1, P2, ... (Me stays Me), the chat id and name become [chat], @mentions and phone-like
+                   numbers in the text are masked and media file names are dropped. Names written inside message
+                   text are not found: review before sharing
+        include_polls: Polls created in the window, with options, votes and who voted (pseudonyms when anonymized)
+        include_reactions: The reactions that stand on the messages of the window
+        limit: At most this many messages (1 to 2000, default 500)
+
+    Returns:
+        success, chat, range, count, has_more, next_after, messages, polls, reactions, untrusted_content and notice.
+        To keep the result in a file use save_conversation_export. Errors: INVALID_ARGUMENT, CHAT_NOT_FOUND, AMBIGUOUS_CHAT, DIRECTORY_UNAVAILABLE
+    """
+    return export.export_conversation(chat_jid, after, before, anonymize, include_polls, include_reactions, limit)
+
+@mcp.tool(annotations=LOCAL_WRITES)
+def save_conversation_export(
+    chat_jid: str,
+    save_as: str,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
+    anonymize: bool = False,
+    include_polls: bool = True,
+    include_reactions: bool = True,
+    limit: int = 500,
+    overwrite: bool = False
+) -> Dict[str, Any]:
+    """Like export_conversation, and also write the result to <configuration directory>/exports/<save_as>.json.
+
+    The directory is 0700 and the file 0600; the file is not encrypted. An existing file is never replaced unless
+    overwrite is true.
+
+    Args:
+        save_as: File name: letters, digits, dot, dash and underscore
+        overwrite: Replace an existing file of that name
+        (the other arguments are those of export_conversation)
+
+    Returns:
+        The export plus saved_to. Errors: those of export_conversation, EXPORT_EXISTS and EXPORT_WRITE_FAILED
+    """
+    return export.save_conversation_export(chat_jid, save_as, after, before, anonymize, include_polls,
+                                           include_reactions, limit, overwrite)
+
+@mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:
     """Check whether the WhatsApp bridge is running and connected.
 
@@ -709,8 +812,11 @@ def get_connection_status() -> Dict[str, Any]:
         has not happened since the bridge started) and pending_media_retries (media waiting for the phone to re-upload).
         When the bridge does not answer: connected=false, bridge_reachable=false, error_code=BRIDGE_UNREACHABLE,
         last_message_at (newest stored message) and last_log_at (last write to the bridge log)
+        Always added: server_version, features (names of what this server can do) and enabled (what is switched
+        on now, e.g. webhooks). A client whose answer lacks these fields is talking to an older server: reconnect it.
     """
-    return whatsapp_get_connection_status()
+    status = whatsapp_get_connection_status()
+    return {**status, **capabilities.describe(VERSION, status, channel.status())}
 
 @mcp.tool(annotations=READ_ONLY)
 def get_webhook_status() -> Dict[str, Any]:
@@ -718,7 +824,7 @@ def get_webhook_status() -> Dict[str, Any]:
 
     Returns:
         success and webhooks: enabled, error (why the file was refused, when it was) and endpoints, each with name,
-        delivered, failed, dropped (events lost because its queue was full), queued, last_error and last_success_at.
+        delivered, failed, dropped (events lost because its queue was full), queued, last_error, last_success_at, persistent (durable queue on) and recovered (events picked up from it at start).
         The address and the secret of an endpoint are never shown. Webhooks are off unless webhooks.json exists
         in the bridge's configuration directory.
         Errors: success=false with error_code BRIDGE_UNREACHABLE or BRIDGE_UNAUTHORIZED
@@ -739,6 +845,17 @@ def test_webhook(name: str) -> Dict[str, Any]:
     """
     return whatsapp_test_webhook(name)
 
+def run() -> None:
+    """Serve over stdio; with a valid, enabled channel.json also declare and feed the Claude Code channel."""
+    cfg = channel.load_config()
+    channel.set_status(cfg)
+    if cfg.error:
+        print(f"channel is off: {cfg.error}", file=sys.stderr)
+    if cfg.enabled:
+        channel.run_stdio(mcp, cfg)
+    else:
+        mcp.run(transport='stdio')
+
+
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    run()

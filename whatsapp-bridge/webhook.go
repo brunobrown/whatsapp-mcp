@@ -45,18 +45,20 @@ const (
 
 // The event types an endpoint can ask for.
 const (
-	eventMessage     = "message"
-	eventPollCreated = "poll_created"
-	eventPollVote    = "poll_vote"
-	eventReaction    = "reaction"
-	eventMessageEdit = "message_edit"
-	eventConnection  = "connection"
-	eventPing        = "ping"
+	eventMessage        = "message"
+	eventPollCreated    = "poll_created"
+	eventPollVote       = "poll_vote"
+	eventReaction       = "reaction"
+	eventMessageEdit    = "message_edit"
+	eventMessageDeleted = "message_deleted"
+	eventPollClosed     = "poll_closed"
+	eventConnection     = "connection"
+	eventPing           = "ping"
 )
 
 var webhookEventTypes = map[string]bool{
 	eventMessage: true, eventPollCreated: true, eventPollVote: true, eventReaction: true,
-	eventMessageEdit: true, eventConnection: true, eventPing: true,
+	eventMessageEdit: true, eventMessageDeleted: true, eventPollClosed: true, eventConnection: true, eventPing: true,
 }
 
 // webhookBackoff is the wait before each repetition: one attempt and five repetitions in all.
@@ -71,6 +73,7 @@ type webhookEndpointConfig struct {
 	IncludeContent      bool     `json:"include_content"`
 	IncludeOwn          bool     `json:"include_own"`
 	AllowPrivateNetwork bool     `json:"allow_private_network"`
+	PersistQueue        bool     `json:"persist_queue"`
 }
 
 type webhookConfig struct {
@@ -343,6 +346,8 @@ type webhookEndpointStatus struct {
 	Queued        int        `json:"queued"`
 	LastError     string     `json:"last_error,omitempty"`
 	LastSuccessAt *time.Time `json:"last_success_at"`
+	Persistent    bool       `json:"persistent"`
+	Recovered     int        `json:"recovered"`
 }
 
 type webhookStatus struct {
@@ -359,12 +364,15 @@ type webhookEndpoint struct {
 	logger waLog.Logger
 	now    func() time.Time
 
-	mu      sync.Mutex
-	queue   []webhookEvent
-	stats   webhookEndpointStatus
-	closing bool
-	wake    chan struct{}
-	stop    chan struct{}
+	mu          sync.Mutex
+	queue       []webhookEvent
+	stats       webhookEndpointStatus
+	closing     bool
+	spool       *webhookSpool // nil unless persist_queue
+	flight      *webhookEvent // the event being delivered, kept for compaction
+	interrupted bool          // the bridge stopped while flight was being retried: it stays in the spool
+	wake        chan struct{}
+	stop        chan struct{}
 }
 
 type webhookAttempt struct {
@@ -415,10 +423,12 @@ func (e *webhookEndpoint) enqueue(evt webhookEvent) {
 		return
 	}
 	if len(e.queue) >= webhookQueueLimit {
+		e.settle(e.queue[0])
 		e.queue = e.queue[1:]
 		e.stats.Dropped++
 	}
 	e.queue = append(e.queue, evt)
+	e.persist(evt)
 	e.mu.Unlock()
 	select {
 	case e.wake <- struct{}{}:
@@ -459,8 +469,48 @@ func webhookErrorKind(err error) string {
 	return "network error"
 }
 
+// persist writes evt to the spool (caller holds e.mu). A spool that cannot be written is logged and the
+// endpoint carries on in memory only.
+func (e *webhookEndpoint) persist(evt webhookEvent) {
+	if e.spool == nil {
+		return
+	}
+	if err := e.spool.append(recordOf(evt)); err != nil && e.logger != nil {
+		e.logger.Warnf("Webhook %s: could not write the durable queue: %v", e.cfg.Name, err)
+	}
+	e.compactIfNeeded()
+}
+
+// settle records that evt needs no further delivery (caller holds e.mu).
+func (e *webhookEndpoint) settle(evt webhookEvent) {
+	if e.spool == nil {
+		return
+	}
+	if err := e.spool.append(spoolRecord{Done: evt.id()}); err != nil && e.logger != nil {
+		e.logger.Warnf("Webhook %s: could not write the durable queue: %v", e.cfg.Name, err)
+	}
+}
+
+func (e *webhookEndpoint) compactIfNeeded() {
+	if !e.spool.needsCompaction() {
+		return
+	}
+	pending := append([]webhookEvent(nil), e.queue...)
+	if e.flight != nil {
+		pending = append([]webhookEvent{*e.flight}, pending...)
+	}
+	if err := e.spool.rewrite(pending); err != nil && e.logger != nil {
+		e.logger.Warnf("Webhook %s: could not compact the durable queue: %v", e.cfg.Name, err)
+	}
+}
+
 func (e *webhookEndpoint) finish(evt webhookEvent, last webhookAttempt, attempts int, delivered bool) {
 	e.mu.Lock()
+	// an event interrupted by the bridge stopping stays in the spool for the next start
+	if !e.interrupted {
+		e.settle(evt)
+	}
+	e.interrupted, e.flight = false, nil
 	reason := ""
 	switch {
 	case delivered:
@@ -519,6 +569,9 @@ func (e *webhookEndpoint) deliver(evt webhookEvent) {
 		case <-timer.C:
 		case <-e.stop:
 			timer.Stop()
+			e.mu.Lock()
+			e.interrupted = true
+			e.mu.Unlock()
 			e.finish(evt, last, attempt, false)
 			return
 		}
@@ -531,6 +584,7 @@ func (e *webhookEndpoint) next() (webhookEvent, bool) {
 		if len(e.queue) > 0 {
 			evt := e.queue[0]
 			e.queue = e.queue[1:]
+			e.flight = &evt
 			e.mu.Unlock()
 			return evt, true
 		}
@@ -562,6 +616,7 @@ func (e *webhookEndpoint) status() webhookEndpointStatus {
 	defer e.mu.Unlock()
 	st := e.stats
 	st.Name, st.Queued = e.cfg.Name, len(e.queue)
+	st.Persistent = e.spool != nil
 	return st
 }
 
@@ -575,6 +630,12 @@ type webhookDispatcher struct {
 }
 
 func newWebhookDispatcher(cfg *webhookConfig, logger waLog.Logger, now func() time.Time) *webhookDispatcher {
+	return newWebhookDispatcherIn(cfg, logger, now, "")
+}
+
+// newWebhookDispatcherIn is newWebhookDispatcher with the directory for the durable queues of the endpoints
+// that ask for one. Without a directory "persist_queue" is ignored (and logged).
+func newWebhookDispatcherIn(cfg *webhookConfig, logger waLog.Logger, now func() time.Time, spoolDir string) *webhookDispatcher {
 	d := &webhookDispatcher{now: now}
 	if !cfg.Enabled() {
 		return d
@@ -588,6 +649,22 @@ func newWebhookDispatcher(cfg *webhookConfig, logger waLog.Logger, now func() ti
 			logger: logger, now: now, wake: make(chan struct{}, 1), stop: make(chan struct{})}
 		for _, ev := range c.Events {
 			e.events[ev] = true
+		}
+		if c.PersistQueue {
+			if spoolDir == "" {
+				if logger != nil {
+					logger.Warnf("Webhook %s: persist_queue ignored, there is no directory for it", c.Name)
+				}
+			} else if spool, pending, err := openWebhookSpool(spoolPath(spoolDir, c.Name), now()); err != nil {
+				if logger != nil {
+					logger.Warnf("Webhook %s: durable queue unavailable, using memory only: %v", c.Name, err)
+				}
+			} else {
+				e.spool, e.queue, e.stats.Recovered = spool, pending, len(pending)
+				if len(pending) > 0 && logger != nil {
+					logger.Infof("Webhook %s: %d events from before the last stop will be delivered again", c.Name, len(pending))
+				}
+			}
 		}
 		d.endpoints = append(d.endpoints, e)
 		d.wg.Add(1)
@@ -625,7 +702,7 @@ func loadWebhooks(dir string, logger waLog.Logger) *webhookDispatcher {
 	if err != nil {
 		return fail(err.Error())
 	}
-	return newWebhookDispatcher(cfg, logger, now)
+	return newWebhookDispatcherIn(cfg, logger, now, dir)
 }
 
 // Emit queues the event for every endpoint that asked for it. It never blocks the caller.

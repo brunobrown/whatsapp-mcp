@@ -43,6 +43,15 @@ func messageEditWebhookEvent(msg *events.Message, targetID, text string) webhook
 		Content: map[string]any{"text": text}}
 }
 
+// messageDeletedWebhookEvent says that a stored message was deleted for everyone by its author. It never carries
+// the text, which the bridge erases (unless WHATSAPP_KEEP_DELETED_CONTENT=true), so there is no Content.
+func messageDeletedWebhookEvent(msg *events.Message, targetID string) webhookEvent {
+	chat := msg.Info.Chat.String()
+	return webhookEvent{Type: eventMessageDeleted, Key: chat + "|" + targetID, OccurredAt: msg.Info.Timestamp,
+		ChatJID: chat, FromMe: msg.Info.IsFromMe,
+		Meta: map[string]any{"message_id": targetID, "chat_jid": chat, "sender": msg.Info.Sender.User}}
+}
+
 func reactionWebhookEvent(msg *events.Message, reactor string) (webhookEvent, bool) {
 	reaction := msg.Message.GetReactionMessage()
 	target := reaction.GetKey().GetID()
