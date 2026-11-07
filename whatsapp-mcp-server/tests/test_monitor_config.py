@@ -192,3 +192,40 @@ def test_every_example_placeholder_token_is_refused_even_the_one_of_earlier_vers
     out = monitor.list_profiles()
 
     assert out["error_code"] == "MONITOR_CONFIG_INVALID" and "placeholder" in out["message"]
+
+
+# --- parse_profiles: the whole-file validation from a dict, no file read (the UI validates before it writes) ---
+
+def test_parse_profiles_returns_profiles_by_name():
+    profiles, problem = monitor.parse_profiles(profile(mode="auto"))
+
+    assert problem is None
+    assert list(profiles) == ["p"] and profiles["p"].mode == "auto" and profiles["p"].targets
+
+
+def test_parse_profiles_empty_object_means_no_profiles():
+    assert monitor.parse_profiles({}) == ({}, None)
+
+
+@pytest.mark.parametrize("raw, problem", [
+    ([], 'the file must be an object with only a "profiles" key'),
+    ({"profiles": {}, "extra": 1}, 'the file must be an object with only a "profiles" key'),
+    ({"profiles": []}, '"profiles" must be an object'),
+    ({"profiles": {"p": []}}, "profiles.p must be an object"),
+    ({"profiles": {"p": {"targets": ["me"], "mode": "x"}}}, "profiles.p.mode must be one of draft, auto"),
+    ({"profiles": {"p": {"targets": ["me"], "instructions": 3}}}, "profiles.p.instructions must be a text"),
+    ({"profiles": {"p": {"targets": ["12"]}}}, 'profiles.p.targets: \'12\' is not a phone number, LID or JID (or "me")'),
+])
+def test_parse_profiles_refuses_what_the_file_loader_refuses(raw, problem):
+    assert monitor.parse_profiles(raw) == ({}, problem)
+
+
+def test_parse_profiles_refuses_a_profile_without_targets_or_aliases():
+    assert monitor.parse_profiles({"profiles": {"p": {}}}) == ({}, "profiles.p needs targets or aliases")
+
+
+def test_load_profiles_gives_the_same_answer_as_parse_profiles(config):
+    raw = profile(mode="nope")
+    config(raw)
+
+    assert monitor.load_profiles() == monitor.parse_profiles(raw)
