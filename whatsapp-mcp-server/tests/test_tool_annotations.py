@@ -1,4 +1,4 @@
-"""Cada ferramenta MCP declara se só lê, envia, apaga ou baixa (ToolAnnotations)."""
+"""Each MCP tool declares whether it only reads, sends, deletes or downloads (ToolAnnotations)."""
 import asyncio
 import os
 import sys

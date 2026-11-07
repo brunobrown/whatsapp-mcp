@@ -1,4 +1,4 @@
-"""O servidor avisa que o texto das mensagens vem de outras pessoas e é dado, não instrução."""
+"""The server warns that message text comes from other people and is data, not instructions."""
 import os
 import sys
 
@@ -34,10 +34,10 @@ def make_db(tmp_path, monkeypatch):
             selectable_count INTEGER, allow_add_option BOOLEAN, hide_voter_names BOOLEAN, PRIMARY KEY (id, chat_jid));
         CREATE TABLE poll_votes (poll_id TEXT, chat_jid TEXT, voter TEXT, hashes_json TEXT, timestamp_ms INTEGER,
             PRIMARY KEY (poll_id, chat_jid, voter));
-        INSERT INTO chats VALUES ('a@g.us', 'Projeto', NULL);
+        INSERT INTO chats VALUES ('a@g.us', 'Project', NULL);
         INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me)
             VALUES ('P1', 'a@g.us', 'alice', '[poll] Q', '2026-11-06 10:00:00+00:00', 0);
-        INSERT INTO polls VALUES ('P1', 'a@g.us', 'alice', 'Q', '["Sim","Não"]', 0, 0, 0);
+        INSERT INTO polls VALUES ('P1', 'a@g.us', 'alice', 'Q', '["Yes","No"]', 0, 0, 0);
     """)
     conn.commit()
     conn.close()

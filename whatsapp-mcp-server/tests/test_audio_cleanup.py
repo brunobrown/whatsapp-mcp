@@ -1,4 +1,4 @@
-"""send_audio_message apaga o .ogg convertido depois do envio, e só ele."""
+"""send_audio_message deletes the converted .ogg after sending, and only that file."""
 import os
 import sqlite3
 import sys
@@ -22,7 +22,7 @@ def db(tmp_path, monkeypatch):
         "CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);"
         "CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,"
         " is_from_me BOOLEAN, media_type TEXT, PRIMARY KEY (id, chat_jid));"
-        f"INSERT INTO chats VALUES ('{GROUP}', 'Teste', NULL);")
+        f"INSERT INTO chats VALUES ('{GROUP}', 'Test', NULL);")
     conn.commit()
     conn.close()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
@@ -30,13 +30,13 @@ def db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def source(tmp_path):
-    path = tmp_path / "voz.mp3"
+    path = tmp_path / "voice.mp3"
     path.write_bytes(b"audio")
     return str(path)
 
 
 def fake_convert(created):
-    """Imita o ffmpeg: cria um .ogg temporário de verdade e guarda o caminho."""
+    """Imitates ffmpeg: creates a real temporary .ogg and records its path."""
     def convert(_input):
         handle = tempfile.NamedTemporaryFile(suffix=".ogg", delete=False)
         handle.write(b"ogg")
@@ -86,7 +86,7 @@ def test_converted_file_is_removed_when_the_request_raises(db, source):  # AUD-0
 
 
 def test_an_ogg_given_by_the_user_is_never_removed(db, tmp_path):  # AUD-02
-    ogg = tmp_path / "voz.ogg"
+    ogg = tmp_path / "voice.ogg"
     ogg.write_bytes(b"ogg")
     with mock.patch("whatsapp.audio.convert_to_opus_ogg_temp") as convert, \
          mock.patch("whatsapp.requests.post", return_value=response()):

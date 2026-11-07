@@ -1,4 +1,4 @@
-"""react_to_message: validação do emoji, mensagem conhecida, dry_run, política de envio e auditoria."""
+"""react_to_message: emoji validation, known message, dry_run, send policy and audit."""
 import json
 import os
 import sqlite3
@@ -24,9 +24,9 @@ def db(tmp_path, monkeypatch):
         "CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);"
         "CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,"
         " is_from_me BOOLEAN, media_type TEXT, PRIMARY KEY (id, chat_jid));"
-        f"INSERT INTO chats VALUES ('{GROUP}', 'Teste', NULL);"
+        f"INSERT INTO chats VALUES ('{GROUP}', 'Test', NULL);"
         f"INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES"
-        f" ('M1', '{GROUP}', 'alice', 'bom dia', '2026-11-06 10:00:00', 0);")
+        f" ('M1', '{GROUP}', 'alice', 'good morning', '2026-11-06 10:00:00', 0);")
     conn.commit()
     conn.close()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
@@ -51,7 +51,7 @@ def audit_lines():
 
 
 def test_reaction_is_posted_to_the_bridge(db, post):  # REACT-01
-    out = whatsapp.react_to_message("Teste", "M1", "👍")
+    out = whatsapp.react_to_message("Test", "M1", "👍")
 
     assert out.success is True and out.message_id == "R1"
     assert post.call_args.args[0].endswith("/react")
@@ -90,11 +90,11 @@ def test_unknown_message_is_refused_before_sending(db, post):  # REACT-04
 
 
 def test_dry_run_previews_without_touching_the_bridge(db, post):  # REACT-05
-    out = whatsapp.react_to_message("Teste", "M1", "👍", dry_run=True)
+    out = whatsapp.react_to_message("Test", "M1", "👍", dry_run=True)
 
     post.assert_not_called()
     assert out.success is True and out.preview == {
-        "message_id": "M1", "chat_jid": GROUP, "chat_name": "Teste", "emoji": "👍", "text": "bom dia"}
+        "message_id": "M1", "chat_jid": GROUP, "chat_name": "Test", "emoji": "👍", "text": "good morning"}
     assert audit_lines() == []
 
 
@@ -118,7 +118,7 @@ def test_a_reaction_is_audited_by_kind_without_the_text(db, post):  # REACT-05
     whatsapp.react_to_message(GROUP, "M1", "👍")
 
     [line] = audit_lines()
-    assert line["kind"] == "reaction" and line["result"] == "sent" and "bom dia" not in json.dumps(line)
+    assert line["kind"] == "reaction" and line["result"] == "sent" and "good morning" not in json.dumps(line)
 
 
 def test_missing_arguments(db, post):  # REACT-01

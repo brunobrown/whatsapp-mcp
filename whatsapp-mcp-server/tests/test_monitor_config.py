@@ -1,4 +1,4 @@
-"""Testes do monitor, parte 1: perfis em monitor_profiles.json (CFG-01..05)."""
+"""Monitor tests, part 1: profiles in monitor_profiles.json (CFG-01..05)."""
 import json
 import os
 import sys
@@ -87,7 +87,7 @@ def test_values_are_normalised(config):  # CFG-02
     ({"profiles": {"p": {"targets": ["123"]}}}, "not a phone"),
     ({"profiles": {"p": {"targets": ["120363000000000099@g.us"]}}}, "not a phone"),
     ({"profiles": {"p": {"targets": [5511955550000]}}}, "targets"),
-    (profile(chats=["Grupo da empresa"]), "chat JID"),
+    (profile(chats=["Company group"]), "chat JID"),
     (profile(chats=["5511955550000@example.net"]), "chat JID"),
     (profile(senders={"allow": ["abc"]}), "not a phone"),
     (profile(senders={"permit": []}), "allow and/or deny"),
@@ -107,7 +107,7 @@ def test_values_are_normalised(config):  # CFG-02
 def test_invalid_file_blocks_every_profile(config, content, fragment):  # CFG-03
     good = {"ok": {"targets": ["me"]}}
     if isinstance(content, dict) and isinstance(content.get("profiles"), dict):
-        content = {**content, "profiles": {**good, **content["profiles"]}}  # um perfil bom ao lado do ruim
+        content = {**content, "profiles": {**good, **content["profiles"]}}  # a good profile next to the bad one
     config(content)
 
     for answer in (monitor.get_profile("ok")[1], monitor.list_profiles()):
@@ -117,29 +117,29 @@ def test_invalid_file_blocks_every_profile(config, content, fragment):  # CFG-03
 
 
 def test_unreadable_file_is_invalid(config, tmp_path, monkeypatch):  # CFG-03
-    monkeypatch.setattr(monitor, "CONFIG_PATH", str(tmp_path))  # um diretório: não dá para ler como arquivo
+    monkeypatch.setattr(monitor, "CONFIG_PATH", str(tmp_path))  # a directory: it cannot be read as a file
 
     assert monitor.list_profiles()["error_code"] == "MONITOR_CONFIG_INVALID"
 
 
 def test_listing_never_shows_the_token(config):  # CFG-04
-    config({"profiles": {"suporte": {
+    config({"profiles": {"support": {
         "targets": ["me", "5511955550000"], "triggers": ["mention", "direct"], "chats": ["120363000000000099@g.us"],
         "senders": {"allow": ["5511911112222"]}, "topics": ["deploy"], "mode": "auto", "auto_senders": ["5511911112222"],
-        "approval_token": "segredo-12345", "limits": {"cooldown_seconds": 5}, "max_event_age_minutes": 30,
-        "instructions": "Responda só sobre o software X"}}})
+        "approval_token": "secret-12345", "limits": {"cooldown_seconds": 5}, "max_event_age_minutes": 30,
+        "instructions": "Only answer about software X"}}})
 
     out = monitor.list_profiles()
 
-    assert out["success"] is True and "segredo-12345" not in json.dumps(out)
+    assert out["success"] is True and "secret-12345" not in json.dumps(out)
     assert out["profiles"] == [{
-        "name": "suporte", "enabled": True, "targets": ["me", "5511955550000"], "aliases": [], "allow_own_alias": False,
+        "name": "support", "enabled": True, "targets": ["me", "5511955550000"], "aliases": [], "allow_own_alias": False,
         "auto_chats": [], "triggers": ["mention", "direct"],
         "chats": ["120363000000000099@g.us"], "senders": {"allow": ["5511911112222"], "deny": []}, "topics": ["deploy"],
         "mode": "auto", "auto_senders": ["5511911112222"],
         "limits": {"replies_per_chat_per_hour": 6, "replies_per_sender_per_hour": 4, "cooldown_seconds": 5,
                    "max_reply_chars": 1500},
-        "max_event_age_minutes": 30, "instructions": "Responda só sobre o software X", "has_approval_token": True}]
+        "max_event_age_minutes": 30, "instructions": "Only answer about software X", "has_approval_token": True}]
 
 
 def test_listing_without_token(config):  # CFG-04
@@ -155,14 +155,14 @@ def test_disabled_and_unknown_profiles(config):  # CFG-05
     assert monitor.get_profile("nope")[1]["error_code"] == "PROFILE_NOT_FOUND"
     assert "on, off" in monitor.get_profile("nope")[1]["message"] or "off, on" in monitor.get_profile("nope")[1]["message"]
     assert monitor.get_profile("on")[0].name == "on"
-    assert [p["name"] for p in monitor.list_profiles()["profiles"]] == ["off", "on"]  # a listagem mostra também os desligados
+    assert [p["name"] for p in monitor.list_profiles()["profiles"]] == ["off", "on"]  # the listing also shows the disabled ones
 
 
 EXAMPLE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "monitor.example.json")
 
 
 def test_the_example_file_is_valid_once_the_placeholder_token_is_replaced(config, monkeypatch):
-    config(open(EXAMPLE).read().replace("troque-por-um-valor-so-seu", "meu-token-de-verdade"))
+    config(open(EXAMPLE).read().replace("troque-por-um-valor-so-seu", "my-real-token"))
 
     out = monitor.list_profiles()
 
@@ -177,7 +177,7 @@ def test_the_example_file_is_refused_until_the_placeholder_token_is_changed(monk
     assert out["error_code"] == "MONITOR_CONFIG_INVALID" and "placeholder" in out["message"]
 
 
-@pytest.mark.parametrize("token", ["curto", "1234567", 12345678, ["abcdefgh"], None])
+@pytest.mark.parametrize("token", ["short", "1234567", 12345678, ["abcdefgh"], None])
 def test_weak_or_mistyped_approval_tokens_are_refused(config, token):  # CFG-03
     config(profile(approval_token=token))
 

@@ -1,4 +1,4 @@
-"""Testes do monitor, parte 4: monitor_reply e seus guardrails (RESP-01..10)."""
+"""Monitor tests, part 4: monitor_reply and its guardrails (RESP-01..10)."""
 import json
 import os
 import stat
@@ -18,7 +18,7 @@ import send_policy  # noqa: E402
 import whatsapp  # noqa: E402
 from tests.test_monitor_scan import ANA, ANA_LID, BOB, DM_ANA, GROUP, GROUP2, ME, add, make  # noqa: E402
 
-TOKEN = "token-of-alice"
+TOKEN = "token-of-the-owner"
 NOW = datetime(2026, 10, 21, 12, 0, tzinfo=timezone(timedelta(hours=-3)))
 
 
@@ -32,7 +32,7 @@ def conn(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sent(monkeypatch):
-    """Troca send_message do servidor: guarda cada chamada e devolve sucesso."""
+    """Replaces the server's send_message: records each call and returns success."""
     calls = []
 
     def fake(recipient, message, override_token=None, mentions=None, reply_to=None, dry_run=False):
@@ -40,8 +40,8 @@ def sent(monkeypatch):
                       "mentions": mentions, "reply_to": reply_to, "dry_run": dry_run})
         if dry_run:
             return whatsapp.SendResult(True, "Dry run: nothing was sent", preview={
-                "text": message, "chat_jid": recipient, "chat_name": "Grupo 1", "mentions": [],
-                "reply_to": {"id": reply_to, "sender": ANA, "text": "oi"}})
+                "text": message, "chat_jid": recipient, "chat_name": "Group 1", "mentions": [],
+                "reply_to": {"id": reply_to, "sender": ANA, "text": "hi"}})
         return whatsapp.SendResult(True, f"Message sent to {recipient}", message_id="SENT1",
                                    timestamp="2026-10-21T12:00:00-03:00", chat_jid=recipient)
     monkeypatch.setattr(whatsapp, "send_message", fake)
@@ -58,7 +58,7 @@ def config(**fields):
         json.dump({"profiles": {"p": body}}, f)
 
 
-def reply(message_id="HIT", text="Resposta de teste", chat_jid=GROUP, **kwargs):
+def reply(message_id="HIT", text="Test reply", chat_jid=GROUP, **kwargs):
     kwargs.setdefault("approval_token", TOKEN)
     kwargs.setdefault("now", NOW)
     return monitor.monitor_reply("p", chat_jid, message_id, text, **kwargs)
@@ -78,7 +78,7 @@ def put_audit(**fields):
 
 
 def seed(conn):
-    add(conn, "HIT", f"@{ME} pode ver o deploy?", chat=GROUP, sender=ANA)
+    add(conn, "HIT", f"@{ME} can you check the deploy?", chat=GROUP, sender=ANA)
 
 
 def test_reply_to_a_triggering_message_is_sent_in_its_chat_quoting_it(conn, sent):  # RESP-02
@@ -89,7 +89,7 @@ def test_reply_to_a_triggering_message_is_sent_in_its_chat_quoting_it(conn, sent
 
     assert out["success"] is True and out["message_id"] == "SENT1" and out["chat_jid"] == GROUP
     assert out["mode"] == "draft" and out["profile"] == "p"
-    assert real_sends(sent) == [{"recipient": GROUP, "message": "Resposta de teste", "override_token": None,
+    assert real_sends(sent) == [{"recipient": GROUP, "message": "Test reply", "override_token": None,
                                  "mentions": None, "reply_to": "HIT", "dry_run": False}]
 
 
@@ -113,11 +113,11 @@ def test_a_failed_send_is_audited_as_failed(conn, monkeypatch):  # RESP-09
     seed(conn)
     config()
     monkeypatch.setattr(whatsapp, "send_message", lambda *a, **k: whatsapp.SendResult(
-        False, "bridge fora", error_code=None) if not a[5] else whatsapp.SendResult(True, "ok", preview={}))
+        False, "bridge down", error_code=None) if not a[5] else whatsapp.SendResult(True, "ok", preview={}))
 
     out = reply()
 
-    assert out["success"] is False and out["message"] == "bridge fora"
+    assert out["success"] is False and out["message"] == "bridge down"
     assert [l["result"] for l in audit_lines()] == ["failed"]
 
 
@@ -132,11 +132,11 @@ def test_message_that_is_not_there(conn, sent, message_id, chat):  # RESP-01
 
 
 def test_messages_that_do_not_fire_the_profile(conn, sent):  # RESP-01
-    add(conn, "PLAIN", "sem menção", chat=GROUP, sender=ANA)
-    add(conn, "MINE", f"@{ME} eu mesmo", chat=GROUP, from_me=1)
-    add(conn, "OFFTOPIC", f"@{ME} almoço?", chat=GROUP, sender=ANA)
+    add(conn, "PLAIN", "no mention", chat=GROUP, sender=ANA)
+    add(conn, "MINE", f"@{ME} myself", chat=GROUP, from_me=1)
+    add(conn, "OFFTOPIC", f"@{ME} lunch?", chat=GROUP, sender=ANA)
     add(conn, "DENIED", f"@{ME} deploy", chat=GROUP, sender=BOB)
-    add(conn, "FROM", "só do número", chat=GROUP, sender=ANA)
+    add(conn, "FROM", "only from the number", chat=GROUP, sender=ANA)
     config(topics=["deploy"], senders={"deny": [BOB]})
 
     for message_id in ("PLAIN", "MINE", "OFFTOPIC", "DENIED"):
@@ -145,7 +145,7 @@ def test_messages_that_do_not_fire_the_profile(conn, sent):  # RESP-01
 
 
 def test_trigger_kind_is_checked_against_the_profile(conn, sent):  # RESP-01
-    add(conn, "DM", "oi no privado", chat=DM_ANA, sender=ANA)
+    add(conn, "DM", "hi in private", chat=DM_ANA, sender=ANA)
     config(triggers=["mention"])
 
     assert reply("DM", chat_jid=DM_ANA)["error_code"] == "NOT_A_TRIGGER"
@@ -154,9 +154,9 @@ def test_trigger_kind_is_checked_against_the_profile(conn, sent):  # RESP-01
     assert real_sends(sent)[0]["recipient"] == DM_ANA
 
 
-def test_an_old_message_can_still_be_answered(conn, sent):  # RESP-01 (a idade só vale para o monitor)
+def test_an_old_message_can_still_be_answered(conn, sent):  # RESP-01 (age only matters to the monitor)
     conn.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, quoted_id) "
-                 "VALUES ('OLD', ?, ?, ?, '2026-10-01 10:00:00+00:00', 0, NULL)", (GROUP, ANA, f"@{ME} antigo"))
+                 "VALUES ('OLD', ?, ?, ?, '2026-10-01 10:00:00+00:00', 0, NULL)", (GROUP, ANA, f"@{ME} old"))
     conn.commit()
     config()
 
@@ -165,19 +165,19 @@ def test_an_old_message_can_still_be_answered(conn, sent):  # RESP-01 (a idade s
 
 def test_the_agent_cannot_pick_another_chat(conn, sent):  # RESP-01
     seed(conn)
-    add(conn, "HIT2", f"@{ME} no outro grupo", chat=GROUP2, sender=ANA)
+    add(conn, "HIT2", f"@{ME} in the other group", chat=GROUP2, sender=ANA)
     config()
 
-    out = reply("HIT", chat_jid=GROUP2)   # a mensagem HIT não existe no grupo 2
+    out = reply("HIT", chat_jid=GROUP2)   # the HIT message does not exist in group 2
 
     assert out["error_code"] == "NOT_A_TRIGGER" and real_sends(sent) == []
     assert reply("HIT2", chat_jid=GROUP2)["success"] is True and real_sends(sent)[0]["recipient"] == GROUP2
 
 
 def test_auto_mode_sends_without_a_token_only_to_trusted_senders(conn, sent):  # RESP-03
-    add(conn, "TRUSTED", f"@{ME} oi", sender=ANA)
-    add(conn, "TRUSTED_LID", f"@{ME} oi", sender=ANA_LID, minute=56)
-    add(conn, "STRANGER", f"@{ME} oi", sender=BOB, minute=57)
+    add(conn, "TRUSTED", f"@{ME} hi", sender=ANA)
+    add(conn, "TRUSTED_LID", f"@{ME} hi", sender=ANA_LID, minute=56)
+    add(conn, "STRANGER", f"@{ME} hi", sender=BOB, minute=57)
     config(mode="auto", auto_senders=[ANA], limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 20,
                                                     "replies_per_sender_per_hour": 20})
 
@@ -198,10 +198,10 @@ def test_draft_mode_needs_the_token(conn, sent):  # RESP-04
     seed(conn)
     config()
 
-    for token in (None, "", "errado", TOKEN + "x", TOKEN[:-1]):
+    for token in (None, "", "wrong", TOKEN + "x", TOKEN[:-1]):
         out = reply(approval_token=token)
         assert out["success"] is False and out["error_code"] == "APPROVAL_REQUIRED", token
-        assert out["preview"]["text"] == "Resposta de teste" and out["mode"] == "draft"
+        assert out["preview"]["text"] == "Test reply" and out["mode"] == "draft"
     assert real_sends(sent) == []
 
 
@@ -210,7 +210,7 @@ def test_without_a_configured_token_a_draft_is_never_sent(conn, sent):  # RESP-0
     with open(monitor.CONFIG_PATH, "w") as f:
         json.dump({"profiles": {"p": {"targets": ["me"]}}}, f)
 
-    for token in (None, "", "qualquer", "None"):
+    for token in (None, "", "anything", "None"):
         out = reply(approval_token=token)
         assert out["error_code"] == "APPROVAL_REQUIRED" and "no approval_token" in out["message"]
     assert real_sends(sent) == []
@@ -263,7 +263,7 @@ def test_cooldown_between_replies_in_a_chat(conn, sent):  # RESP-06
 
     assert out["error_code"] == "RATE_LIMITED" and out["success"] is False and real_sends(sent) == []
     assert out["retry_after_seconds"] in (20, 21) and "30 s" in out["message"]
-    put_audit(ts=(NOW - timedelta(seconds=100)).isoformat(), chat_jid=GROUP2)   # outro chat não conta
+    put_audit(ts=(NOW - timedelta(seconds=100)).isoformat(), chat_jid=GROUP2)   # another chat does not count
     assert reply(now=NOW + timedelta(seconds=25))["success"] is True
 
 
@@ -276,7 +276,7 @@ def test_replies_per_chat_per_hour(conn, sent):  # RESP-06
     out = reply()
 
     assert out["error_code"] == "RATE_LIMITED" and "3 replies per chat per hour" in out["message"]
-    assert 599 <= out["retry_after_seconds"] <= 602     # a mais antiga (50 min) sai da janela em 10 min
+    assert 599 <= out["retry_after_seconds"] <= 602     # the oldest (50 min) leaves the window in 10 min
     assert reply(now=NOW + timedelta(minutes=11))["success"] is True
 
 
@@ -295,11 +295,11 @@ def test_replies_per_sender_per_hour(conn, sent):  # RESP-06
 def test_only_recent_sent_replies_count(conn, sent):  # RESP-06
     seed(conn)
     config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 1, "replies_per_sender_per_hour": 1})
-    put_audit(ts=(NOW - timedelta(minutes=61)).isoformat())                       # fora da janela
-    put_audit(ts=(NOW - timedelta(minutes=5)).isoformat(), result="blocked")      # não foi enviada
-    put_audit(ts=(NOW + timedelta(minutes=5)).isoformat())                        # do futuro: relógio errado, não conta
+    put_audit(ts=(NOW - timedelta(minutes=61)).isoformat())                       # outside the window
+    put_audit(ts=(NOW - timedelta(minutes=5)).isoformat(), result="blocked")      # was not sent
+    put_audit(ts=(NOW + timedelta(minutes=5)).isoformat())                        # from the future: wrong clock, does not count
     with open(monitor.AUDIT_PATH, "a") as f:
-        f.write("isto não é json\n{\"ts\": \"quebrado\"}\n")
+        f.write("this is not json\n{\"ts\": \"broken\"}\n")
 
     assert reply()["success"] is True
 
@@ -307,7 +307,7 @@ def test_only_recent_sent_replies_count(conn, sent):  # RESP-06
 def test_unreadable_audit_log_blocks_the_reply(conn, sent, tmp_path, monkeypatch):  # RESP-07
     seed(conn)
     config()
-    monkeypatch.setattr(monitor, "AUDIT_PATH", str(tmp_path))     # um diretório
+    monkeypatch.setattr(monitor, "AUDIT_PATH", str(tmp_path))     # a directory
 
     out = reply()
 
@@ -317,11 +317,11 @@ def test_unreadable_audit_log_blocks_the_reply(conn, sent, tmp_path, monkeypatch
 def test_read_error_after_the_writable_check_also_blocks(conn, sent, monkeypatch):  # RESP-07
     seed(conn)
     config()
-    monkeypatch.setattr(monitor, "_read_sent", mock.Mock(side_effect=PermissionError("negado")))
+    monkeypatch.setattr(monitor, "_read_sent", mock.Mock(side_effect=PermissionError("denied")))
 
     out = reply()
 
-    assert out["error_code"] == "RATE_LIMIT_UNVERIFIABLE" and "negado" in out["message"] and real_sends(sent) == []
+    assert out["error_code"] == "RATE_LIMIT_UNVERIFIABLE" and "denied" in out["message"] and real_sends(sent) == []
 
 
 def test_missing_audit_log_counts_zero_and_is_created_private(conn, sent):  # RESP-07, RESP-09
@@ -343,9 +343,9 @@ def test_dry_run_sends_nothing_audits_nothing_and_counts_nothing(conn, sent):  #
     for out in (first, second):
         assert out["success"] is True and out["dry_run"] is True and out["mode"] == "draft"
         assert out["requires_approval_token"] is True and out["matched"] == [{"trigger": "mention", "target": "me"}]
-        assert out["preview"]["text"] == "Resposta de teste" and out["preview"]["reply_to"]["id"] == "HIT"
+        assert out["preview"]["text"] == "Test reply" and out["preview"]["reply_to"]["id"] == "HIT"
     assert real_sends(sent) == [] and audit_lines() == [] and not os.path.exists(monitor.AUDIT_PATH)
-    assert reply()["success"] is True   # o limite de 1 por hora ainda estava livre
+    assert reply()["success"] is True   # the limit of 1 per hour was still free
 
 
 def test_dry_run_of_a_trusted_sender_does_not_ask_for_a_token(conn, sent):  # RESP-08
@@ -370,7 +370,7 @@ def test_dry_run_still_shows_a_policy_block(conn, tmp_path, monkeypatch):  # RES
 
 
 def test_dry_run_of_a_message_that_does_not_fire_is_refused(conn, sent):  # RESP-08, RESP-01
-    add(conn, "PLAIN", "nada", sender=ANA)
+    add(conn, "PLAIN", "nothing", sender=ANA)
     config()
 
     assert reply("PLAIN", dry_run=True)["error_code"] == "NOT_A_TRIGGER"
@@ -379,13 +379,13 @@ def test_dry_run_of_a_message_that_does_not_fire_is_refused(conn, sent):  # RESP
 def test_audit_line_has_the_facts_and_never_the_text_or_the_token(conn, sent):  # RESP-09
     seed(conn)
     config()
-    secret_text = "texto-secreto-da-resposta-12345"
+    secret_text = "secret-reply-text-12345"
 
     reply(text=secret_text)
-    reply(text=secret_text, approval_token="chute-errado")
+    reply(text=secret_text, approval_token="wrong-guess")
 
     raw = open(monitor.AUDIT_PATH).read()
-    assert secret_text not in raw and TOKEN not in raw and "chute-errado" not in raw
+    assert secret_text not in raw and TOKEN not in raw and "wrong-guess" not in raw
     sent_line, blocked_line = audit_lines()
     assert sent_line["profile"] == "p" and sent_line["chat_jid"] == GROUP and sent_line["sender"] == ANA
     assert sent_line["message_id"] == "HIT" and sent_line["triggers"] == ["mention"] and sent_line["mode"] == "draft"
@@ -409,13 +409,13 @@ def test_rate_limited_attempts_are_audited_but_do_not_count(conn, sent):  # RESP
 @pytest.mark.parametrize("write, code", [
     (None, "PROFILE_NOT_FOUND"),
     ({"profiles": {"p": {"targets": ["me"], "enabled": False}}}, "PROFILE_DISABLED"),
-    ("{quebrado", "MONITOR_CONFIG_INVALID"),
+    ("{broken", "MONITOR_CONFIG_INVALID"),
     ({"profiles": {"p": {"targets": ["me"], "mode": "x"}}}, "MONITOR_CONFIG_INVALID"),
 ])
 def test_profile_problems_refuse_before_anything(conn, sent, write, code):  # RESP-10
     seed(conn)
     if write is None:
-        write = {"profiles": {"outro": {"targets": ["me"]}}}
+        write = {"profiles": {"other": {"targets": ["me"]}}}
     with open(monitor.CONFIG_PATH, "w") as f:
         f.write(write if isinstance(write, str) else json.dumps(write))
 
@@ -450,7 +450,7 @@ def test_unknown_own_account(conn, sent, monkeypatch):  # RESP-01
     config()
 
     def unknown():
-        raise monitor.OwnAccountUnknown("sem número")
+        raise monitor.OwnAccountUnknown("no number")
     monkeypatch.setattr(monitor, "own_number", unknown)
 
     assert reply()["error_code"] == "OWN_ACCOUNT_UNKNOWN" and real_sends(sent) == []
@@ -478,16 +478,16 @@ def test_tool_passes_its_arguments(conn, sent):  # RESP-02
     seed(conn)
     config()
 
-    out = main.monitor_reply("p", GROUP, "HIT", "pelo tool", approval_token=TOKEN)
+    out = main.monitor_reply("p", GROUP, "HIT", "via the tool", approval_token=TOKEN)
 
-    assert out["success"] is True and real_sends(sent)[0]["message"] == "pelo tool"
+    assert out["success"] is True and real_sends(sent)[0]["message"] == "via the tool"
 
 
-def test_replies_of_other_profiles_count_too(conn, sent):  # RESP-06 (revisão de segurança)
+def test_replies_of_other_profiles_count_too(conn, sent):  # RESP-06 (security review)
     seed(conn)
     config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 2, "replies_per_sender_per_hour": 50})
-    put_audit(ts=(NOW - timedelta(minutes=30)).isoformat(), profile="outro", sender=BOB)
-    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), profile="mais-um", sender=BOB)
+    put_audit(ts=(NOW - timedelta(minutes=30)).isoformat(), profile="other", sender=BOB)
+    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), profile="one-more", sender=BOB)
 
     out = reply()
 
@@ -497,12 +497,12 @@ def test_replies_of_other_profiles_count_too(conn, sent):  # RESP-06 (revisão d
 def test_cooldown_counts_a_reply_of_another_profile(conn, sent):  # RESP-06
     seed(conn)
     config(limits={"cooldown_seconds": 60, "replies_per_chat_per_hour": 50, "replies_per_sender_per_hour": 50})
-    put_audit(ts=(NOW - timedelta(seconds=10)).isoformat(), profile="outro", sender=BOB)
+    put_audit(ts=(NOW - timedelta(seconds=10)).isoformat(), profile="other", sender=BOB)
 
     assert reply()["error_code"] == "RATE_LIMITED"
 
 
-@pytest.mark.parametrize("token", [123456789, ["token-of-alice"], b"token-of-alice", "\ud800", "token-of-alice\ud800"])
+@pytest.mark.parametrize("token", [123456789, ["token-of-the-owner"], b"token-of-the-owner", "\ud800", "token-of-the-owner\ud800"])
 def test_a_token_of_the_wrong_type_or_with_stray_surrogates_is_just_refused(conn, sent, token):  # RESP-04
     seed(conn)
     config()
@@ -521,9 +521,9 @@ def test_a_numeric_token_does_not_match_its_text(conn, sent):  # RESP-04
 
 
 @pytest.mark.parametrize("line", [
-    b'{"ts": "2026-10-21T11:50:00", "profile": "p", "result": "sent", "chat_jid": "x"}\n',   # sem fuso
-    b'\xff\xfe lixo\n',                                                                       # UTF-8 inválido
-    b'[1, 2, 3]\n', b'"texto"\n', b'null\n', b'{"ts": 5}\n', b'\n',
+    b'{"ts": "2026-10-21T11:50:00", "profile": "p", "result": "sent", "chat_jid": "x"}\n',   # no timezone
+    b'\xff\xfe garbage\n',                                                                       # invalid UTF-8
+    b'[1, 2, 3]\n', b'"text"\n', b'null\n', b'{"ts": 5}\n', b'\n',
 ])
 def test_corrupted_audit_lines_are_skipped_not_fatal(conn, sent, line):  # RESP-07
     seed(conn)
@@ -536,10 +536,10 @@ def test_corrupted_audit_lines_are_skipped_not_fatal(conn, sent, line):  # RESP-
     assert out["success"] is True and len(real_sends(sent)) == 1
 
 
-def test_the_same_person_as_lid_and_phone_counts_once_per_sender_limit(conn, sent):  # RESP-06 (revisão do Verifier)
-    add(conn, "AS_LID", f"@{ME} oi", sender=ANA_LID, minute=56)
+def test_the_same_person_as_lid_and_phone_counts_once_per_sender_limit(conn, sent):  # RESP-06 (Verifier review)
+    add(conn, "AS_LID", f"@{ME} hi", sender=ANA_LID, minute=56)
     config(limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 50, "replies_per_sender_per_hour": 1})
-    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), sender=ANA, chat_jid=GROUP2)   # respondida como telefone
+    put_audit(ts=(NOW - timedelta(minutes=20)).isoformat(), sender=ANA, chat_jid=GROUP2)   # answered as phone
 
     out = reply("AS_LID")
 
@@ -571,7 +571,7 @@ def test_an_older_audit_log_with_a_wider_mode_is_made_private(conn, sent):  # RE
     assert stat.S_IMODE(os.stat(monitor.AUDIT_PATH).st_mode) == 0o600
 
 
-def test_another_process_holding_the_lock_makes_the_reply_wait(conn, sent):  # RESP-06 (dois servidores no mesmo log)
+def test_another_process_holding_the_lock_makes_the_reply_wait(conn, sent):  # RESP-06 (two servers on the same log)
     fcntl = pytest.importorskip("fcntl")
     seed(conn)
     config()
@@ -588,7 +588,7 @@ def test_another_process_holding_the_lock_makes_the_reply_wait(conn, sent):  # R
     try:
         assert not done.wait(0.4), "the reply must wait for the other process"
     finally:
-        os.close(fd)     # libera o lock
+        os.close(fd)     # releases the lock
     thread.join(5)
 
     assert result[0]["success"] is True

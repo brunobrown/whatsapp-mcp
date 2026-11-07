@@ -1,8 +1,8 @@
-"""Cada ferramenta, chamada pelo próprio servidor MCP, devolve o que declara.
+"""Each tool, called through the MCP server itself, returns what it declares.
 
-O mcp 2.x valida o retorno de cada ferramenta contra o tipo declarado; chamar a função direto não passa por
-essa validação. Aqui toda ferramenta registrada é chamada por `call_tool`, contra um banco de teste e com o
-bridge simulado, e nenhuma pode virar erro de ferramenta."""
+mcp 2.x validates each tool's return value against the declared type; calling the function directly skips
+that validation. Here every registered tool is called through `call_tool`, against a test database and with
+a mocked bridge, and none may turn into a tool error."""
 import asyncio
 import os
 import sqlite3
@@ -34,18 +34,18 @@ def world(tmp_path, monkeypatch):
             selectable_count INTEGER, allow_add_option BOOLEAN, hide_voter_names BOOLEAN, PRIMARY KEY (id, chat_jid));
         CREATE TABLE poll_votes (poll_id TEXT, chat_jid TEXT, voter TEXT, hashes_json TEXT, timestamp_ms INTEGER,
             PRIMARY KEY (poll_id, chat_jid, voter));
-        INSERT INTO chats VALUES ('{GROUP}', 'Teste', '2026-11-06 10:00:00+00:00'), ('{DM}', 'Maria', '2026-11-06 09:00:00+00:00');
+        INSERT INTO chats VALUES ('{GROUP}', 'Test', '2026-11-06 10:00:00+00:00'), ('{DM}', 'Maria', '2026-11-06 09:00:00+00:00');
         INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES
-            ('M1', '{GROUP}', '5511999990000', 'oi', '2026-11-06 10:00:00+00:00', 0),
-            ('MINE', '{GROUP}', '5511900000000', 'meu', '2026-11-06 10:01:00+00:00', 1),
+            ('M1', '{GROUP}', '5511999990000', 'hi', '2026-11-06 10:00:00+00:00', 0),
+            ('MINE', '{GROUP}', '5511900000000', 'mine', '2026-11-06 10:01:00+00:00', 1),
             ('P1', '{GROUP}', '5511999990000', '[poll] Q', '2026-11-06 10:02:00+00:00', 0),
-            ('D1', '{DM}', '5511999990000', 'oi maria', '2026-11-06 09:00:00+00:00', 0);
-        INSERT INTO polls VALUES ('P1', '{GROUP}', '5511999990000', 'Q', '["Sim","Não"]', 0, 0, 0);
+            ('D1', '{DM}', '5511999990000', 'hi maria', '2026-11-06 09:00:00+00:00', 0);
+        INSERT INTO polls VALUES ('P1', '{GROUP}', '5511999990000', 'Q', '["Yes","No"]', 0, 0, 0);
     """)
     conn.commit()
     conn.close()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
-    audio = tmp_path / "voz.ogg"
+    audio = tmp_path / "voice.ogg"
     audio.write_bytes(b"ogg")
     doc = tmp_path / "doc.txt"
     doc.write_bytes(b"x")
@@ -69,15 +69,15 @@ def arguments(files):
         "monitor_messages": {"targets": ["5511999990000"]},
         "get_group_participants": {"chat_jid": GROUP},
         "get_connection_status": {},
-        "send_message": {"recipient": GROUP, "message": "oi"},
+        "send_message": {"recipient": GROUP, "message": "hi"},
         "send_file": {"recipient": GROUP, "media_path": files["doc"]},
         "send_audio_message": {"recipient": GROUP, "media_path": files["audio"]},
         "send_poll": {"recipient": GROUP, "question": "Q?", "options": ["A", "B"]},
-        "vote_poll": {"chat_jid": GROUP, "message_id": "P1", "options": ["Sim"]},
+        "vote_poll": {"chat_jid": GROUP, "message_id": "P1", "options": ["Yes"]},
         "react_to_message": {"chat_jid": GROUP, "message_id": "M1", "emoji": "👍"},
         "get_message_reactions": {"message_id": "M1", "chat_jid": GROUP},
         "delete_message": {"chat_jid": GROUP, "message_id": "MINE"},
-        "monitor_reply": {"profile": "nenhum", "chat_jid": GROUP, "message_id": "M1", "text": "oi"},
+        "monitor_reply": {"profile": "none", "chat_jid": GROUP, "message_id": "M1", "text": "hi"},
         "download_media": {"message_id": "M1", "chat_jid": GROUP},
         "download_media_batch": {"chat_jid": GROUP},
     }
@@ -108,13 +108,13 @@ def test_calling_the_tool_through_the_server_does_not_fail_validation(world, nam
 
 def test_converted_tools_keep_every_field_and_show_times_as_iso_text(world):  # MCP2-02
     chats = main.list_chats()
-    teste = next(c for c in chats if c["jid"] == GROUP)
-    assert teste["name"] == "Teste" and isinstance(teste["last_message_time"], str)
-    assert {"jid", "name", "last_message_time", "last_message", "last_sender", "last_is_from_me"} <= set(teste)
+    test_chat = next(c for c in chats if c["jid"] == GROUP)
+    assert test_chat["name"] == "Test" and isinstance(test_chat["last_message_time"], str)
+    assert {"jid", "name", "last_message_time", "last_message", "last_sender", "last_is_from_me"} <= set(test_chat)
 
     chat = main.get_chat(GROUP)
     assert chat["jid"] == GROUP and chat["last_message_time"].startswith("2026-11-06T10:")
-    assert main.get_chat("nao-existe@g.us") is None
+    assert main.get_chat("does-not-exist@g.us") is None
 
     context = main.get_message_context("M1", before=0, after=1, chat_jid=GROUP)
     assert context["message"]["id"] == "M1" and context["message"]["timestamp"].startswith("2026-11-06T10:00")

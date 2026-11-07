@@ -1,4 +1,4 @@
-"""get_message_reactions: lista das reações atuais, contagem por emoji e erros."""
+"""get_message_reactions: list of current reactions, count per emoji and errors."""
 import os
 import sqlite3
 import sys
@@ -14,13 +14,13 @@ SCHEMA = """
     CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);
     CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
         is_from_me BOOLEAN, media_type TEXT, PRIMARY KEY (id, chat_jid));
-    INSERT INTO chats VALUES ('a@g.us', 'Projeto', NULL), ('b@g.us', 'Família', NULL),
+    INSERT INTO chats VALUES ('a@g.us', 'Project', NULL), ('b@g.us', 'Family', NULL),
         ('5511999990000@s.whatsapp.net', 'Maria', NULL);
     INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES
-        ('M1', 'a@g.us', 'alice', 'oi', '2026-11-06 10:00:00+00:00', 0),
-        ('MINE', 'a@g.us', '5599999999999', 'meu', '2026-11-06 10:01:00+00:00', 1),
-        ('M1', 'b@g.us', 'alice', 'oi', '2026-11-06 10:00:00+00:00', 0),
-        ('D1', '5511999990000@s.whatsapp.net', 'maria', 'oi', '2026-11-06 10:00:00+00:00', 0);"""
+        ('M1', 'a@g.us', 'alice', 'hi', '2026-11-06 10:00:00+00:00', 0),
+        ('MINE', 'a@g.us', '5599999999999', 'mine', '2026-11-06 10:01:00+00:00', 1),
+        ('M1', 'b@g.us', 'alice', 'hi', '2026-11-06 10:00:00+00:00', 0),
+        ('D1', '5511999990000@s.whatsapp.net', 'maria', 'hi', '2026-11-06 10:00:00+00:00', 0);"""
 TABLE = """CREATE TABLE reactions (target_id TEXT, chat_jid TEXT, reactor TEXT, emoji TEXT, timestamp_ms INTEGER,
     PRIMARY KEY (target_id, chat_jid, reactor));"""
 
@@ -50,7 +50,7 @@ def test_lists_the_current_reactions_with_counts(conn):  # REACT-08
 
     out = whatsapp.get_message_reactions("M1", A)
 
-    assert out["success"] is True and out["message_id"] == "M1" and out["chat_jid"] == A and out["chat_name"] == "Projeto"
+    assert out["success"] is True and out["message_id"] == "M1" and out["chat_jid"] == A and out["chat_name"] == "Project"
     assert out["total"] == 3
     assert [(r["reactor"], r["emoji"]) for r in out["reactions"]] == [
         ("5511111111111", "👍"), ("5522222222222", "👍"), ("5533333333333", "❤️")]
@@ -108,7 +108,7 @@ def test_direct_chat_is_found_under_the_other_addressing(conn):  # REACT-08
     assert out["success"] is True and out["counts"] == {"👍": 1}
 
 
-def test_database_without_the_reactions_table(tmp_path, monkeypatch):  # REACT-08 (banco antigo)
+def test_database_without_the_reactions_table(tmp_path, monkeypatch):  # REACT-08 (old database)
     make(tmp_path, monkeypatch, with_table=False)
     out = whatsapp.get_message_reactions("M1", A)
     assert out["success"] is True and out["reactions"] == [] and out["total"] == 0
