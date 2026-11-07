@@ -1,4 +1,4 @@
-"""Testes do T10: o servidor MCP lê os bancos cifrados pelo bridge (KEY-03, PYENC-01..05)."""
+"""The MCP server reads the databases the bridge encrypted (KEY-03, PYENC-01..05)."""
 import asyncio
 import os
 import shutil
@@ -16,9 +16,9 @@ import send_policy  # noqa: E402
 import whatsapp  # noqa: E402
 
 MASTER = bytes(range(32)).hex()
-FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "encrypted_messages.db")   # escrito pelo bridge em Go
+FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "encrypted_messages.db")   # written by the Go bridge
 GROUP = "fixture@g.us"
-# respostas conhecidas calculadas com um HKDF independente e conferidas no teste do bridge em Go (dbkey_test.go)
+# known answers computed with an independent HKDF and checked by the Go bridge test (dbkey_test.go)
 MESSAGES_KEY = "0f3cd7db53fb5087a9624f5c1f1f30c3e1f99a1e474be5f04df6e8535b1f6d86"
 SESSION_KEY = "b82e2676fe8259e623b594a53d488cd4dff20fa468da22bd16f5dd904e4bb416"
 
@@ -46,7 +46,7 @@ def test_hkdf_matches_rfc_5869_test_case_1():  # KEY-03
     assert okm.hex() == "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
 
 
-def test_key_sources_in_order(tmp_path, monkeypatch):  # KEY-01 (lado Python)
+def test_key_sources_in_order(tmp_path, monkeypatch):  # KEY-01 (Python side)
     other = "ab" * 32
     keyfile = tmp_path / "my.key"
     keyfile.write_text(other + "\n")
@@ -63,7 +63,7 @@ def test_key_sources_in_order(tmp_path, monkeypatch):  # KEY-01 (lado Python)
     assert dbcrypto.master_key().hex() == MASTER
 
 
-@pytest.mark.parametrize("bad", ["zz" + "0" * 62, "0" * 63, "0" * 65, "texto-secreto"])
+@pytest.mark.parametrize("bad", ["zz" + "0" * 62, "0" * 63, "0" * 65, "secret-text"])
 def test_a_bad_key_source_is_an_error_without_fallback(tmp_path, monkeypatch, bad):  # KEY-02, PYENC-02
     good = tmp_path / "good.key"
     good.write_text(MASTER)
@@ -83,26 +83,26 @@ def test_no_key_anywhere_is_a_clear_error_and_nothing_is_created(monkeypatch):  
         dbcrypto.master_key()
 
     assert "db.key" in str(error.value) and error.value.error_code == "DATABASE_KEY_UNAVAILABLE"
-    assert not os.path.exists(os.environ["WHATSAPP_CONFIG_DIR"])      # o servidor nunca cria chave
+    assert not os.path.exists(os.environ["WHATSAPP_CONFIG_DIR"])      # the server never creates a key
 
 
 def test_the_server_reads_a_database_the_bridge_encrypted(encrypted):  # PYENC-01, PYENC-04
     out = whatsapp.list_messages(chat_jid=GROUP, format="structured", include_context=False, order="asc")
 
     assert [m["id"] for m in out["messages"]] == ["FX1", "FX2"]
-    assert out["messages"][0]["content"] == "primeira mensagem do fixture"
+    assert out["messages"][0]["content"] == "first fixture message"
 
 
 def test_every_reading_tool_works_on_the_encrypted_database(encrypted):  # PYENC-03
     thread = main.get_message_thread(message_id="FX2", chat_jid=GROUP)
     assert [m["id"] for m in thread["messages"]] == ["FX1", "FX2"]
-    assert thread["messages"][1]["reply_to"]["content"] == "primeira mensagem do fixture"
-    assert "Grupo Fixture" in whatsapp.list_messages(chat_jid=GROUP, include_context=False)
-    assert [c.name for c in whatsapp.list_chats(query="Fixture")] == ["Grupo Fixture"]
-    assert whatsapp.get_chat(GROUP).name == "Grupo Fixture"
+    assert thread["messages"][1]["reply_to"]["content"] == "first fixture message"
+    assert "Fixture Group" in whatsapp.list_messages(chat_jid=GROUP, include_context=False)
+    assert [c.name for c in whatsapp.list_chats(query="Fixture")] == ["Fixture Group"]
+    assert whatsapp.get_chat(GROUP).name == "Fixture Group"
     assert whatsapp.get_message_context("FX1", before=0, after=1).after[0].id == "FX2"
     assert any(c.name == "Ana Fixture" for c in whatsapp.search_contacts("Ana"))
-    assert "Ana Fixture" in whatsapp.sender_label("100000000000003")        # contacts_identity também é lido
+    assert "Ana Fixture" in whatsapp.sender_label("100000000000003")        # contacts_identity is read too
     first = asyncio.run(monitor.monitor_messages(targets=["5511999990000"], triggers=["from"]))
     assert first["success"] is True and first["cursor"] == "2"
     assert monitor.current_cursor() == 2
@@ -161,15 +161,15 @@ def test_a_plaintext_database_still_opens_with_the_standard_module(tmp_path, mon
     path = str(tmp_path / "messages.db")
     c = sqlite3.connect(path)
     c.execute("CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP)")
-    c.execute("INSERT INTO chats VALUES ('a@g.us', 'Texto Puro', NULL)")
+    c.execute("INSERT INTO chats VALUES ('a@g.us', 'Plain Text', NULL)")
     c.commit()
     c.close()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
-    monkeypatch.setenv("WHATSAPP_DB_KEY", "")           # sem chave: o banco em texto puro não precisa
+    monkeypatch.setenv("WHATSAPP_DB_KEY", "")           # no key: a plain-text database does not need one
 
     conn = whatsapp._connect()
 
-    assert isinstance(conn, sqlite3.Connection) and conn.execute("SELECT name FROM chats").fetchone() == ("Texto Puro",)
+    assert isinstance(conn, sqlite3.Connection) and conn.execute("SELECT name FROM chats").fetchone() == ("Plain Text",)
     conn.close()
 
 
@@ -215,13 +215,13 @@ def test_encrypted_files_have_no_plain_header_and_no_readable_text():  # PYENC-0
     data = open(FIXTURE, "rb").read()
 
     assert not data.startswith(dbcrypto.SQLITE_MAGIC)
-    assert b"primeira mensagem" not in data and b"Grupo Fixture" not in data and b"messages" not in data
+    assert b"first fixture" not in data and b"Fixture Group" not in data and b"messages" not in data
 
 
 def test_reply_target_lookup_reads_the_encrypted_database(encrypted):  # PYENC-03
     found = whatsapp._find_reply_target("FX1", GROUP)
 
-    assert found and found["id"] == "FX1" and "primeira mensagem" in found["text"]
+    assert found and found["id"] == "FX1" and "first fixture" in found["text"]
 
 
 def test_a_key_of_only_blanks_is_an_error_not_unset(tmp_path, monkeypatch):  # KEY-02

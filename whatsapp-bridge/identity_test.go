@@ -142,7 +142,7 @@ func TestIdentityDisplayNamePrefersAddressBook(t *testing.T) { // IDN-07
 		id   Identity
 		want string
 	}{
-		{Identity{FullName: "Agenda", PushName: "Push"}, "Agenda"},
+		{Identity{FullName: "Contacts", PushName: "Push"}, "Contacts"},
 		{Identity{PushName: "Push"}, "Push"},
 		{Identity{}, ""},
 	} {
