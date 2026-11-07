@@ -4,6 +4,7 @@ import globals from "globals";
 import jsxA11y from "eslint-plugin-jsx-a11y";
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
+import { literalTextRule } from "./eslint.literals.js";
 
 export default defineConfig(
   { ignores: ["dist", "coverage", "playwright-report", "test-results"] },
@@ -24,6 +25,10 @@ export default defineConfig(
       "@typescript-eslint/consistent-type-imports": "error",
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
     },
+  },
+  {
+    files: ["src/**/*.tsx"],
+    rules: { "no-restricted-syntax": literalTextRule },
   },
   {
     files: ["*.config.ts"],
