@@ -1,93 +1,142 @@
-"""The channel section: the fields of channel.json, validated by channel.parse_config (CFG-01, CFG-02, CFG-11)."""
+"""Channel section (CFG-01, CFG-02, CFG-11, CFG-03): the fields of channel.json, checked by channel.py."""
+import json
 import os
+import shutil
 import stat
-import sys
+from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import channel
+from ui.config.form import FormFlow
+from ui.config.registry import JsonFile, Registry
+from ui.config.store import ConfigStore
+from ui.sections import channel as section_module
 
-import channel  # noqa: E402
-from ui.core.registry import Problem, default  # noqa: E402
-from ui.core.store import ABSENT, ConfigStore  # noqa: E402
-from ui.sections.channel import SECTION  # noqa: E402
-
-NUMBERS = [f for f in SECTION.fields if f.kind in ("int", "float")]
-
-
-def on(**extra):
-    return {"enabled": True, "profiles": ["support"], **extra}
+FIXTURE = Path(__file__).parent / "fixtures" / "ui" / "channel.json"
+SECTION = section_module.SECTION
 
 
-def test_the_section_is_registered_and_restarts_the_server():  # CFG-08
-    assert SECTION in default.sections() and SECTION.restart == "server"
+@pytest.fixture
+def ctx(tmp_path, monkeypatch):
+    target = tmp_path / "cfg" / "channel.json"
+    monkeypatch.setenv("WHATSAPP_CHANNEL_CONFIG", str(target))
+    reg = Registry()
+    reg.register(SECTION)
+    store = ConfigStore(reg)
+
+    def flow():
+        f = FormFlow("channel", reg, store)
+        f.load()
+        return f
+
+    return flow, target
 
 
-def test_the_file_is_where_the_server_reads_it(tmp_path, monkeypatch):  # CFG-12
-    assert SECTION.storage.path() == channel.config_path() == str(tmp_path / "config" / "channel.json")
-    monkeypatch.setenv("WHATSAPP_CHANNEL_CONFIG", str(tmp_path / "elsewhere.json"))
-    assert SECTION.storage.path() == str(tmp_path / "elsewhere.json")
+def put_fixture(target):
+    os.makedirs(target.parent, exist_ok=True)
+    shutil.copy(FIXTURE, target)
+    os.chmod(target, 0o600)
 
 
-def test_the_fields_are_exactly_the_keys_the_server_accepts():  # CFG-11
-    assert {f.key for f in SECTION.fields} == channel._KEYS
+def test_the_section_describes_the_file_the_server_reads(ctx):
+    _, target = ctx
+    assert SECTION.id == "channel" and SECTION.restart == "server" and not SECTION.read_only
+    assert isinstance(SECTION.storage, JsonFile) and SECTION.storage.path() == str(target)
 
 
-def test_the_defaults_shown_are_the_defaults_of_the_server():  # CFG-01
-    defaults = {f.key: f.default for f in SECTION.fields}
-    cfg = channel.Config()
-
-    assert defaults["enabled"] is cfg.enabled and defaults["include_excerpt"] is cfg.include_excerpt
-    for key in ("excerpt_chars", "batch_seconds", "min_interval_seconds", "max_batch", "poll_interval_seconds"):
-        assert defaults[key] == getattr(cfg, key)
+def test_every_field_is_a_key_channel_py_reads_and_every_key_has_a_field():
+    keys = {f.key for f in SECTION.fields}
+    assert keys == channel._KEYS
 
 
-@pytest.mark.parametrize("field", NUMBERS, ids=lambda f: f.key)
-def test_the_bounds_of_a_number_are_the_bounds_the_server_applies(field):  # CFG-02, CFG-11
-    low, high = field.bounds
-    step = 1 if field.kind == "int" else 0.01
-
-    assert SECTION.validate(on(**{field.key: low})) == [] and SECTION.validate(on(**{field.key: high})) == []
-    for outside in (low - step, high + step):
-        assert [p.field for p in SECTION.validate(on(**{field.key: outside}))] == [field.key]
-        assert field.check(outside) is not None            # the form refuses it before it is even sent
-    assert field.check(low) is None and field.check(high) is None
-
-
-def test_a_valid_channel_has_no_problems():  # CFG-02
-    assert SECTION.validate(on(polls=["ID1"], include_excerpt=True, excerpt_chars=80)) == []
-    assert SECTION.validate({"enabled": False}) == []
+def test_the_bounds_and_defaults_are_the_ones_of_the_project():
+    parsed = channel.parse_config({"enabled": True, "profiles": ["p"]})
+    for f in SECTION.fields:
+        if f.key in ("excerpt_chars", "batch_seconds", "min_interval_seconds", "max_batch", "poll_interval_seconds"):
+            assert getattr(parsed, f.key) == f.default, f.key
+            low, high = f.bounds
+            for value in (low, high):
+                assert channel.parse_config({"enabled": True, "profiles": ["p"], f.key: value}).error is None, (f.key, value)
+            for value in (low - 1, high + 1):
+                assert channel.parse_config({"enabled": True, "profiles": ["p"], f.key: value}).error, (f.key, value)
 
 
-@pytest.mark.parametrize("values, field", [
-    (on(profiles="a"), "profiles"),
-    (on(profiles=[""]), "profiles"),
-    (on(profiles=["p"] * 21), "profiles"),
-    (on(include_excerpt="yes"), "include_excerpt"),
-    (on(max_batch=0), "max_batch"),
-    ({"enabled": True}, None),
-    ({"enabled": True, "profiles": ["a"], "colour": 1}, None),
-])
-def test_an_invalid_channel_is_refused_with_the_field_when_there_is_one(values, field):  # CFG-02
-    problems = SECTION.validate(values)
-
-    assert len(problems) == 1 and problems[0].field == field and problems[0].message
-
-
-def test_a_file_that_is_not_an_object_is_refused():  # CFG-02
-    assert SECTION.validate([]) == [Problem(None, "channel.json must be a JSON object")]
+def test_the_fixture_loads_and_saves_in_the_same_shape(ctx):
+    flow, target = ctx
+    put_fixture(target)
+    before = json.loads(target.read_text())
+    f = flow()
+    view = f.view()
+    assert view.status == "ready" and view.values["profiles"] == ["assistant"] and view.values["excerpt_chars"] == 120
+    f.apply({"excerpt_chars": "100"})
+    assert f.save().ok is True
+    after = json.loads(target.read_text())
+    assert set(after) == set(before) and after["excerpt_chars"] == 100
+    assert {k: v for k, v in after.items() if k != "excerpt_chars"} == {k: v for k, v in before.items() if k != "excerpt_chars"}
 
 
-def test_what_is_saved_is_a_channel_the_server_then_loads_as_enabled():  # CFG-03
-    values = on(polls=["ID1"], excerpt_chars=90, batch_seconds=0)
+def test_the_file_keeps_mode_0600_after_a_save(ctx):
+    flow, target = ctx
+    put_fixture(target)
+    os.chmod(target, 0o600)
+    f = flow()
+    f.apply({"include_excerpt": True})
+    assert f.save().ok is True
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    g = flow()
+    g.apply({"max_batch": "30"})
+    assert g.save().ok is True
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert channel.load_config().error is None                   # the channel itself accepts what was written
 
-    assert ConfigStore().save(SECTION, values, ABSENT).ok
 
+def test_a_new_file_is_created_private_and_the_channel_accepts_it(ctx):
+    flow, target = ctx
+    f = flow()
+    f.apply({"enabled": True, "profiles": "support\nsales"})
+    assert f.save().ok is True
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
     cfg = channel.load_config()
-    assert (cfg.error, cfg.enabled, cfg.profiles, cfg.polls, cfg.excerpt_chars, cfg.batch_seconds) == (None, True, ["support"], ["ID1"], 90, 0.0)
-    if sys.platform != "win32":
-        assert stat.S_IMODE(os.stat(channel.config_path()).st_mode) == 0o600
+    assert cfg.enabled and cfg.profiles == ["support", "sales"] and cfg.error is None
 
 
-def test_the_excerpt_option_warns_about_text_from_strangers():  # CFG-01
-    assert "desconhecido" in SECTION.field("include_excerpt").risk
+def test_the_project_refuses_an_enabled_channel_with_nothing_to_announce(ctx):
+    flow, target = ctx
+    f = flow()
+    f.apply({"enabled": True})
+    outcome = f.save()
+    assert outcome.ok is False and "profiles" in outcome.errors and "at least one" in outcome.errors["profiles"]
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("key,raw,fragment", [
+    ("excerpt_chars", "300", "at most 280"),
+    ("max_batch", "0", "at least 1"),
+    ("batch_seconds", "abc", "number"),
+    ("excerpt_chars", "1.5", "whole number"),
+])
+def test_values_out_of_range_are_refused_beside_their_field(ctx, key, raw, fragment):
+    flow, target = ctx
+    f = flow()
+    f.apply({"enabled": True, "profiles": "p", key: raw})
+    outcome = f.save()
+    assert outcome.ok is False and fragment in outcome.errors[key]
+    assert not target.exists()
+
+
+def test_saving_calls_channel_py_validation(ctx, monkeypatch):
+    flow, target = ctx
+    seen = []
+    monkeypatch.setattr(channel, "parse_config", lambda raw, name="x": seen.append(raw) or channel.Config(error="max_batch is refused by the project"))
+    f = flow()
+    f.apply({"max_batch": "5"})
+    outcome = f.save()
+    assert seen and seen[-1]["max_batch"] == 5
+    assert outcome.errors == {"max_batch": "max_batch is refused by the project"}
+    assert not target.exists()
+
+
+def test_the_risky_switches_warn():
+    risky = {f.key for f in SECTION.fields if f.risk}
+    assert {"enabled", "include_excerpt"} <= risky

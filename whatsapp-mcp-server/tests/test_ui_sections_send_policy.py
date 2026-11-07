@@ -1,115 +1,181 @@
-"""The send policy section: the fields of send_policy.json, validated by the project's own rules (CFG-01, CFG-02, CFG-11)."""
+"""Send policy section (CFG-01, CFG-02, CFG-10, CFG-11): the fields of send_policy.json, checked by the project."""
 import json
 import os
-import re
+import shutil
 import stat
-import sys
+from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import send_policy
+import taint
+from ui.config.form import FormFlow
+from ui.config.registry import JsonFile, Registry
+from ui.config.store import ConfigStore
+from ui.sections import send_policy as section_module
 
-import filemode  # noqa: E402
-import send_policy  # noqa: E402
-from ui.core.problems import from_message, listing  # noqa: E402
-from ui.core.registry import Problem, all_sections, default  # noqa: E402
-from ui.core.secrets import mask  # noqa: E402
-from ui.core.store import ABSENT, ConfigStore  # noqa: E402
-from ui.sections.send_policy import SECTION  # noqa: E402
-
-SERVER = os.path.dirname(os.path.dirname(__file__))
-
-
-def test_the_section_is_registered_and_found_by_discovery():  # EXT-01
-    assert SECTION in default.sections() and "send_policy" in [s.id for s in all_sections()]
+FIXTURE = Path(__file__).parent / "fixtures" / "ui" / "send_policy.json"
+SECTION = section_module.SECTION
+TOKEN = "example-override-token-0000"
 
 
-def test_the_file_is_the_one_the_send_code_reads_at_the_moment_it_is_used(tmp_path, monkeypatch):  # CFG-12
-    monkeypatch.setattr(send_policy, "POLICY_PATH", str(tmp_path / "elsewhere.json"))
+@pytest.fixture
+def ctx(tmp_path, monkeypatch):
+    target = tmp_path / "policy" / "send_policy.json"
+    monkeypatch.setattr(send_policy, "POLICY_PATH", str(target))
+    reg = Registry()
+    reg.register(SECTION)
+    store = ConfigStore(reg)
 
-    assert SECTION.storage.path() == str(tmp_path / "elsewhere.json")
+    def flow():
+        f = FormFlow("send_policy", reg, store)
+        f.load()
+        return f
 
-
-def test_every_field_is_a_key_the_project_reads_and_every_key_of_the_example_is_a_field():  # CFG-11
-    source = open(os.path.join(SERVER, "send_policy.py")).read() + open(os.path.join(SERVER, "taint.py")).read()
-    example = json.load(open(os.path.join(SERVER, "send_policy.example.json")))
-
-    for field in SECTION.fields:
-        assert re.search(rf'["\']{field.key}["\']', source), f"{field.key} is not read anywhere in the project"
-    assert set(example) <= {f.key for f in SECTION.fields}
-
-
-def test_defaults_show_when_there_is_no_file():  # CFG-01
-    loaded = ConfigStore().load(SECTION)
-
-    assert loaded.values == {} and loaded.version == ABSENT
-    assert {f.key: f.default for f in SECTION.fields if f.default is not None} == {
-        "mode": "denylist", "allow": [], "deny": [], "session_taint": "block"}
+    return flow, target, store
 
 
-@pytest.mark.parametrize("values", [{}, {"mode": "allowlist", "allow": ["Project Alpha", "123@g.us"], "deny": ["+55 11 9"], "override_token": "mine-0123"},
-                                    {"session_taint": "off"}])
-def test_a_valid_policy_has_no_problems(values):  # CFG-02
-    assert SECTION.validate(values) == []
+def put_fixture(target):
+    os.makedirs(target.parent, exist_ok=True)
+    shutil.copy(FIXTURE, target)
+    os.chmod(target, 0o600)
 
 
-@pytest.mark.parametrize("values, field", [
-    ({"mode": "both"}, "mode"),
-    ({"allow": "Project Alpha"}, "allow"),
-    ({"deny": ["ok", 3]}, "deny"),
-    ({"allow": ["a@b@c"]}, "allow"),
-    ({"override_token": 7}, "override_token"),
-    ({"session_taint": "maybe"}, "session_taint"),
-    ({"override_token": "replace-with-your-own-value"}, "override_token"),
-])
-def test_an_invalid_policy_is_refused_with_the_field_it_belongs_to(values, field):  # CFG-02
-    problems = SECTION.validate(values)
-
-    assert [p.field for p in problems] == [field] and problems[0].message
+def test_the_section_describes_the_file_the_project_reads(ctx):
+    _, target, _ = ctx
+    assert SECTION.id == "send_policy" and SECTION.read_only is False and SECTION.restart is None
+    assert isinstance(SECTION.storage, JsonFile) and SECTION.storage.path() == str(target)
+    assert SECTION.title and SECTION.description
 
 
-def test_a_policy_that_is_not_an_object_is_a_problem_of_the_whole_section():  # CFG-02
-    assert SECTION.validate([]) == [Problem(None, "the policy file must contain a JSON object")]
+def test_every_field_is_a_key_the_project_reads():
+    source = Path(send_policy.__file__).read_text() + Path(taint.__file__).read_text()
+    assert [f.key for f in SECTION.fields], "the section has fields"
+    for f in SECTION.fields:
+        assert f'"{f.key}"' in source, f"{f.key} is not read by send_policy.py or taint.py"
 
 
-def test_what_is_saved_is_what_the_send_code_then_loads(tmp_path):  # CFG-03
-    store = ConfigStore()
-    values = {"mode": "allowlist", "allow": ["Project Alpha"], "deny": ["Client Beta"], "override_token": "mine-0123456"}
-
-    assert store.save(SECTION, values, ABSENT).ok
-
-    assert send_policy._load() == (values, None)
-    if sys.platform != "win32":
-        assert stat.S_IMODE(os.stat(send_policy.POLICY_PATH).st_mode) == 0o600
-        assert filemode.open_access_warning(send_policy.POLICY_PATH) is None
+def test_the_fields_cover_the_documented_keys():
+    assert {f.key for f in SECTION.fields} == {"mode", "allow", "deny", "override_token", "session_taint"}
 
 
-def test_the_saved_policy_really_blocks_what_it_says():  # CFG-03
-    directory = send_policy.Directory(jids_by_name=lambda n: [], name_of=lambda j: None, is_phone=lambda t: False,
-                                      ids_of=lambda j: [j], ready=lambda: None)
-    ConfigStore().save(SECTION, {"mode": "denylist", "deny": ["120363111@g.us"]}, ABSENT)
-
-    blocked = send_policy.evaluate(send_policy.resolve_target("120363111@g.us", directory), None, directory)
-    other = send_policy.evaluate(send_policy.resolve_target("120363222@g.us", directory), None, directory)
-
-    assert blocked.allowed is False and other.allowed is True
+def test_the_override_token_is_a_secret_and_lists_are_lists():
+    kinds = {f.key: f.kind for f in SECTION.fields}
+    assert kinds["override_token"] == "secret"
+    assert kinds["allow"] == kinds["deny"] == "list"
+    assert set(SECTION.field("mode").options) == {"allowlist", "denylist"}
+    assert SECTION.field("mode").default == "denylist"
 
 
-def test_the_override_token_never_leaves_in_the_masked_state():  # CFG-10
-    values = {"mode": "denylist", "override_token": "mine-0123456789"}
+def test_the_fixture_loads_with_the_token_masked(ctx):
+    flow, target, _ = ctx
+    put_fixture(target)
+    view = flow().view()
+    assert view.status == "ready"
+    assert view.values["mode"] == "allowlist"
+    assert view.values["allow"] == ["Example Group", "15550100001"]
+    assert view.values["deny"] == ["15550100002"]
+    assert view.values["override_token"] == {"set": True}
+    assert TOKEN not in repr(view)
 
-    masked = mask(SECTION, values)
 
-    assert masked["override_token"] == {"set": True} and "mine-0123456789" not in json.dumps(masked)
+def test_saving_a_change_keeps_the_shape_of_the_fixture(ctx):
+    flow, target, _ = ctx
+    put_fixture(target)
+    before = json.loads(target.read_text())
+    f = flow()
+    f.apply({"allow": "Example Group\n15550100001\nAnother Group"})
+    outcome = f.save()
+    assert outcome.ok is True
+    after = json.loads(target.read_text())
+    assert set(after) == set(before)
+    assert after["allow"] == ["Example Group", "15550100001", "Another Group"]
+    assert {k: v for k, v in after.items() if k != "allow"} == {k: v for k, v in before.items() if k != "allow"}
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
 
 
-def test_turning_the_session_defence_off_carries_a_warning_text():  # CFG-01
-    assert SECTION.field("session_taint").risk and "vazar" in SECTION.field("session_taint").risk
+def test_saving_without_changes_writes_nothing(ctx):
+    flow, target, _ = ctx
+    put_fixture(target)
+    before = target.read_bytes()
+    assert flow().save().unchanged is True
+    assert target.read_bytes() == before
 
 
-def test_problems_from_a_project_message_name_the_field_only_when_the_message_starts_with_one():
-    assert from_message('"mode" must be one of allowlist, denylist', ["mode"]) == Problem("mode", '"mode" must be one of allowlist, denylist')
-    assert from_message("excerpt_chars must be a whole number", ["excerpt_chars"]).field == "excerpt_chars"
-    assert from_message("the policy file must contain a JSON object", ["mode"]).field is None
-    assert from_message("unknown key 'x'", ["x"]).field is None
-    assert listing(None, ["a"]) == [] and listing("", ["a"]) == [] and listing("a bad", ["a"])[0].field == "a"
+def test_a_new_policy_can_be_created_with_a_token(ctx):
+    flow, target, _ = ctx
+    f = flow()
+    f.apply({"mode": "allowlist", "allow": "Team", "override_token": "a brand new token"})
+    assert f.save().ok is True
+    assert json.loads(target.read_text()) == {"mode": "allowlist", "allow": ["Team"], "override_token": "a brand new token"}
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_saving_calls_the_projects_validation(ctx, monkeypatch):
+    flow, target, _ = ctx
+    seen = []
+
+    def refuse(policy):
+        seen.append(policy)
+        return None, '"allow" is refused by the project'
+
+    monkeypatch.setattr(send_policy, "parse_policy", refuse)
+    f = flow()
+    f.apply({"allow": "Team"})
+    outcome = f.save()
+    assert seen and seen[-1]["allow"] == ["Team"]
+    assert outcome.ok is False and "allow" in outcome.errors and "refused by the project" in outcome.errors["allow"]
+    assert not target.exists()
+
+
+def test_an_invalid_jid_is_refused_by_the_project_rule_beside_its_field(ctx):
+    flow, target, _ = ctx
+    f = flow()
+    f.apply({"deny": "12345@nowhere.example"})
+    outcome = f.save()
+    assert outcome.ok is False and "deny" in outcome.errors
+    assert "not a valid JID" in outcome.errors["deny"]
+    assert not target.exists()
+
+
+def test_a_session_taint_value_outside_the_known_ones_is_refused(ctx):
+    flow, target, _ = ctx
+    f = flow()
+    f.apply({"session_taint": "sometimes"})
+    outcome = f.save()
+    assert outcome.ok is False and "session_taint" in outcome.errors
+
+
+def test_the_taint_mode_chosen_here_is_the_one_the_project_applies(ctx, monkeypatch):
+    flow, target, _ = ctx
+    monkeypatch.delenv(taint.ENV, raising=False)
+    f = flow()
+    f.apply({"session_taint": "off"})
+    assert f.save().ok is True
+    assert taint.mode(taint._policy_value(str(target))) == "off"
+
+
+def test_a_broken_file_is_reported_and_kept(ctx):
+    flow, target, _ = ctx
+    os.makedirs(target.parent)
+    target.write_text("{not json")
+    view = flow().view()
+    assert view.status == "error" and view.banner
+    f = flow()
+    f.apply({"allow": "Team"})
+    outcome = f.save()
+    assert outcome.ok is False and outcome.needs_confirmation is True
+    assert target.read_text() == "{not json"
+
+
+def test_the_token_stays_when_it_is_not_touched_and_clears_on_request(ctx):
+    flow, target, _ = ctx
+    put_fixture(target)
+    f = flow()
+    f.apply({"mode": "denylist"})
+    assert f.save().ok is True
+    assert json.loads(target.read_text())["override_token"] == TOKEN
+    f = flow()
+    f.apply({"override_token": {"clear": True}})
+    assert f.save().ok is True
+    assert "override_token" not in json.loads(target.read_text())

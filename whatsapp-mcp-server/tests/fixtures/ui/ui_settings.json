@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "env": {
+    "WHATSAPP_AUTO_DOWNLOAD": "true",
+    "WHATSAPP_AUTO_DOWNLOAD_MAX_MB": "25",
+    "WHATSAPP_TIMEZONE": "UTC",
+    "WHATSAPP_UI_PORT": "8765"
+  }
+}

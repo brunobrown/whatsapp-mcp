@@ -1,0 +1,42 @@
+name: Release
+
+# A tag v* publishes the built web interface next to the release, so nobody needs Node to run it: the archive holds the
+# ui/web tree, to be extracted into whatsapp-mcp-server/.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  web-dist:
+    name: Attach the web interface build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: whatsapp-mcp-server/frontend/package-lock.json
+      - name: Install
+        run: npm ci
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Build
+        run: npx vite build
+        working-directory: whatsapp-mcp-server/frontend
+      - name: Pack ui/web
+        run: tar -czf whatsapp-mcp-ui-dist.tar.gz -C whatsapp-mcp-server ui/web
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "$TAG" --notes "Web interface build: extract whatsapp-mcp-ui-dist.tar.gz inside whatsapp-mcp-server/."
+          fi
+          gh release upload "$TAG" whatsapp-mcp-ui-dist.tar.gz --clobber

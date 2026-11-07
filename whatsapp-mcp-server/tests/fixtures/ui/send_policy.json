@@ -1,0 +1,12 @@
+{
+  "mode": "allowlist",
+  "allow": [
+    "Example Group",
+    "15550100001"
+  ],
+  "deny": [
+    "15550100002"
+  ],
+  "override_token": "example-override-token-0000",
+  "session_taint": "block"
+}

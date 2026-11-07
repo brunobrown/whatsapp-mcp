@@ -1,72 +1,85 @@
-"""Webhooks: signed HTTP calls the bridge makes when something happens (webhooks.json). Read when the bridge starts.
+"""Webhook endpoints (webhooks.json, read by the bridge at start).
 
-The rules of the file live in the bridge, so it is the bridge that validates it (POST /api/config/validate-webhooks);
-without the bridge the file cannot be checked and so cannot be saved.
+The file already has the shape of the form, so nothing is translated. The rules are the bridge's own: the file is
+sent to it to be judged, and a bridge that cannot answer means the file cannot be saved, because it could not be
+checked. The check reads the real secrets from the draft; its answers never repeat them.
 """
+import json
+import os
 import re
 from typing import Any, Dict, List
 
-from ui.core.bridge import BridgeClient, Unavailable
-from ui.core.registry import Field, JsonFile, Problem, Section, register
-from ui.core.store import config_path
+import localconfig
+from ui.config.fields import Field, Problem
+from ui.config.registry import JsonFile, Section
+from ui.security.bridge import BridgeClient
 
-FILE_NAME = "webhooks.json"
-BRIDGE_PROBLEM = "_bridge"          # the field of a problem that is not about a value: the check could not be made
-EVENTS = ("*", "message", "poll_created", "poll_vote", "reaction", "message_edit", "message_deleted", "poll_closed",
-          "connection", "ping")
-client = BridgeClient()              # replaced by tests
+CLIENT = BridgeClient()           # replaced in tests, or by the service that owns the bridge address
 
-_ENDPOINT_KEYS = ("name", "url", "secret", "events", "chats", "include_content", "include_own", "allow_private_network", "persist_queue")
-_BY_NAME = re.compile(r'endpoint "(?P<name>.*?)": (?P<key>name|url|secret|events|chats)\b')
-_BY_NUMBER = re.compile(r"endpoint (?P<number>\d+): (?P<key>name|url|secret|events|chats)\b")
-_UNKNOWN_EVENT = re.compile(r'endpoint "(?P<name>.*?)": unknown event')
-_UNAVAILABLE = {
-    "unreachable": "o bridge não responde, então o arquivo não pode ser validado nem salvo",
-    "unauthorized": "o bridge recusou o token da API; reinicie o bridge e o servidor MCP para que usem o mesmo token",
-    "unsupported": "este bridge é antigo e não valida webhooks; atualize e reinicie o bridge",
-    "unexpected": "o bridge respondeu algo inesperado ao validar o arquivo",
-}
-
-
-def _locate(message: str) -> Problem:
-    for pattern, field_of in ((_BY_NAME, lambda m: f"endpoints.{m['name']}.{m['key']}"),
-                              (_BY_NUMBER, lambda m: f"endpoints.{int(m['number']) - 1}.{m['key']}"),
-                              (_UNKNOWN_EVENT, lambda m: f"endpoints.{m['name']}.events")):
-        match = pattern.search(message)
-        if match:
-            return Problem(field_of(match), message)
-    return Problem("endpoints", message)
+EVENTS = ("message", "poll_created", "poll_vote", "reaction", "message_edit", "message_deleted", "poll_closed",
+          "connection", "ping", "*")
+ENDPOINT_FIELDS = (
+    Field("name", "Name", "text", max_length=64, help="How the endpoint is called in the status and in test_webhook."),
+    Field("url", "URL", "text", max_length=2000,
+          help="Where the bridge posts. https, or plain http only for 127.0.0.1, ::1 and localhost."),
+    Field("secret", "Secret", "secret", help="Signs every post (HMAC-SHA256). At least 32 characters of random text."),
+    Field("events", "Events", "multichoice", options=EVENTS, help='The events to send. "*" means all of them.'),
+    Field("chats", "Chats", "list", help="Only events of these chats, one JID or number per line. Empty means every chat."),
+    Field("include_content", "Include content", "bool", default=False,
+          help="Add the message text, poll options and emoji to the event. They are other people's words.",
+          risk="The text of messages leaves the bridge for this address.", risk_when=(True,)),
+    Field("include_own", "Include own actions", "bool", default=False,
+          help="Also send what this account does from another device."),
+    Field("allow_private_network", "Allow private network", "bool", default=False,
+          help="Let the address resolve to a private network.",
+          risk="The bridge may post to addresses inside your network.", risk_when=(True,)),
+    Field("persist_queue", "Keep the queue on disk", "bool", default=False,
+          help="Events wait on disk, without their text, across a bridge restart."),
+)
+_SUBKEYS = {f.key for f in ENDPOINT_FIELDS}
 
 
-def validate(values: Dict[str, Any]) -> List[Problem]:
-    result = client.validate_webhooks(values)
-    if isinstance(result, Unavailable):
-        return [Problem(BRIDGE_PROBLEM, _UNAVAILABLE.get(result.reason, _UNAVAILABLE["unexpected"]))]
-    return [] if result.ok else [_locate(result.error or "o bridge recusou o arquivo")]
+def _path() -> str:
+    return os.path.join(localconfig.config_dir(), "webhooks.json")
 
 
-SECTION = register(Section(
-    id="webhooks", title="Webhooks", icon="webhook", order=30, restart="bridge",
-    description="O bridge avisa um programa seu, com um POST assinado, quando algo acontece. Sem este arquivo, nada sai do bridge. É lido na partida.",
-    storage=JsonFile(lambda: config_path(FILE_NAME)), validate=validate,
+def _encode(values: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in values.items() if v is not None}
+    if isinstance(out.get("endpoints"), list):
+        out["endpoints"] = [{k: v for k, v in e.items() if v is not None} if isinstance(e, dict) else e
+                            for e in out["endpoints"]]
+    return out
+
+
+def _where(error: str, values: Dict[str, Any]) -> str:
+    """The record field the bridge's message is about: 'endpoints.N.field', 'endpoints.N' or '' for the file."""
+    endpoints = values.get("endpoints") if isinstance(values.get("endpoints"), list) else []
+    for index, ep in enumerate(endpoints):
+        name = ep.get("name") if isinstance(ep, dict) else None
+        label = f"endpoint {json.dumps(name)}:" if isinstance(name, str) and name else f"endpoint {index + 1}:"
+        if error.startswith(label):
+            rest = error[len(label):].lstrip()
+            word = re.match(r"[a-z_]+", rest)
+            sub = {"unknown": "events"}.get(word.group(0), word.group(0)) if word else ""
+            return f"endpoints.{index}.{sub}" if sub in _SUBKEYS else f"endpoints.{index}"
+    return ""
+
+
+def _validate(values: Dict[str, Any]) -> List[Problem]:
+    check = CLIENT.validate_webhooks(json.dumps(values))
+    if not check.ran:
+        return [Problem(None, check.message or "The check could not run.")]
+    if check.ok:
+        return []
+    return [Problem(_where(check.error or "", values) or None, check.error or "The bridge refused the file.")]
+
+
+SECTION = Section(
+    id="webhooks", title="Webhooks", order=30, icon="webhook", storage=JsonFile(_path), restart="bridge",
     fields=(
-        Field("enabled", "Webhooks ativos", "bool", default=True, help="Desligado, o bridge ignora todos os endpoints."),
-        Field("endpoints", "Endpoints", "records", id_key="name", fields=(
-            Field("name", "Nome", "text", max_length=64),
-            Field("url", "URL", "text", max_length=2000,
-                  help="https:// para qualquer host; http:// só para loopback. Sem usuário e senha, e nunca a API do próprio bridge."),
-            Field("secret", "Segredo", "secret", max_length=500, help="Assina cada envio. Pelo menos 32 caracteres aleatórios."),
-            Field("events", "Eventos", "multichoice", options=EVENTS, help='"*" inclui todos.'),
-            Field("chats", "Conversas", "list", max_length=100,
-                  help="Só eventos destas conversas (JID ou número). Use junto com o conteúdo incluído."),
-            Field("include_content", "Incluir o conteúdo", "bool", default=False, risk_when=(True,),
-                  risk="O evento passa a levar o texto e os nomes de terceiros, que o receptor deve tratar como não confiáveis.",
-                  help="Desligado, o evento leva só ids, tipo, conversa, remetente, hora e o tamanho do texto."),
-            Field("include_own", "Incluir o que esta conta faz em outro aparelho", "bool", default=False),
-            Field("allow_private_network", "Permitir destino em rede privada", "bool", default=False, risk_when=(True,),
-                  risk="Libera destinos em redes privadas: um endpoint mal configurado pode alcançar serviços internos."),
-            Field("persist_queue", "Guardar a fila em disco", "bool", default=False,
-                  help="A fila sobrevive a uma reinicialização. O arquivo guarda ids, nunca o texto."),
-        )),
+        Field("enabled", "Enabled", "bool", default=True, help="Turn every endpoint off without deleting them."),
+        Field("endpoints", "Endpoints", "records", id_key="name", fields=ENDPOINT_FIELDS,
+              help="Programs of yours that the bridge tells, with a signed HTTP POST, when something happens."),
     ),
-))
+    validator=_validate, encode=_encode,
+    description="Tell a program of yours when something happens. Read by the bridge at start; the bridge itself checks the file.")

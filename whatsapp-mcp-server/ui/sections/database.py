@@ -1,43 +1,68 @@
-"""The database and its keys, shown and never edited.
+"""The encrypted databases, as facts: whether a key can be read and where it comes from, and the state of each file.
 
-Whether a key or token exists, and where, is shown. The content never is, and nothing here can be changed:
-switching the encryption off would expose the messages, and the key is not something a screen should hold. The
-two secrets are secret fields: the screen gets only whether each one is set.
+Nothing here edits anything and nothing here ever holds the key itself: only whether a key was found, where, and
+whether it was usable.
 """
 import os
+from typing import Any, Dict
 
+import dbcrypto
 import localconfig
-from ui.core.registry import Field, ReadOnly, Section, register
+from ui.config.fields import Field
+from ui.config.registry import ReadOnly, Section
+
+FIELDS = (
+    Field("encryption", "Encryption setting", "text", readonly=True,
+          help="WHATSAPP_DB_ENCRYPTION as the bridge sees it: on encrypts the databases, off keeps them in plain SQLite."),
+    Field("key_present", "Key found", "bool", readonly=True, help="Whether a usable master key can be read."),
+    Field("key_source", "Key source", "text", readonly=True),
+    Field("key_location", "Key location", "text", readonly=True, help="The variable or file the key is read from."),
+    Field("key_problem", "Key problem", "text", readonly=True, help="Why the key cannot be used, when it cannot."),
+    Field("messages_db", "Messages database", "text", readonly=True, help="encrypted, plain or missing."),
+    Field("whatsapp_db", "Session database", "text", readonly=True, help="encrypted, plain or missing."),
+)
 
 
-def values():
-    folder = localconfig.config_dir()
-    key_file = os.environ.get("WHATSAPP_DB_KEY_FILE") or os.path.join(folder, "db.key")
-    token_file = os.path.join(folder, localconfig.API_TOKEN_FILE)
-    key_in_env = bool(os.environ.get("WHATSAPP_DB_KEY"))
-    key_set, token_set = key_in_env or os.path.isfile(key_file), os.path.isfile(token_file)
-    encryption = (os.environ.get("WHATSAPP_DB_ENCRYPTION") or "on").strip().lower()
+def _state_of(path: str) -> str:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(len(dbcrypto.SQLITE_MAGIC))
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unreadable"
+    if len(head) < len(dbcrypto.SQLITE_MAGIC):
+        return "plain" if not head else "encrypted"
+    return "plain" if head == dbcrypto.SQLITE_MAGIC else "encrypted"
+
+
+def _key_origin() -> Dict[str, str]:
+    if os.environ.get("WHATSAPP_DB_KEY", ""):
+        return {"key_source": "environment variable", "key_location": "WHATSAPP_DB_KEY"}
+    configured = os.environ.get("WHATSAPP_DB_KEY_FILE", "")
+    if configured:
+        return {"key_source": "key file named by WHATSAPP_DB_KEY_FILE", "key_location": configured}
+    return {"key_source": "default key file", "key_location": os.path.join(localconfig.config_dir(), "db.key")}
+
+
+def facts() -> Dict[str, Any]:
+    import whatsapp           # the path of the messages database lives there; imported late to keep this module light
+    origin = _key_origin()
+    try:
+        dbcrypto.master_key()
+        present, problem = True, ""
+    except dbcrypto.DatabaseKeyError as e:
+        present, problem = False, e.detail
+    setting = os.environ.get("WHATSAPP_DB_ENCRYPTION", "").strip().lower()
+    messages = whatsapp.MESSAGES_DB_PATH
     return {
-        "config_dir": folder,
-        "encryption": "desligada (os bancos ficam em SQLite comum)" if encryption == "off" else "ligada",
-        "db_key": "set" if key_set else "",
-        "api_token": "set" if token_set else "",
-        "location": ("Chave: definida pela variável WHATSAPP_DB_KEY" if key_in_env else f"Chave: {key_file}")
-                    + f". Token da API: {token_file}.",
+        "encryption": "off" if setting == "off" else "on",
+        "key_present": present, **origin, "key_problem": problem,
+        "messages_db": _state_of(messages),
+        "whatsapp_db": _state_of(os.path.join(os.path.dirname(messages), "whatsapp.db")),
     }
 
 
-SECTION = register(Section(
-    id="database", title="Banco e chaves", icon="lock", order=80, storage=ReadOnly(values), validate=lambda v: [],
-    description="Somente leitura. Chave perdida significa dados cifrados irrecuperáveis: guarde o db.key em um cofre. "
-                "Mídia e o log do bridge não são cifrados.",
-    fields=(
-        Field("config_dir", "Pasta de configuração", "text", readonly=True),
-        Field("encryption", "Cifragem dos bancos", "text", readonly=True, env_var="WHATSAPP_DB_ENCRYPTION",
-              help="Definida pela variável WHATSAPP_DB_ENCRYPTION no ambiente do bridge."),
-        Field("db_key", "Chave dos bancos", "secret", readonly=True, env_var="WHATSAPP_DB_KEY_FILE"),
-        Field("api_token", "Token da API local", "secret", readonly=True,
-              help="O servidor MCP e esta interface o leem a cada chamada."),
-        Field("location", "Onde estão os arquivos", "text", readonly=True),
-    ),
-))
+SECTION = Section(
+    id="database", title="Database", order=60, icon="database", storage=ReadOnly(), fields=FIELDS, facts=facts,
+    description="Whether the databases are encrypted and where the key is read from. The key itself is never shown.")

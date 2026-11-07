@@ -1,86 +1,118 @@
-"""The agent safety section: read-only mode and session taint, as the server reads them (CFG-01, CFG-02, CFG-04, CFG-11)."""
+"""Agent safety section (CFG-01, CFG-04, CFG-08, CFG-11): environment variables of the MCP server, with risk warnings."""
+import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import drafts
+import server_mode
+import taint
+import uisettings
+from ui.config.envlayer import EnvLayer
+from ui.config.form import FormFlow
+from ui.config.registry import EnvKeys, Registry
+from ui.config.store import ConfigStore
+from ui.sections import agent_safety as section_module
 
-import server_mode  # noqa: E402
-import taint  # noqa: E402
-import uisettings  # noqa: E402
-from ui.core.draft import Draft  # noqa: E402
-from ui.core.envlayer import SCOPES, EnvLayer  # noqa: E402
-from ui.core.registry import EnvKeys, default  # noqa: E402
-from ui.core.store import ABSENT  # noqa: E402
-from ui.sections.agent_safety import SECTION  # noqa: E402
-
-
-def test_the_section_is_registered_and_kept_in_the_settings_file():
-    assert SECTION in default.sections() and isinstance(SECTION.storage, EnvKeys)
+SECTION = section_module.SECTION
 
 
-def test_the_variables_are_the_ones_the_server_reads_and_both_belong_to_the_server():  # CFG-11
-    assert [f.env_var for f in SECTION.fields] == [server_mode.ENV, taint.ENV]
-    assert {SCOPES[f.env_var] for f in SECTION.fields} == {"server"}
-    assert {f.env_var for f in SECTION.fields} <= set(uisettings.EDITABLE_ENV)
+@pytest.fixture
+def ctx(tmp_path):
+    reg = Registry()
+    reg.register(SECTION)
+    store = ConfigStore(reg)
+    environ = {}
+    layer = EnvLayer(reg, store, environ=environ, runtime_dir=str(tmp_path / "runtime"))
+
+    def flow():
+        f = FormFlow("agent_safety", reg, store, layer)
+        f.load()
+        return f
+
+    return flow, environ, layer
 
 
-def test_the_choices_are_the_values_the_server_understands(monkeypatch):  # CFG-11
-    mode, tainted = SECTION.field("mcp_mode"), SECTION.field("session_taint")
-
-    assert set(mode.options) == {server_mode.FULL, server_mode.READ_ONLY}
-    for value in mode.options:
-        monkeypatch.setenv(server_mode.ENV, value)
-        assert server_mode.current() == value
-    for value in tainted.options:
-        monkeypatch.setenv(taint.ENV, value)
-        assert taint.mode() == value
+def test_the_section_is_kept_in_the_settings_file_and_restarts_the_server():
+    assert isinstance(SECTION.storage, EnvKeys) and SECTION.restart == "server"
+    assert SECTION.id == "agent_safety" and not SECTION.read_only
 
 
-def test_the_defaults_shown_are_what_the_server_does_with_nothing_set(monkeypatch):  # CFG-01
-    monkeypatch.delenv(server_mode.ENV, raising=False)
-    monkeypatch.delenv(taint.ENV, raising=False)
-
-    assert SECTION.field("mcp_mode").default == server_mode.current()
-    assert SECTION.field("session_taint").default == taint.mode()
+def test_every_variable_is_editable_and_names_the_real_one():
+    variables = [f.env_var for f in SECTION.fields]
+    assert variables == [server_mode.ENV, taint.ENV, "WHATSAPP_MONITOR_DRAFT_TTL_HOURS"]
+    assert all(v in uisettings.EDITABLE_ENV for v in variables)
 
 
-def test_a_saved_choice_is_the_one_the_server_then_applies(monkeypatch):  # CFG-04
-    layer = EnvLayer(environ={})
-    assert layer.save(SECTION, {"mcp_mode": "read_only", "session_taint": "off"}, layer.load().version).ok
-    applied = {}
-    uisettings.apply(applied)
-    for name, value in applied.items():
-        monkeypatch.setenv(name, value)
-
-    assert server_mode.is_read_only() is True and taint.mode() == "off"
-
-
-@pytest.mark.parametrize("changes", [{"mcp_mode": "readonly"}, {"mcp_mode": "FULL"}, {"mcp_mode": ""}, {"session_taint": "maybe"},
-                                      {"session_taint": True}])
-def test_a_value_the_server_would_not_understand_cannot_be_saved(tmp_path, changes):  # CFG-02
-    result = EnvLayer(environ={}).save(SECTION, changes, ABSENT)
-
-    assert result.ok is False and not (tmp_path / "config" / "ui_settings.json").exists()
+def test_options_and_defaults_are_the_projects():
+    mode = SECTION.field("mode")
+    assert set(mode.options) == {server_mode.FULL, server_mode.READ_ONLY} and mode.default == server_mode.FULL
+    taint_field = SECTION.field("session_taint")
+    assert taint_field.default == taint.mode(None)
+    assert set(taint_field.options) == {"block", "off"}
+    ttl = SECTION.field("draft_ttl_hours")
+    assert ttl.default == drafts.DEFAULT_TTL_HOURS and ttl.bounds[1] == drafts.MAX_TTL_HOURS and ttl.bounds[0] > 0
 
 
-def test_only_the_choices_that_weaken_a_defence_ask_for_confirmation():  # CFG-01
-    mode, tainted = SECTION.field("mcp_mode"), SECTION.field("session_taint")
-
-    assert mode.risky("full") and not mode.risky("read_only")
-    assert tainted.risky("off") and not tainted.risky("block")
-    assert "enviar" in mode.risk and "vazar" in tainted.risk
-
-
-def test_going_back_to_the_default_is_a_normal_draft_change():  # CFG-07
-    draft = Draft(SECTION, {"mcp_mode": "read_only"})
-
-    assert draft.restore_default("mcp_mode", confirmed=True) and draft.changes() == {"mcp_mode": None}
+def test_values_that_weaken_a_defence_carry_a_risk_text_and_risk_when():
+    taint_field, mode = SECTION.field("session_taint"), SECTION.field("mode")
+    assert taint_field.risk and taint_field.risk_when == ("off",)
+    assert mode.risk and mode.risk_when == (server_mode.FULL,)
+    for f in SECTION.fields:
+        assert bool(f.risk) == bool(f.risk_when)
+        assert set(f.risk_when) <= set(f.options)
 
 
-def test_the_environment_of_the_process_locks_the_field_and_says_which_variable():  # CFG-04
-    layer = EnvLayer(environ={server_mode.ENV: "read_only"})
-    state = next(s for s in layer.state(SECTION) if s.key == "mcp_mode")
+def test_a_change_is_saved_to_the_settings_file_and_asks_for_a_server_restart(ctx):
+    flow, environ, layer = ctx
+    f = flow()
+    f.apply({"mode": server_mode.READ_ONLY, "draft_ttl_hours": "12"})
+    outcome = f.save()
+    assert outcome.ok is True and outcome.restarts == ["server"]
+    saved = json.loads(open(uisettings.path()).read())
+    assert saved == {"version": 1, "env": {server_mode.ENV: "read_only", "WHATSAPP_MONITOR_DRAFT_TTL_HOURS": "12"}}
+    assert (os.stat(uisettings.path()).st_mode & 0o777) == 0o600
+    view = flow().view()
+    assert view.values["mode"] == "read_only" and view.values["draft_ttl_hours"] == 12.0
+    assert view.state["mode"]["origin"] == "file"
 
-    assert (state.locked, state.env_var, state.origin, state.value) == (True, server_mode.ENV, "env", "read_only")
+
+def test_a_value_from_the_environment_locks_the_field(ctx):
+    flow, environ, _ = ctx
+    environ[taint.ENV] = "off"
+    f = flow()
+    view = f.view()
+    assert view.values["session_taint"] == "off"
+    assert view.state["session_taint"] == {"origin": "environment", "locked": True, "pending": None}
+    f.apply({"session_taint": "block"})
+    outcome = f.save()
+    assert outcome.ok is False and taint.ENV in outcome.errors["session_taint"]
+
+
+def test_values_outside_the_projects_limits_are_refused(ctx):
+    flow, *_ = ctx
+    for changes, key in (({"draft_ttl_hours": "200"}, "draft_ttl_hours"), ({"draft_ttl_hours": "0"}, "draft_ttl_hours"),
+                         ({"mode": "anything"}, "mode"), ({"session_taint": "maybe"}, "session_taint")):
+        f = flow()
+        f.apply(changes)
+        outcome = f.save()
+        assert outcome.ok is False and key in outcome.errors, changes
+    assert not os.path.exists(uisettings.path())
+
+
+def test_an_unknown_value_is_never_written_so_the_project_never_reads_it_as_something_else(ctx):
+    flow, *_ = ctx
+    f = flow()
+    f.apply({"mode": "read-only"})                           # the project would run read-only; the section refuses it
+    assert f.save().ok is False
+
+
+def test_going_back_to_the_default_removes_the_saved_value(ctx):
+    flow, *_ = ctx
+    f = flow()
+    f.apply({"session_taint": "off"})
+    assert f.save().ok is True
+    g = flow()
+    g.apply({}, restore=["session_taint"])
+    assert g.save().ok is True
+    assert json.loads(open(uisettings.path()).read())["env"] == {}

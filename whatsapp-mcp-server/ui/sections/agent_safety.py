@@ -1,26 +1,29 @@
-"""Agent safety: the two measures that break the path from a stranger's text to a message that leaks data.
+"""Safety of the agent: read-only mode, session taint and how long drafts live (environment variables of the MCP server).
 
-Both are read by the MCP server, which the client starts. A value the client sets in the server's own `env` wins
-over what is saved here, and this screen cannot see it.
+The values and their meaning come from server_mode.py, taint.py and drafts.py. A value that weakens a defence
+carries a risk text, and `risk_when` names the values it applies to.
 """
+import drafts
 import server_mode
 import taint
-from ui.core.registry import EnvKeys, Field, Section, register
+from ui.config.fields import Field
+from ui.config.registry import EnvKeys, Section
 
-SECTION = register(Section(
-    id="agent_safety", title="Segurança do agente", icon="security", order=15, storage=EnvKeys(), validate=lambda values: [],
-    description="Um agente que lê dados privados, lê texto de desconhecidos e pode enviar mensagens pode ser induzido por esse texto a passar os dados adiante. "
-                "Tirar uma das três pernas resolve; estas duas medidas fazem isso. Valem para o servidor MCP, quando ele inicia.",
-    fields=(
-        Field("mcp_mode", "Modo do servidor", "choice", default=server_mode.FULL, options=(server_mode.FULL, server_mode.READ_ONLY),
-              env_var=server_mode.ENV, risk_when=(server_mode.FULL,),
-              risk="No modo completo o servidor oferece as ferramentas que alcançam outras pessoas: enviar, votar, reagir, apagar e responder pelo monitor.",
-              help="read_only não oferece nenhuma ferramenta que alcance outras pessoas: o agente só lê, resume e busca. "
-                   "Um valor desconhecido na variável vale read_only. Se o seu cliente MCP define esta variável no env do servidor, ela vence."),
-        Field("session_taint", "Contaminação da sessão", "choice", default="block", options=("block", "off"),
-              env_var=taint.ENV, risk_when=("off",),
-              risk="Com off, o agente pode enviar a uma conversa o que leu em outra: uma mensagem maliciosa pode levá-lo a vazar dados.",
-              help="block só deixa enviar à própria conversa que a sessão leu; para liberar um envio, só o token de liberação da política de envio. "
-                   "Esta variável vence a chave session_taint da política. Se o seu cliente MCP a define no env do servidor, ela vence esta tela."),
-    ),
-))
+FIELDS = (
+    Field("mode", "Server mode", "choice", default=server_mode.FULL, env_var=server_mode.ENV,
+          options=(server_mode.FULL, server_mode.READ_ONLY),
+          help="Read-only removes every tool that reaches other people (send, vote, react, delete, reply). "
+               "Give it to an agent that only has to read.",
+          risk="In full mode the agent can send, vote, react, delete and reply on your behalf.", risk_when=(server_mode.FULL,)),
+    Field("session_taint", "Session taint", "choice", default="block", env_var=taint.ENV, options=("block", "off"),
+          help="Block sending to a chat other than the ones the session has read. The send policy file can also set it; "
+               "this variable wins.",
+          risk="Text read in one chat could make the agent carry its content to another chat.", risk_when=("off",)),
+    Field("draft_ttl_hours", "Draft lifetime in hours", "float", default=float(drafts.DEFAULT_TTL_HOURS),
+          env_var="WHATSAPP_MONITOR_DRAFT_TTL_HOURS", bounds=(0.01, float(drafts.MAX_TTL_HOURS)),
+          help="How long a reply waiting for approval is kept."),
+)
+
+SECTION = Section(
+    id="agent_safety", title="Agent safety", order=50, icon="lock", storage=EnvKeys(), restart="server", fields=FIELDS,
+    description="What the MCP server lets an agent do. Read when the MCP server starts; restart it after a change.")
