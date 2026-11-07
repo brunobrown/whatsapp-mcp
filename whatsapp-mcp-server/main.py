@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional, Union
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 import monitor
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
@@ -28,6 +29,12 @@ from whatsapp import (
 # Initialize FastMCP server
 mcp = FastMCP("whatsapp")
 
+# What a tool does to the world, so a client can ask for confirmation before the ones that write or destroy.
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+WRITES = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
+DESTROYS = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
+DOWNLOADS = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=True)
+
 
 def send_response(result) -> Dict[str, Any]:
     """Build a send tool's answer; message_id, timestamp and chat_jid appear only when the bridge reported them."""
@@ -44,7 +51,7 @@ def send_response(result) -> Dict[str, Any]:
                 response[field] = value
     return response
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def search_contacts(query: str) -> List[Dict[str, Any]]:
     """Search WhatsApp contacts by name or phone number.
     
@@ -54,7 +61,7 @@ def search_contacts(query: str) -> List[Dict[str, Any]]:
     contacts = whatsapp_search_contacts(query)
     return contacts
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_messages(
     after: Optional[str] = None,
     before: Optional[str] = None,
@@ -112,7 +119,7 @@ def list_messages(
     )
     return messages
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_chats(
     query: Optional[str] = None,
     limit: int = 20,
@@ -138,7 +145,7 @@ def list_chats(
     )
     return chats
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by JID.
     
@@ -149,7 +156,7 @@ def get_chat(chat_jid: str, include_last_message: bool = True) -> Dict[str, Any]
     chat = whatsapp_get_chat(chat_jid, include_last_message)
     return chat
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     """Get WhatsApp chat metadata by sender phone number.
     
@@ -159,7 +166,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Dict[str, Any]:
     chat = whatsapp_get_direct_chat_by_contact(sender_phone_number)
     return chat
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str, Any]]:
     """Get all WhatsApp chats involving the contact.
     
@@ -171,7 +178,7 @@ def get_contact_chats(jid: str, limit: int = 20, page: int = 0) -> List[Dict[str
     chats = whatsapp_get_contact_chats(jid, limit, page)
     return chats
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_last_interaction(jid: str) -> str:
     """Get most recent WhatsApp message involving the contact.
     
@@ -181,7 +188,7 @@ def get_last_interaction(jid: str) -> str:
     message = whatsapp_get_last_interaction(jid)
     return message
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_message_context(
     message_id: str,
     before: int = 5,
@@ -199,7 +206,7 @@ def get_message_context(
     context = whatsapp_get_message_context(message_id, before, after, chat_jid)
     return context
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def send_message(
     recipient: str,
     message: str,
@@ -238,7 +245,7 @@ def send_message(
     # Call the whatsapp_send_message function with the unified recipient parameter
     return send_response(whatsapp_send_message(recipient, message, override_token, mentions, reply_to, dry_run))
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def send_file(recipient: str, media_path: str, override_token: Optional[str] = None) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
     
@@ -255,7 +262,7 @@ def send_file(recipient: str, media_path: str, override_token: Optional[str] = N
     # Call the whatsapp_send_file function
     return send_response(whatsapp_send_file(recipient, media_path, override_token))
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def send_audio_message(recipient: str, media_path: str, override_token: Optional[str] = None) -> Dict[str, Any]:
     """Send any audio file as a WhatsApp audio message to the specified recipient. For group messages use the JID. If it errors due to ffmpeg not being installed, use send_file instead.
     
@@ -270,7 +277,7 @@ def send_audio_message(recipient: str, media_path: str, override_token: Optional
     """
     return send_response(whatsapp_audio_voice_message(recipient, media_path, override_token))
 
-@mcp.tool()
+@mcp.tool(annotations=DOWNLOADS)
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
     """Download media from a WhatsApp message and get the local file path.
     
@@ -299,7 +306,7 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
         response["hint"] = result.hint
     return response
 
-@mcp.tool()
+@mcp.tool(annotations=DOWNLOADS)
 def download_media_batch(
     chat_jid: str,
     after: Optional[str] = None,
@@ -331,7 +338,7 @@ def download_media_batch(
     """
     return whatsapp_download_media_batch(chat_jid, after, before, types, max_size_mb, max_items, timeout_seconds)
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_message_thread(
     message_id: Optional[str] = None,
     chat_jid: Optional[str] = None,
@@ -362,7 +369,7 @@ def get_message_thread(
     """
     return whatsapp_get_message_thread(message_id, chat_jid, after, before, limit, page, order)
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def send_poll(
     recipient: str,
     question: str,
@@ -395,7 +402,7 @@ def send_poll(
     return send_response(whatsapp_send_poll(recipient, question, options, allow_multiple, allow_add_option,
                                             hide_voter_names, override_token, dry_run))
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:
     """Read the current result of a poll the bridge has seen (sent by you or received).
 
@@ -413,7 +420,7 @@ def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[st
     """
     return whatsapp_get_poll_results(message_id, chat_jid)
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> Dict[str, Any]:
     """List the polls of a chat, newest first, with the votes of each option.
 
@@ -429,7 +436,7 @@ def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> Dict[str, Any]:
     """
     return whatsapp_list_polls(chat_jid, limit, page)
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def vote_poll(
     chat_jid: str,
     message_id: str,
@@ -454,7 +461,7 @@ def vote_poll(
     """
     return send_response(whatsapp_vote_poll(chat_jid, message_id, options, override_token, dry_run))
 
-@mcp.tool()
+@mcp.tool(annotations=DESTROYS)
 def delete_message(
     chat_jid: str,
     message_id: str,
@@ -477,7 +484,7 @@ def delete_message(
     """
     return send_response(whatsapp_delete_message(chat_jid, message_id, override_token, dry_run))
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_monitor_profiles() -> Dict[str, Any]:
     """List the monitoring profiles of monitor_profiles.json: targets, triggers, filters, mode (draft or auto), limits and instructions.
 
@@ -487,7 +494,7 @@ def get_monitor_profiles() -> Dict[str, Any]:
     """
     return monitor.list_profiles()
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def monitor_messages(
     profile: Optional[str] = None,
     targets: Optional[List[str]] = None,
@@ -530,7 +537,7 @@ async def monitor_messages(
     """
     return await monitor.monitor_messages(profile, targets, triggers, cursor, wait_seconds, limit, aliases)
 
-@mcp.tool()
+@mcp.tool(annotations=WRITES)
 def monitor_reply(
     profile: str,
     chat_jid: str,
@@ -563,7 +570,7 @@ def monitor_reply(
     """
     return monitor.monitor_reply(profile, chat_jid, message_id, text, approval_token, dry_run)
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     """List the participants of a WhatsApp group with their name, phone number, LID and admin status.
 
@@ -583,7 +590,7 @@ def get_group_participants(chat_jid: str) -> Dict[str, Any]:
         answer["error_code"] = result.error_code
     return answer
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:
     """Check whether the WhatsApp bridge is running and connected.
 
