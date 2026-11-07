@@ -68,7 +68,15 @@ beforeEach(() => {
   raise = vi.spyOn(notices, "raiseNotice");
   polls = [];
   remaining = [900];
-  server.use(http.get("*/api/sections", () => HttpResponse.json(sections)));
+  server.use(
+    http.get("*/api/sections", () => HttpResponse.json(sections)),
+    http.get("*/api/sections/send_policy", () =>
+      HttpResponse.json({
+        id: "send_policy", title: "Send policy", description: "", restart: null, status: "ready", banner: null, warnings: [],
+        version: "v1", read_only: false, fields: [], values: {}, state: {},
+      }),
+    ),
+  );
 });
 afterEach(() => {
   raise.mockRestore();
@@ -115,12 +123,12 @@ describe("session watch", () => {
     remaining = [900, 800, -1];
     serveSession();
     const router = await openShell();
-    queryClient.setQueryData(["section", "send_policy"], { secret: "cached" });
+    queryClient.setQueryData(["cached", "probe"], { secret: "cached" });
     await tick(3);
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/login");
     });
-    expect(queryClient.getQueryData(["section", "send_policy"])).toBeUndefined();
+    expect(queryClient.getQueryData(["cached", "probe"])).toBeUndefined();
     expect(raise.mock.calls.filter((c) => c[0] === "sessionEnded")).toHaveLength(1);
     expect(await screen.findByText(IDLE, { selector: "div" })).toBeInTheDocument();
   });
@@ -155,13 +163,13 @@ describe("session watch", () => {
     serveSession();
     server.use(http.delete("*/api/session", () => HttpResponse.json({ ok: true })));
     const router = await openShell();
-    queryClient.setQueryData(["section", "send_policy"], { secret: "cached" });
+    queryClient.setQueryData(["cached", "probe"], { secret: "cached" });
     server.use(http.get("*/api/session", () => HttpResponse.json({ state: "login", csrf: "n" })));
     await userEvent.setup({ advanceTimers: vi.advanceTimersByTime }).click(screen.getByRole("button", { name: "Sign out" }));
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/login");
     });
-    expect(queryClient.getQueryData(["section", "send_policy"])).toBeUndefined();
+    expect(queryClient.getQueryData(["cached", "probe"])).toBeUndefined();
     const count = polls.length;
     await tick(3);
     expect(polls.length).toBe(count);

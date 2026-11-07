@@ -33,6 +33,8 @@ export interface FieldRendererProps {
   error?: string | undefined;
   /** Every message of the section by dotted key; records read their cards' messages from it. */
   errors?: Readonly<Record<string, string>>;
+  /** Locks every control without a notice, for a section that is read-only as a whole. */
+  readOnly?: boolean;
   /** Makes ids unique when the same field appears on several cards. */
   idPrefix?: string;
   onChange: (value: EditorValue) => void;
@@ -140,21 +142,21 @@ function Control({
  * lock when the environment sets it, the warning of a risky value, the server's message and the way back to the
  * default. A kind this version does not know shows a notice instead of a control.
  */
-export function FieldRenderer({ field, value, loaded, state, error, errors, idPrefix = "", onChange, onRestore }: FieldRendererProps) {
+export function FieldRenderer({ field, value, loaded, state, error, errors, idPrefix = "", readOnly = false, onChange, onRestore }: FieldRendererProps) {
   const t = useT();
   const base = `${idPrefix}${useId()}`;
   const [pendingRisk, setPendingRisk] = useState<EditorValue>(undefined);
   const [askRisk, setAskRisk] = useState(false);
   const [askRestore, setAskRestore] = useState(false);
 
-  const locked = (state?.locked ?? false) || field.readonly;
+  const locked = (state?.locked ?? false) || field.readonly || readOnly;
   const helpId = `${base}-help`;
   const errorId = `${base}-error`;
   const lockId = `${base}-lock`;
   const hintId = `${base}-hint`;
   const hasHint = field.bounds !== null;
   const describedBy =
-    [field.help ? helpId : null, hasHint ? hintId : null, locked ? lockId : null, error ? errorId : null]
+    [field.help ? helpId : null, hasHint ? hintId : null, locked && !readOnly ? lockId : null, error ? errorId : null]
       .filter((part): part is string => part !== null)
       .join(" ") || undefined;
   const wiring: Wiring = { id: base, describedBy, invalid: Boolean(error), locked };
@@ -173,6 +175,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
   };
 
   const origin = state?.origin;
+  const pending = state?.pending ?? null;
   const canRestore = onRestore !== undefined && !locked && origin === "file";
   const lockText = field.env_var ? t("field.locked", { variable: field.env_var }) : t("field.lockedNoVariable");
   const showRisk = field.risk !== null && isRisky(field, value);
@@ -285,7 +288,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
           {t("field.bounds", { min: field.bounds[0], max: field.bounds[1] })}
         </p>
       ) : null}
-      {locked ? (
+      {locked && !readOnly ? (
         <p id={lockId} className="m-0 flex items-start gap-1.5 text-sm text-muted">
           <Lock aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
           <span>{field.readonly && !state?.locked ? t("field.readonly") : lockText}</span>
@@ -314,6 +317,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
           <Badge variant={origin === "environment" ? "warning" : origin === "file" ? "accent" : "neutral"}>
             {t(`field.origin.${origin}`)}
           </Badge>
+          {pending ? <Badge variant="warning">{t(`field.pending.${pending}`)}</Badge> : null}
           {canRestore ? (
             <Button
               variant="ghost"

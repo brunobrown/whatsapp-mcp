@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import type { RouterHistory } from "@tanstack/react-router";
 import { ShellLayout } from "@/app/layouts/ShellLayout";
+import { SectionPage } from "@/features/sections/SectionPage";
 import { AuthPage } from "@/features/auth/AuthPage";
 import { ErrorState } from "@/components/feedback/feedback";
 import { buttonVariants } from "@/components/ui/button";
@@ -90,7 +91,7 @@ const shellRoute = createRoute({
   component: ShellLayout,
 });
 
-const sectionRoute = createRoute({ getParentRoute: () => shellRoute, path: "/s/$sectionId" });
+const sectionRoute = createRoute({ getParentRoute: () => shellRoute, path: "/s/$sectionId", component: SectionPage });
 const statusRoute = createRoute({ getParentRoute: () => shellRoute, path: "/status" });
 const activityRoute = createRoute({ getParentRoute: () => shellRoute, path: "/activity" });
 const accountRoute = createRoute({ getParentRoute: () => shellRoute, path: "/account" });
