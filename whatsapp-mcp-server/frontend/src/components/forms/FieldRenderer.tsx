@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { CheckboxGroup, RadioGroup, Select, Switch } from "@/components/ui/controls";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SecretField } from "./SecretField";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
 import type { FieldSchema, FieldState } from "@/types/api";
@@ -135,7 +136,7 @@ function Control({
  * lock when the environment sets it, the warning of a risky value, the server's message and the way back to the
  * default. A kind this version does not know shows a notice instead of a control.
  */
-export function FieldRenderer({ field, value, state, error, idPrefix = "", onChange, onRestore }: FieldRendererProps) {
+export function FieldRenderer({ field, value, loaded, state, error, idPrefix = "", onChange, onRestore }: FieldRendererProps) {
   const t = useT();
   const base = `${idPrefix}${useId()}`;
   const [pendingRisk, setPendingRisk] = useState<EditorValue>(undefined);
@@ -154,7 +155,7 @@ export function FieldRenderer({ field, value, state, error, idPrefix = "", onCha
       .join(" ") || undefined;
   const wiring: Wiring = { id: base, describedBy, invalid: Boolean(error), locked };
 
-  const known = ["bool", "int", "float", "text", "choice", "multichoice"].includes(field.kind);
+  const known = ["bool", "int", "float", "text", "choice", "multichoice", "secret"].includes(field.kind);
   const asksFirst = field.kind === "bool" || field.kind === "choice";
 
   const commit = (next: EditorValue): void => {
@@ -175,6 +176,21 @@ export function FieldRenderer({ field, value, state, error, idPrefix = "", onCha
   let control: ReactNode;
   if (!known) {
     control = <p className="m-0 text-muted">{t("field.unsupported")}</p>;
+  } else if (field.kind === "secret") {
+    control = (
+      <div role="group" aria-labelledby={`${base}-label`} aria-describedby={describedBy}>
+        <SecretField
+          label={field.label}
+          value={value}
+          loaded={loaded}
+          id={base}
+          describedBy={describedBy}
+          invalid={Boolean(error)}
+          disabled={locked}
+          onChange={commit}
+        />
+      </div>
+    );
   } else if (field.kind === "multichoice") {
     control = (
       <CheckboxGroup
@@ -203,7 +219,7 @@ export function FieldRenderer({ field, value, state, error, idPrefix = "", onCha
     control = <Control field={field} value={value} wiring={wiring} commit={commit} />;
   }
 
-  const labelled = known && field.kind !== "multichoice" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
+  const labelled = known && field.kind !== "multichoice" && field.kind !== "secret" && !(field.kind === "choice" && field.options.length <= MAX_RADIO_OPTIONS);
   const inline = field.kind === "bool";
 
   return (
@@ -213,7 +229,11 @@ export function FieldRenderer({ field, value, state, error, idPrefix = "", onCha
           {field.label}
         </label>
       ) : null}
-      {!known ? <p className="m-0 font-medium">{field.label}</p> : null}
+      {!known || field.kind === "secret" ? (
+        <p id={`${base}-label`} className="m-0 font-medium">
+          {field.label}
+        </p>
+      ) : null}
       {inline ? (
         <div className="flex min-h-(--min-target) items-center justify-between gap-4">
           <label htmlFor={base} className="min-w-0 flex-1 font-medium">
