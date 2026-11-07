@@ -109,7 +109,7 @@ func TestAnInvalidKeyIsAnErrorNotAFallback(t *testing.T) { // KEY-02, KEY-04
 	os.WriteFile(good, []byte(testMasterHex), 0o600)
 	t.Setenv("WHATSAPP_DB_KEY_FILE", good)
 
-	for _, bad := range []string{"zz" + testMasterHex[2:], testMasterHex[:62], testMasterHex + "00", "chave-secreta-em-texto"} {
+	for _, bad := range []string{"zz" + testMasterHex[2:], testMasterHex[:62], testMasterHex + "00", "secret-key-in-plain-text"} {
 		t.Setenv("WHATSAPP_DB_KEY", bad)
 		_, _, err := loadMasterKey()
 		if err == nil {
@@ -137,10 +137,10 @@ func TestAKeyFileThatIsMissingOrInvalidIsAnError(t *testing.T) { // KEY-02, KEY-
 	}
 
 	bad := filepath.Join(t.TempDir(), "bad.key")
-	os.WriteFile(bad, []byte("isto-nao-e-uma-chave-hexadecimal"), 0o600)
+	os.WriteFile(bad, []byte("this-is-not-a-hexadecimal-key"), 0o600)
 	t.Setenv("WHATSAPP_DB_KEY_FILE", bad)
 	_, _, err := loadMasterKey()
-	if err == nil || strings.Contains(err.Error(), "isto-nao-e-uma-chave") || !strings.Contains(err.Error(), bad) {
+	if err == nil || strings.Contains(err.Error(), "this-is-not-a-key") || !strings.Contains(err.Error(), bad) {
 		t.Errorf("an invalid key file must be an error naming the file and not its content: %v", err)
 	}
 }
@@ -181,14 +181,14 @@ func TestAnExistingBadDefaultKeyIsNeverReplaced(t *testing.T) { // KEY-02
 	dir := clearKeyEnv(t)
 	os.MkdirAll(dir, 0o700)
 	path := filepath.Join(dir, "db.key")
-	os.WriteFile(path, []byte("corrompida"), 0o600)
+	os.WriteFile(path, []byte("corrupted"), 0o600)
 
 	_, _, err := loadMasterKey()
 
 	if err == nil {
 		t.Fatal("a corrupted default key must be an error: replacing it would make the encrypted databases unreadable")
 	}
-	if data, _ := os.ReadFile(path); string(data) != "corrompida" {
+	if data, _ := os.ReadFile(path); string(data) != "corrupted" {
 		t.Errorf("the file was changed to %q", data)
 	}
 }

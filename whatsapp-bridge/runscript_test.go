@@ -94,7 +94,7 @@ func TestInstallServiceRefusesAPathThatWouldBreakTheUnit(t *testing.T) { // RUN-
 	}
 }
 
-func TestUnitDoesNotDependOnSystemTargets(t *testing.T) { // RUN-02 (network-online.target não tem efeito em unidade --user)
+func TestUnitDoesNotDependOnSystemTargets(t *testing.T) { // RUN-02 (network-online.target has no effect in a --user unit)
 	unit, err := os.ReadFile("whatsapp-bridge.service.in")
 	if err != nil {
 		t.Fatal(err)

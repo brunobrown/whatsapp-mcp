@@ -73,7 +73,7 @@ func TestStateRecordsEachKindOfEvent(t *testing.T) { // STAT-02
 	c.advance(time.Minute)
 	state.record(&events.Message{})
 	c.advance(time.Minute)
-	state.record(&events.PushName{}) // um evento qualquer só move last_event_at
+	state.record(&events.PushName{}) // any event only moves last_event_at
 	out := getStatus(t, src, state)
 	if out["last_connected_at"] != "2026-10-21T10:01:00Z" {
 		t.Errorf("last_connected_at = %v", out["last_connected_at"])

@@ -27,7 +27,7 @@ func TestRotationKeepsEveryLineAndTheLimit(t *testing.T) { // LOG-02
 	}
 	var all []string
 	for i := 0; i < 12; i++ {
-		line := fmt.Sprintf("linha %02d %s\n", i, strings.Repeat("x", 30)) // 40 bytes: 2 por arquivo
+		line := fmt.Sprintf("line %02d %s\n", i, strings.Repeat("x", 30)) // 40 bytes: 2 per file
 		all = append(all, line)
 		if _, err := log.Write([]byte(line)); err != nil {
 			t.Fatal(err)
@@ -35,7 +35,7 @@ func TestRotationKeepsEveryLineAndTheLimit(t *testing.T) { // LOG-02
 	}
 	log.Close()
 
-	// do mais novo para o mais antigo: atual, .1, .2, .3
+	// from newest to oldest: current, .1, .2, .3
 	var got []string
 	for _, p := range []string{path + ".3", path + ".2", path + ".1", path} {
 		got = append(got, readFile(t, p))
@@ -55,7 +55,7 @@ func TestRotationKeepsEveryLineAndTheLimit(t *testing.T) { // LOG-02
 			t.Errorf("%s has %d bytes, limit is 100", p, info.Size())
 		}
 	}
-	if len(strings.Split(strings.TrimSpace(joined), "\n")) != 8 { // 4 arquivos x 2 linhas; as 4 mais antigas foram descartadas
+	if len(strings.Split(strings.TrimSpace(joined), "\n")) != 8 { // 4 files x 2 lines; the 4 oldest were dropped
 		t.Errorf("unexpected number of lines kept:\n%s", joined)
 	}
 }
@@ -82,7 +82,7 @@ func TestLogFileIsPrivate(t *testing.T) { // LOG-03
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.Write([]byte("0123456789abc")) // força uma rotação
+	log.Write([]byte("0123456789abc")) // forces a rotation
 	log.Write([]byte("xyz"))
 	log.Close()
 
@@ -113,8 +113,8 @@ func TestTeeStdoutWritesToTerminalAndFileButNotWhatGoesStraightToTerminal(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Println("evento normal")
-	fmt.Fprintln(terminal, "QR-SECRETO")
+	fmt.Println("normal event")
+	fmt.Fprintln(terminal, "QR-SECRET")
 	stop()
 	log.Close()
 	fakeTerminal.Close()
@@ -123,14 +123,14 @@ func TestTeeStdoutWritesToTerminalAndFileButNotWhatGoesStraightToTerminal(t *tes
 		t.Error("stop must put stdout back")
 	}
 	shown := readFile(t, filepath.Join(dir, "terminal.txt"))
-	if !strings.Contains(shown, "evento normal") || !strings.Contains(shown, "QR-SECRETO") {
+	if !strings.Contains(shown, "normal event") || !strings.Contains(shown, "QR-SECRET") {
 		t.Errorf("terminal lost output: %q", shown)
 	}
 	logged := readFile(t, logPath)
-	if !strings.Contains(logged, "evento normal") {
+	if !strings.Contains(logged, "normal event") {
 		t.Errorf("log lost output: %q", logged)
 	}
-	if strings.Contains(logged, "QR-SECRETO") {
+	if strings.Contains(logged, "QR-SECRET") {
 		t.Error("what goes straight to the terminal must not reach the log")
 	}
 }
@@ -139,7 +139,7 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
 
-func TestTeeStdoutKeepsDrainingWhenTheLogFails(t *testing.T) { // LOG-01 (um destino que falha não trava quem imprime)
+func TestTeeStdoutKeepsDrainingWhenTheLogFails(t *testing.T) { // LOG-01 (a failing destination does not block whoever prints)
 	dir := t.TempDir()
 	fakeTerminal, _ := os.Create(filepath.Join(dir, "terminal.txt"))
 	real := os.Stdout
@@ -153,10 +153,10 @@ func TestTeeStdoutKeepsDrainingWhenTheLogFails(t *testing.T) { // LOG-01 (um des
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 4000; i++ { // bem mais que o buffer do pipe
+		for i := 0; i < 4000; i++ { // well over the pipe buffer
 			fmt.Println(strings.Repeat("x", 100))
 		}
-		fmt.Println("ultima linha")
+		fmt.Println("last line")
 	}()
 	select {
 	case <-done:
@@ -166,14 +166,14 @@ func TestTeeStdoutKeepsDrainingWhenTheLogFails(t *testing.T) { // LOG-01 (um des
 	stop()
 	fakeTerminal.Close()
 
-	if !strings.Contains(readFile(t, filepath.Join(dir, "terminal.txt")), "ultima linha") {
+	if !strings.Contains(readFile(t, filepath.Join(dir, "terminal.txt")), "last line") {
 		t.Error("the terminal must keep receiving output when the log fails")
 	}
 }
 
 func TestExistingLogFilesBecomePrivate(t *testing.T) { // LOG-03
 	path := filepath.Join(t.TempDir(), "bridge.log")
-	os.WriteFile(path, []byte("antigo"), 0o644)
+	os.WriteFile(path, []byte("old"), 0o644)
 	os.Chmod(path, 0o644)
 
 	log, err := newRotatingFile(path, 1<<20, 3)
@@ -216,13 +216,13 @@ func TestLogStillWorksWhenTheModeCannotBeSet(t *testing.T) { // LOG-03
 	if err != nil {
 		t.Fatalf("the log must open anyway: %v", err)
 	}
-	log.Write([]byte("linha\n"))
+	log.Write([]byte("line\n"))
 	log.Close()
 
 	if log.ModeErr() == nil || !strings.Contains(log.ModeErr().Error(), "not permitted") {
 		t.Errorf("ModeErr = %v, want the chmod error", log.ModeErr())
 	}
-	if readFile(t, path) != "linha\n" {
+	if readFile(t, path) != "line\n" {
 		t.Error("nothing was logged")
 	}
 }

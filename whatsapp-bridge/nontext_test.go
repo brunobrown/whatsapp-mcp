@@ -18,14 +18,14 @@ func TestNonTextMessagesBecomeShortStableText(t *testing.T) { // NT-01..NT-04, N
 		want string
 	}{
 		"location with name": {&waE2E.Message{LocationMessage: &waE2E.LocationMessage{
-			Name: proto.String("Casa"), DegreesLatitude: proto.Float64(-8.05), DegreesLongitude: proto.Float64(-34.88)}},
-			"[location: Casa (-8.050000, -34.880000)]"},
+			Name: proto.String("Home"), DegreesLatitude: proto.Float64(-8.05), DegreesLongitude: proto.Float64(-34.88)}},
+			"[location: Home (-8.050000, -34.880000)]"},
 		"location without name": {&waE2E.Message{LocationMessage: &waE2E.LocationMessage{
 			DegreesLatitude: proto.Float64(-8.05), DegreesLongitude: proto.Float64(-34.88)}},
 			"[location: -8.050000, -34.880000]"},
 		"live location with caption": {&waE2E.Message{LiveLocationMessage: &waE2E.LiveLocationMessage{
-			Caption: proto.String("a caminho"), DegreesLatitude: proto.Float64(1.5), DegreesLongitude: proto.Float64(2.25)}},
-			"[live location: a caminho (1.500000, 2.250000)]"},
+			Caption: proto.String("on my way"), DegreesLatitude: proto.Float64(1.5), DegreesLongitude: proto.Float64(2.25)}},
+			"[live location: on my way (1.500000, 2.250000)]"},
 		"live location without caption": {&waE2E.Message{LiveLocationMessage: &waE2E.LiveLocationMessage{
 			DegreesLatitude: proto.Float64(1.5), DegreesLongitude: proto.Float64(2.25)}},
 			"[live location: 1.500000, 2.250000]"},
@@ -35,9 +35,9 @@ func TestNonTextMessagesBecomeShortStableText(t *testing.T) { // NT-01..NT-04, N
 			Contacts: []*waE2E.ContactMessage{{DisplayName: proto.String("Ana")}, {}, {DisplayName: proto.String("Beto")}}}},
 			"[contacts: Ana, Beto]"},
 		"sticker":                   {&waE2E.Message{StickerMessage: &waE2E.StickerMessage{}}, "[sticker]"},
-		"plain text is unchanged":   {&waE2E.Message{Conversation: proto.String("oi")}, "oi"},
-		"caption is unchanged":      {&waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("legenda")}}, "legenda"},
-		"extended text unchanged":   {&waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("citado")}}, "citado"},
+		"plain text is unchanged":   {&waE2E.Message{Conversation: proto.String("hi")}, "hi"},
+		"caption is unchanged":      {&waE2E.Message{ImageMessage: &waE2E.ImageMessage{Caption: proto.String("caption")}}, "caption"},
+		"extended text unchanged":   {&waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("quoted")}}, "quoted"},
 		"empty message stays empty": {&waE2E.Message{}, ""},
 	} {
 		if got := extractTextContent(c.msg); got != c.want {
@@ -51,12 +51,12 @@ func TestNonTextMessageIsStoredByHandleMessage(t *testing.T) { // NT-01, NT-04
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	store.StoreChat("chat@g.us", "Chat", now)
 	loc := &waE2E.Message{LocationMessage: &waE2E.LocationMessage{
-		Name: proto.String("Casa"), DegreesLatitude: proto.Float64(-8.05), DegreesLongitude: proto.Float64(-34.88)}}
+		Name: proto.String("Home"), DegreesLatitude: proto.Float64(-8.05), DegreesLongitude: proto.Float64(-34.88)}}
 
 	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "LOC", loc, now), waLog.Noop)
 	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "STK", &waE2E.Message{StickerMessage: &waE2E.StickerMessage{}}, now), waLog.Noop)
 
-	if row := readRow(t, store, "LOC"); row.content != "[location: Casa (-8.050000, -34.880000)]" {
+	if row := readRow(t, store, "LOC"); row.content != "[location: Home (-8.050000, -34.880000)]" {
 		t.Errorf("location content = %q", row.content)
 	}
 	if row := readRow(t, store, "STK"); row.content != "[sticker]" {
@@ -80,7 +80,7 @@ func TestDroppedFieldsNamesOnlyWhatIsNotKnownToCarryNoText(t *testing.T) { // NT
 		msg  *waE2E.Message
 		want []string
 	}{
-		"an unknown kind is named": {&waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("segredo")}}, []string{"listMessage"}},
+		"an unknown kind is named": {&waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("secret")}}, []string{"listMessage"}},
 		"the context info next to it is not": {&waE2E.Message{
 			ListMessage:        &waE2E.ListMessage{},
 			MessageContextInfo: &waE2E.MessageContextInfo{}}, []string{"listMessage"}},
@@ -105,7 +105,7 @@ func TestHandleMessageLogsAnUnknownKindWithoutItsContent(t *testing.T) { // NT-0
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 	store.StoreChat("chat@g.us", "Chat", now)
 	logger := &infoLogger{}
-	unknown := &waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("conteudo-secreto")}}
+	unknown := &waE2E.Message{ListMessage: &waE2E.ListMessage{Title: proto.String("secret-content")}}
 
 	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "LST", unknown, now), logger)
 	handleMessage(nil, store, pollEvent("chat@g.us", "5511999990000@s.whatsapp.net", "RCT", &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{}}, now), logger)
@@ -119,7 +119,7 @@ func TestHandleMessageLogsAnUnknownKindWithoutItsContent(t *testing.T) { // NT-0
 	if len(dropped) != 1 || !strings.Contains(dropped[0], "LST") || !strings.Contains(dropped[0], "listMessage") {
 		t.Fatalf("dropped-message lines = %q, want exactly one naming LST and listMessage", dropped)
 	}
-	if strings.Contains(dropped[0], "conteudo-secreto") {
+	if strings.Contains(dropped[0], "secret-content") {
 		t.Error("the log line must never carry the content of the message")
 	}
 	if messageCount(t, store, "LST") != 0 {

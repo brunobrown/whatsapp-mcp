@@ -196,7 +196,7 @@ func TestAutoDownloadFailureKeepsMessage(t *testing.T) { // AUTODL-09
 	store := newTestStore(t)
 	seedMedia(t, store, "M1", "image", "image_M1.jpg")
 	fail := func(f whatsmeow.File) error {
-		f.Write([]byte("meio arquivo")) // falha no meio do download
+		f.Write([]byte("half a file")) // fails halfway through the download
 		return errors.New("403")
 	}
 
@@ -213,7 +213,7 @@ func TestAutoDownloadFailureKeepsMessage(t *testing.T) { // AUTODL-09
 	}
 }
 
-func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AUTODL-10 (caminho antigo)
+func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AUTODL-10 (old path)
 	store := newTestStore(t)
 	content := []byte("already here")
 	sum := sha256.Sum256(content)
@@ -228,7 +228,7 @@ func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AU
 		t.Fatal(err)
 	}
 
-	// client nil: qualquer tentativa de falar com o WhatsApp dá panic
+	// nil client: any attempt to talk to WhatsApp panics
 	ok, mediaType, _, path, err := downloadMedia(nil, store, "M1", "chat@g.us")
 	if err != nil || !ok || mediaType != "image" {
 		t.Fatalf("downloadMedia = (%v, %q, %v)", ok, mediaType, err)
@@ -239,13 +239,13 @@ func TestDownloadMediaFindsFileDownloadedBeforeThisVersion(t *testing.T) { // AU
 	}
 }
 
-func TestLegacyFileOfAnotherMessageIsNotServed(t *testing.T) { // AUTODL-14 (caminho antigo)
-	real := sha256.Sum256([]byte("conteudo da mensagem"))
+func TestLegacyFileOfAnotherMessageIsNotServed(t *testing.T) { // AUTODL-14 (old path)
+	real := sha256.Sum256([]byte("message content"))
 	dir := t.TempDir()
 	same := filepath.Join(dir, "same.pdf")
 	other := filepath.Join(dir, "other.pdf")
-	os.WriteFile(same, []byte("conteudo da mensagem"), 0o644)
-	os.WriteFile(other, []byte("conteudo de outra mensagem com o mesmo nome"), 0o644)
+	os.WriteFile(same, []byte("message content"), 0o644)
+	os.WriteFile(other, []byte("content of another message with the same name"), 0o644)
 
 	if !legacyFileMatches(same, real[:]) {
 		t.Error("a legacy file with the message's SHA-256 must be accepted")
@@ -264,11 +264,11 @@ func TestLegacyFileOfAnotherMessageIsNotServed(t *testing.T) { // AUTODL-14 (cam
 func TestDownloadMediaReturnsAutoDownloadedFileWithoutClient(t *testing.T) { // AUTODL-10, AUTODL-11
 	store := newTestStore(t)
 	seedMedia(t, store, "M1", "image", "image_M1.jpg")
-	path, err := autoDownload(store, loadAutoDownloadConfig(env(nil)), okDownload("já baixado"), "M1", "chat@g.us", "image", "image_M1.jpg", 10)
+	path, err := autoDownload(store, loadAutoDownloadConfig(env(nil)), okDownload("already downloaded"), "M1", "chat@g.us", "image", "image_M1.jpg", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetLocalPath("M1", "chat@g.us", ""); err != nil { // força a busca pelo caminho novo
+	if err := store.SetLocalPath("M1", "chat@g.us", ""); err != nil { // forces the lookup through the new path
 		t.Fatal(err)
 	}
 
@@ -283,15 +283,15 @@ func TestDownloadMediaReturnsAutoDownloadedFileWithoutClient(t *testing.T) { // 
 
 func TestSameFilenameInTwoMessagesStaysSeparate(t *testing.T) { // AUTODL-14
 	store := newTestStore(t)
-	seedMedia(t, store, "REAL", "document", "proposta.pdf")
-	seedMedia(t, store, "FAKE", "document", "proposta.pdf")
+	seedMedia(t, store, "REAL", "document", "proposal.pdf")
+	seedMedia(t, store, "FAKE", "document", "proposal.pdf")
 	cfg := loadAutoDownloadConfig(env(nil))
 
-	fakePath, err := autoDownload(store, cfg, okDownload("CONTEUDO DO ATACANTE"), "FAKE", "chat@g.us", "document", "proposta.pdf", 20)
+	fakePath, err := autoDownload(store, cfg, okDownload("ATTACKER CONTENT"), "FAKE", "chat@g.us", "document", "proposal.pdf", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	realPath, err := autoDownload(store, cfg, okDownload("CONTEUDO REAL"), "REAL", "chat@g.us", "document", "proposta.pdf", 13)
+	realPath, err := autoDownload(store, cfg, okDownload("REAL CONTENT"), "REAL", "chat@g.us", "document", "proposal.pdf", 13)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestSameFilenameInTwoMessagesStaysSeparate(t *testing.T) { // AUTODL-14
 	if fakePath == realPath {
 		t.Fatal("two messages share one file")
 	}
-	if data, _ := os.ReadFile(realPath); string(data) != "CONTEUDO REAL" {
+	if data, _ := os.ReadFile(realPath); string(data) != "REAL CONTENT" {
 		t.Errorf("real message file = %q", data)
 	}
 	if localPathOf(t, store, "REAL") != realPath || localPathOf(t, store, "FAKE") != fakePath {
@@ -314,7 +314,7 @@ func TestAutoDownloadAbortsWhenBytesExceedLimit(t *testing.T) { // AUTODL-15
 	var wrote int
 	flood := func(f whatsmeow.File) error {
 		chunk := make([]byte, 500)
-		for i := 0; i < 100; i++ { // 50 KB contra um limite de 1000 bytes
+		for i := 0; i < 100; i++ { // 50 KB against a limit of 1000 bytes
 			if _, err := f.Write(chunk); err != nil {
 				return err
 			}
@@ -323,7 +323,7 @@ func TestAutoDownloadAbortsWhenBytesExceedLimit(t *testing.T) { // AUTODL-15
 		return nil
 	}
 
-	// o remetente declara 10 bytes, bem abaixo do limite, mas o arquivo real é grande
+	// the sender declares 10 bytes, well below the limit, but the real file is large
 	path, err := autoDownload(store, cfg, flood, "M1", "chat@g.us", "document", "big.bin", 10)
 
 	if err == nil || path != "" {
@@ -340,11 +340,11 @@ func TestAutoDownloadAbortsWhenBytesExceedLimit(t *testing.T) { // AUTODL-15
 	}
 }
 
-func TestAutoDownloadRejectsFinalFileOverLimit(t *testing.T) { // AUTODL-15 (arquivo que cresce na decifragem)
+func TestAutoDownloadRejectsFinalFileOverLimit(t *testing.T) { // AUTODL-15 (file that grows when decrypted)
 	store := newTestStore(t)
 	seedMedia(t, store, "M1", "document", "big.bin")
 	cfg := AutoDownloadConfig{Enabled: true, MaxBytes: 1000, Types: map[string]bool{"document": true}}
-	justOver := func(f whatsmeow.File) error { // dentro da folga de 64 bytes, mas acima do limite
+	justOver := func(f whatsmeow.File) error { // within the 64-byte slack, but above the limit
 		_, err := f.Write(make([]byte, 1020))
 		return err
 	}
@@ -365,8 +365,8 @@ func TestAutoDownloadNeverLeavesFinalFileOnCrash(t *testing.T) { // AUTODL-16
 	}
 	observed := false
 	inspect := func(f whatsmeow.File) error {
-		f.Write([]byte("metade"))
-		// no meio da escrita o caminho final ainda não pode existir
+		f.Write([]byte("half"))
+		// halfway through the write the final path must not exist yet
 		if _, statErr := os.Stat(finalAbs); statErr == nil {
 			t.Error("final path exists while the download is still in flight")
 		}
@@ -384,7 +384,7 @@ func TestAutoDownloadNeverLeavesFinalFileOnCrash(t *testing.T) { // AUTODL-16
 	}
 }
 
-func TestAutoDownloadReusesExistingFileWithoutDownloading(t *testing.T) { // AUTODL-07 (idempotência)
+func TestAutoDownloadReusesExistingFileWithoutDownloading(t *testing.T) { // AUTODL-07 (idempotency)
 	store := newTestStore(t)
 	seedMedia(t, store, "M1", "image", "image_M1.jpg")
 	cfg := loadAutoDownloadConfig(env(nil))
@@ -411,10 +411,10 @@ func TestStoreDownloadedMediaRecordsLocalPath(t *testing.T) { // AUTODL-11 (down
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := storeDownloadedMedia(store, "M1", "chat@g.us", abs, []byte("dados")); err != nil {
+	if err := storeDownloadedMedia(store, "M1", "chat@g.us", abs, []byte("data")); err != nil {
 		t.Fatal(err)
 	}
-	if data, _ := os.ReadFile(abs); string(data) != "dados" {
+	if data, _ := os.ReadFile(abs); string(data) != "data" {
 		t.Errorf("file = %q", data)
 	}
 	if localPathOf(t, store, "M1") != abs {
@@ -425,7 +425,7 @@ func TestStoreDownloadedMediaRecordsLocalPath(t *testing.T) { // AUTODL-11 (down
 	}
 }
 
-func TestMaybeAutoDownloadSkipsWhenStoreFailed(t *testing.T) { // hook de handleMessage
+func TestMaybeAutoDownloadSkipsWhenStoreFailed(t *testing.T) { // handleMessage hook
 	store := newTestStore(t)
 	called := make(chan struct{}, 1)
 	dl := func(whatsmeow.File) error { called <- struct{}{}; return nil }
@@ -438,7 +438,7 @@ func TestMaybeAutoDownloadSkipsWhenStoreFailed(t *testing.T) { // hook de handle
 	}
 }
 
-func TestMaybeAutoDownloadUsesLimiterAndRuns(t *testing.T) { // hook de handleMessage, AUTODL-12
+func TestMaybeAutoDownloadUsesLimiterAndRuns(t *testing.T) { // handleMessage hook, AUTODL-12
 	store := newTestStore(t)
 	for _, id := range []string{"A", "B", "C"} {
 		seedMedia(t, store, id, "image", "f_"+id+".jpg")
@@ -479,7 +479,7 @@ func TestProductionLimiterAllowsFourDownloads(t *testing.T) { // AUTODL-12
 	}
 }
 
-func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy usa ReadFrom do *os.File)
+func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy uses ReadFrom of *os.File)
 	f, err := os.CreateTemp(t.TempDir(), "capped")
 	if err != nil {
 		t.Fatal(err)
@@ -487,7 +487,7 @@ func TestCappedFileLimitsIoCopy(t *testing.T) { // AUTODL-15 (io.Copy usa ReadFr
 	defer f.Close()
 	c := &cappedFile{File: f, max: 1000}
 
-	// como o corpo de uma resposta HTTP: sem WriteTo, então io.Copy cai no ReadFrom do destino
+	// like an HTTP response body: no WriteTo, so io.Copy falls back to the destination's ReadFrom
 	body := struct{ io.Reader }{bytes.NewReader(make([]byte, 50_000))}
 	_, err = io.Copy(c, body)
 
@@ -512,23 +512,23 @@ func TestMediaDirsDoNotCollideAfterSanitizing(t *testing.T) { // AUTODL-14
 	if a == b {
 		t.Errorf("message IDs 'a b' and 'a_b' share %s", a)
 	}
-	// IDs que já são seguros (os do WhatsApp) mantêm o nome simples
+	// IDs that are already safe (the WhatsApp ones) keep the plain name
 	_, plain, _ := mediaFilePath("chat@g.us", "3EB0ABC123", "f.pdf")
 	if filepath.Base(filepath.Dir(plain)) != "3EB0ABC123" {
 		t.Errorf("a safe ID must be used as is, got %s", plain)
 	}
 }
 
-func TestDownloadMediaIgnoresLegacyFileOfAnotherMessage(t *testing.T) { // AUTODL-14 (caminho antigo, via downloadMedia)
+func TestDownloadMediaIgnoresLegacyFileOfAnotherMessage(t *testing.T) { // AUTODL-14 (old path, via downloadMedia)
 	store := newTestStore(t)
-	real := sha256.Sum256([]byte("conteudo real"))
+	real := sha256.Sum256([]byte("real content"))
 	store.StoreChat("chat@g.us", "Chat", time.Now())
-	// sem URL: se o arquivo antigo for recusado, downloadMedia para antes de falar com o cliente
-	if err := store.StoreMessage("M1", "chat@g.us", "alice", "", time.Now(), false, "document", "proposta.pdf", "", nil, real[:], nil, 0); err != nil {
+	// no URL: if the old file is rejected, downloadMedia stops before talking to the client
+	if err := store.StoreMessage("M1", "chat@g.us", "alice", "", time.Now(), false, "document", "proposal.pdf", "", nil, real[:], nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	os.MkdirAll("store/chat@g.us", 0o755)
-	os.WriteFile("store/chat@g.us/proposta.pdf", []byte("arquivo de outra mensagem"), 0o644)
+	os.WriteFile("store/chat@g.us/proposal.pdf", []byte("file of another message"), 0o644)
 
 	ok, _, _, path, err := downloadMedia(nil, store, "M1", "chat@g.us")
 

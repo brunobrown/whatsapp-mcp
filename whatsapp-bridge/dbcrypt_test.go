@@ -57,7 +57,7 @@ func openWithoutKey(t *testing.T, path string) error {
 
 func storeASecret(t *testing.T, store *MessageStore) {
 	t.Helper()
-	if err := store.StoreChat("chat@g.us", "Grupo", time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)); err != nil {
+	if err := store.StoreChat("chat@g.us", "Group", time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.StoreMessage("M1", "chat@g.us", "5511999990000", secretMessage, time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC), false, "", "", "", nil, nil, nil, 0); err != nil {
@@ -80,7 +80,7 @@ func TestANewMessageDatabaseIsEncrypted(t *testing.T) { // ENC-01
 	if startsWithSQLiteMagic(t, path) {
 		t.Error("the file still has the SQLite header")
 	}
-	if data, _ := os.ReadFile(path); strings.Contains(string(data), "secreta") || strings.Contains(string(data), "contrato") || strings.Contains(string(data), "chats") {
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "secret") || strings.Contains(string(data), "contract") || strings.Contains(string(data), "chats") {
 		t.Error("readable text found inside the encrypted file")
 	}
 	if err := openWithoutKey(t, path); err == nil {
@@ -125,7 +125,7 @@ func TestTheSessionDatabaseIsEncrypted(t *testing.T) { // ENC-01, ENC-05
 		t.Fatal(err)
 	}
 	db.Exec("CREATE TABLE session_note (secret TEXT)")
-	db.Exec("INSERT INTO session_note VALUES ('chave-de-sessao-secreta')")
+	db.Exec("INSERT INTO session_note VALUES ('secret-session-key')")
 	container.Close()
 
 	if startsWithSQLiteMagic(t, "store/whatsapp.db") || openWithoutKey(t, "store/whatsapp.db") == nil {
@@ -140,10 +140,10 @@ func TestTheSessionDatabaseIsEncrypted(t *testing.T) { // ENC-01, ENC-05
 	var tables int
 	again.QueryRow("SELECT count(*) FROM sqlite_master WHERE name = 'whatsmeow_device'").Scan(&tables)
 	again.Close()
-	if secret != "chave-de-sessao-secreta" || tables != 1 {
+	if secret != "secret-session-key" || tables != 1 {
 		t.Errorf("after reopening: secret %q, device table %d", secret, tables)
 	}
-	if data, _ := os.ReadFile("store/whatsapp.db"); strings.Contains(string(data), "secreta") || strings.Contains(string(data), "whatsmeow_device") {
+	if data, _ := os.ReadFile("store/whatsapp.db"); strings.Contains(string(data), "secret") || strings.Contains(string(data), "whatsmeow_device") {
 		t.Error("readable text found inside the encrypted session database")
 	}
 }
@@ -343,9 +343,9 @@ func TestWriteCrossLanguageFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	when := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
-	store.StoreChat("fixture@g.us", "Grupo Fixture", when)
-	store.StoreMessage("FX1", "fixture@g.us", "5511999990000", "primeira mensagem do fixture", when, false, "", "", "", nil, nil, nil, 0)
-	store.StoreMessage("FX2", "fixture@g.us", "5511888880000", "segunda, em resposta", when.Add(time.Minute), false, "", "", "", nil, nil, nil, 0)
+	store.StoreChat("fixture@g.us", "Fixture Group", when)
+	store.StoreMessage("FX1", "fixture@g.us", "5511999990000", "first fixture message", when, false, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("FX2", "fixture@g.us", "5511888880000", "second, as a reply", when.Add(time.Minute), false, "", "", "", nil, nil, nil, 0)
 	store.SetMessageMeta("FX2", "fixture@g.us", MessageMeta{QuotedID: "FX1"})
 	store.UpsertIdentity("100000000000003", "5511999990000", "Ana Fixture", "")
 	store.Close()

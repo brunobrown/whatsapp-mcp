@@ -79,7 +79,7 @@ func reactionMessage(target, emoji string, tsMS int64) *waE2E.Message {
 
 func TestReceivedReactionIsStoredNotAsAMessage(t *testing.T) { // REACT-06
 	store := newTestStore(t)
-	seedText(t, store, "M1", "5511999990000", "oi", false)
+	seedText(t, store, "M1", "5511999990000", "hi", false)
 	votedAt := time.Date(2026, 11, 6, 12, 5, 0, 0, time.UTC)
 	evt := pollEvent("chat@g.us", "5511888880000@s.whatsapp.net", "RCT1", reactionMessage("M1", "👍", votedAt.UnixMilli()), votedAt.Add(time.Hour))
 
@@ -147,7 +147,7 @@ func reactingFake() (*fakePollClient, *reaction) {
 
 func TestReactToAGroupMessageNamesTheSenderOfTheTarget(t *testing.T) { // REACT-01, REACT-07
 	store := newTestStore(t)
-	seedText(t, store, "M1", "5511999990000", "oi", false)
+	seedText(t, store, "M1", "5511999990000", "hi", false)
 	f, got := reactingFake()
 
 	status, resp := reactToMessage(f.env, store, ReactRequest{ChatJID: "chat@g.us", MessageID: "M1", Emoji: "👍"}, waLog.Noop)
@@ -165,7 +165,7 @@ func TestReactToAGroupMessageNamesTheSenderOfTheTarget(t *testing.T) { // REACT-
 
 func TestReactToOurOwnMessageUsesAnEmptySender(t *testing.T) { // REACT-07
 	store := newTestStore(t)
-	seedText(t, store, "MINE", "5511900000000", "meu", true)
+	seedText(t, store, "MINE", "5511900000000", "mine", true)
 	f, got := reactingFake()
 
 	reactToMessage(f.env, store, ReactRequest{ChatJID: "chat@g.us", MessageID: "MINE", Emoji: "👍"}, waLog.Noop)
@@ -177,7 +177,7 @@ func TestReactToOurOwnMessageUsesAnEmptySender(t *testing.T) { // REACT-07
 
 func TestEmptyEmojiRetractsTheReaction(t *testing.T) { // REACT-02
 	store := newTestStore(t)
-	seedText(t, store, "M1", "5511999990000", "oi", false)
+	seedText(t, store, "M1", "5511999990000", "hi", false)
 	store.StoreReaction("M1", "chat@g.us", "5511900000000", "👍", time.Date(2026, 11, 6, 11, 0, 0, 0, time.UTC))
 	f, got := reactingFake()
 
@@ -203,7 +203,7 @@ func TestReactionRefusals(t *testing.T) { // REACT-03, REACT-04
 		"bad chat":           {ReactRequest{ChatJID: "::", MessageID: "M1", Emoji: "👍"}, http.StatusBadRequest},
 	} {
 		store := newTestStore(t)
-		seedText(t, store, "M1", "5511999990000", "oi", false)
+		seedText(t, store, "M1", "5511999990000", "hi", false)
 		f, _ := reactingFake()
 
 		status, resp := reactToMessage(f.env, store, c.req, waLog.Noop)
@@ -216,7 +216,7 @@ func TestReactionRefusals(t *testing.T) { // REACT-03, REACT-04
 
 func TestSixteenCharactersAreAccepted(t *testing.T) { // REACT-03
 	store := newTestStore(t)
-	seedText(t, store, "M1", "5511999990000", "oi", false)
+	seedText(t, store, "M1", "5511999990000", "hi", false)
 	f, _ := reactingFake()
 	if status, _ := reactToMessage(f.env, store, ReactRequest{ChatJID: "chat@g.us", MessageID: "M1", Emoji: strings.Repeat("😀", 16)}, waLog.Noop); status != http.StatusOK {
 		t.Errorf("16 characters = %d, want 200", status)
@@ -225,7 +225,7 @@ func TestSixteenCharactersAreAccepted(t *testing.T) { // REACT-03
 
 func TestFailedReactionStoresNothing(t *testing.T) { // REACT-06
 	store := newTestStore(t)
-	seedText(t, store, "M1", "5511999990000", "oi", false)
+	seedText(t, store, "M1", "5511999990000", "hi", false)
 	f, _ := reactingFake()
 	f.err = errNetwork
 
@@ -239,7 +239,7 @@ func TestFailedReactionStoresNothing(t *testing.T) { // REACT-06
 	}
 }
 
-func TestReactRouteIsRegisteredInTheRESTMux(t *testing.T) { // REACT-01 (fiação)
+func TestReactRouteIsRegisteredInTheRESTMux(t *testing.T) { // REACT-01 (wiring)
 	mux := newRESTMux(nil, newTestStore(t), fakeConn{connected: true}, newBridgeState(time.Now), nil)
 	bad := httptest.NewRecorder()
 	mux.ServeHTTP(bad, httptest.NewRequest(http.MethodPost, "/api/react", strings.NewReader("{")))

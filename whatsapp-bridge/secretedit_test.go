@@ -41,41 +41,41 @@ func seedText(t *testing.T, store *MessageStore, id, sender, content string, fro
 
 func TestEncryptedEditReplacesTheTextOfTheOriginalSendersMessage(t *testing.T) { // ED-01
 	store := newTestStore(t)
-	seedText(t, store, "ORIG", "5511999990000", "texto velho", false)
-	inner := &waE2E.Message{Conversation: proto.String("texto novo")}
+	seedText(t, store, "ORIG", "5511999990000", "old text", false)
+	inner := &waE2E.Message{Conversation: proto.String("new text")}
 
 	handled := recordSecretEdit(store, "", decryptedAs(inner), secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "ORIG")), waLog.Noop)
 
 	if !handled {
 		t.Error("an encrypted envelope must be reported as handled so it is not stored as a message")
 	}
-	if got := readRow(t, store, "ORIG").content; got != "texto novo" {
+	if got := readRow(t, store, "ORIG").content; got != "new text" {
 		t.Errorf("content = %q, want the edited text", got)
 	}
 }
 
 func TestEncryptedEditByAnotherPersonChangesNothing(t *testing.T) { // ED-01
 	store := newTestStore(t)
-	seedText(t, store, "ORIG", "5511999990000", "texto velho", false)
-	inner := &waE2E.Message{Conversation: proto.String("texto trocado")}
+	seedText(t, store, "ORIG", "5511999990000", "old text", false)
+	inner := &waE2E.Message{Conversation: proto.String("replaced text")}
 
 	recordSecretEdit(store, "", decryptedAs(inner), secretEvent("5511888880000@s.whatsapp.net", "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "ORIG")), waLog.Noop)
 
-	if got := readRow(t, store, "ORIG").content; got != "texto velho" {
+	if got := readRow(t, store, "ORIG").content; got != "old text" {
 		t.Errorf("content = %q, want the original untouched", got)
 	}
 }
 
 func TestEncryptedEditFromThisAccountFindsOurMessageWhateverTheStoredSender(t *testing.T) { // ED-01
 	store := newTestStore(t)
-	seedText(t, store, "MINE", "99887766", "meu velho", true) // stored under a LID user
-	inner := &waE2E.Message{Conversation: proto.String("meu novo")}
+	seedText(t, store, "MINE", "99887766", "my old", true) // stored under a LID user
+	inner := &waE2E.Message{Conversation: proto.String("my new")}
 	evt := secretEvent("99887766@lid", "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "MINE"))
 	evt.Info.IsFromMe = true
 
 	recordSecretEdit(store, "5511900000000", decryptedAs(inner), evt, waLog.Noop)
 
-	if got := readRow(t, store, "MINE").content; got != "meu novo" {
+	if got := readRow(t, store, "MINE").content; got != "my new" {
 		t.Errorf("content = %q, want our edit applied", got)
 	}
 }
@@ -87,12 +87,12 @@ func TestUndecryptableOrEmptyEditOnlyWarns(t *testing.T) { // ED-04
 		"nil payload":   decryptedAs(nil),
 	} {
 		store := newTestStore(t)
-		seedText(t, store, "ORIG", "5511999990000", "texto velho", false)
+		seedText(t, store, "ORIG", "5511999990000", "old text", false)
 		logger := &recordingLogger{}
 
 		handled := recordSecretEdit(store, "", decrypt, secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "ORIG")), logger)
 
-		if !handled || readRow(t, store, "ORIG").content != "texto velho" {
+		if !handled || readRow(t, store, "ORIG").content != "old text" {
 			t.Errorf("%s: handled=%v content=%q, want handled and unchanged", name, handled, readRow(t, store, "ORIG").content)
 		}
 		if len(logger.warnings) != 1 || !strings.Contains(logger.warnings[0], "ORIG") {
@@ -103,7 +103,7 @@ func TestUndecryptableOrEmptyEditOnlyWarns(t *testing.T) { // ED-04
 
 func TestAMessageThatIsNotAnEnvelopeIsNotHandled(t *testing.T) { // ED-01
 	store := newTestStore(t)
-	if recordSecretEdit(store, "", nil, secretEvent(alice, "T", &waE2E.Message{Conversation: proto.String("oi")}), waLog.Noop) {
+	if recordSecretEdit(store, "", nil, secretEvent(alice, "T", &waE2E.Message{Conversation: proto.String("hi")}), waLog.Noop) {
 		t.Error("an ordinary message must fall through to the normal handling")
 	}
 }
@@ -115,8 +115,8 @@ func addOption(name string) *waE2E.Message {
 
 func pollWithOptions(t *testing.T, store *MessageStore, allowAdd bool, options ...string) {
 	t.Helper()
-	seedText(t, store, "POLL1", "5511999990000", "[poll] Almoço?", false)
-	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: "5511999990000", Question: "Almoço?",
+	seedText(t, store, "POLL1", "5511999990000", "[poll] Lunch?", false)
+	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: "5511999990000", Question: "Lunch?",
 		Options: options, AllowAddOption: allowAdd}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,12 +133,12 @@ func optionsOf(t *testing.T, store *MessageStore) []string {
 
 func TestAddedOptionIsAppendedToThePoll(t *testing.T) { // ED-02
 	store := newTestStore(t)
-	pollWithOptions(t, store, true, "Sim", "Não")
+	pollWithOptions(t, store, true, "Yes", "No")
 
-	recordSecretEdit(store, "", decryptedAs(addOption("Talvez")), secretEvent("5511777770000@s.whatsapp.net", "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_ADD_OPTION, "POLL1")), waLog.Noop)
+	recordSecretEdit(store, "", decryptedAs(addOption("Maybe")), secretEvent("5511777770000@s.whatsapp.net", "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_ADD_OPTION, "POLL1")), waLog.Noop)
 
-	if got := strings.Join(optionsOf(t, store), "|"); got != "Sim|Não|Talvez" {
-		t.Errorf("options = %q, want Sim|Não|Talvez (anyone may add, at the end)", got)
+	if got := strings.Join(optionsOf(t, store), "|"); got != "Yes|No|Maybe" {
+		t.Errorf("options = %q, want Yes|No|Maybe (anyone may add, at the end)", got)
 	}
 }
 
@@ -149,11 +149,11 @@ func TestAddedOptionIsRefusedWhenItShouldNotBe(t *testing.T) { // ED-02
 		options []string
 		added   string
 	}{
-		"the poll does not accept new options": {false, []string{"Sim", "Não"}, "Talvez"},
-		"a repeated option":                    {true, []string{"Sim", "Não"}, "sim"},
-		"a repeated option with spaces":        {true, []string{"Sim", "Não"}, " NÃO "},
+		"the poll does not accept new options": {false, []string{"Yes", "No"}, "Maybe"},
+		"a repeated option":                    {true, []string{"Yes", "No"}, "yes"},
+		"a repeated option with spaces":        {true, []string{"Yes", "No"}, " NO "},
 		"the poll already has 12":              {true, twelve, "13"},
-		"an empty option":                      {true, []string{"Sim", "Não"}, "  "},
+		"an empty option":                      {true, []string{"Yes", "No"}, "  "},
 	} {
 		store := newTestStore(t)
 		pollWithOptions(t, store, c.allow, c.options...)
@@ -170,32 +170,32 @@ func TestAddedOptionToAnUnknownPollChangesNothing(t *testing.T) { // ED-02, ED-0
 	store := newTestStore(t)
 	logger := &recordingLogger{}
 
-	handled := recordSecretEdit(store, "", decryptedAs(addOption("Talvez")), secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_ADD_OPTION, "SEM-ENQUETE")), logger)
+	handled := recordSecretEdit(store, "", decryptedAs(addOption("Maybe")), secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_ADD_OPTION, "NO-POLL")), logger)
 
 	if !handled {
 		t.Error("the envelope must still be reported as handled")
 	}
-	if _, found, _ := store.GetPoll("SEM-ENQUETE", "chat@g.us"); found {
+	if _, found, _ := store.GetPoll("NO-POLL", "chat@g.us"); found {
 		t.Error("an option for an unknown poll must not create one")
 	}
 }
 
 func editedPoll(question string) *waE2E.Message {
-	return creationMessage(question, []string{"Sim", "Não"}, 0)
+	return creationMessage(question, []string{"Yes", "No"}, 0)
 }
 
 func TestPollQuestionEditedByItsAuthor(t *testing.T) { // ED-03
 	store := newTestStore(t)
-	pollWithOptions(t, store, false, "Sim", "Não")
+	pollWithOptions(t, store, false, "Yes", "No")
 
-	recordSecretEdit(store, "", decryptedAs(editedPoll("Almoço hoje?")), secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_EDIT, "POLL1")), waLog.Noop)
+	recordSecretEdit(store, "", decryptedAs(editedPoll("Lunch today?")), secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_EDIT, "POLL1")), waLog.Noop)
 
 	poll, _, _ := store.GetPoll("POLL1", "chat@g.us")
-	if poll.Question != "Almoço hoje?" {
+	if poll.Question != "Lunch today?" {
 		t.Errorf("question = %q, want the edited one", poll.Question)
 	}
-	if got := readRow(t, store, "POLL1").content; got != "[poll] Almoço hoje?" {
-		t.Errorf("message content = %q, want [poll] Almoço hoje?", got)
+	if got := readRow(t, store, "POLL1").content; got != "[poll] Lunch today?" {
+		t.Errorf("message content = %q, want [poll] Lunch today?", got)
 	}
 	if len(poll.Options) != 2 {
 		t.Errorf("options = %v, want them untouched", poll.Options)
@@ -207,16 +207,16 @@ func TestPollQuestionEditedBySomeoneElseOrWithoutOneChangesNothing(t *testing.T)
 		sender string
 		inner  *waE2E.Message
 	}{
-		"someone else": {"5511888880000@s.whatsapp.net", editedPoll("Pergunta trocada")},
+		"someone else": {"5511888880000@s.whatsapp.net", editedPoll("Swapped question")},
 		"no question":  {alice, &waE2E.Message{Conversation: proto.String("x")}},
 	} {
 		store := newTestStore(t)
-		pollWithOptions(t, store, false, "Sim", "Não")
+		pollWithOptions(t, store, false, "Yes", "No")
 
 		recordSecretEdit(store, "", decryptedAs(c.inner), secretEvent(c.sender, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_EDIT, "POLL1")), waLog.Noop)
 
 		poll, _, _ := store.GetPoll("POLL1", "chat@g.us")
-		if poll.Question != "Almoço?" || readRow(t, store, "POLL1").content != "[poll] Almoço?" {
+		if poll.Question != "Lunch?" || readRow(t, store, "POLL1").content != "[poll] Lunch?" {
 			t.Errorf("%s: question %q, content %q, want the original", name, poll.Question, readRow(t, store, "POLL1").content)
 		}
 	}
@@ -231,15 +231,15 @@ func TestEnvelopeKindsWeDoNotApplyAreHandledAndIgnored(t *testing.T) { // ED-04
 	}
 }
 
-func TestHandleMessageAppliesAnEncryptedEditAndDoesNotStoreTheEnvelope(t *testing.T) { // ED-01 (fiação)
+func TestHandleMessageAppliesAnEncryptedEditAndDoesNotStoreTheEnvelope(t *testing.T) { // ED-01 (wiring)
 	store := newTestStore(t)
-	seedText(t, store, "ORIG", "5511999990000", "texto velho", false)
+	seedText(t, store, "ORIG", "5511999990000", "old text", false)
 	evt := secretEvent(alice, "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "ORIG"))
-	inner := &waE2E.Message{Conversation: proto.String("texto novo")}
+	inner := &waE2E.Message{Conversation: proto.String("new text")}
 
 	handleMessageWith(decryptors{secret: decryptedAs(inner)}, "", nil, store, evt, waLog.Noop)
 
-	if got := readRow(t, store, "ORIG").content; got != "texto novo" {
+	if got := readRow(t, store, "ORIG").content; got != "new text" {
 		t.Errorf("content = %q, want the edited text", got)
 	}
 	if messageCount(t, store, "ENV1") != 0 {

@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-const secretText = "o cliente João deve R$ 5.000 até sexta"
+const secretText = "the client John owes $5,000 by Friday."
 
 func TestMessageLogLineHidesTheTextByDefault(t *testing.T) { // LOGPII-01
 	line := messageLogLine("2026-10-21 10:00:00", "←", "5511999990000", "", "", secretText, false)
 
-	if strings.Contains(line, secretText) || strings.Contains(line, "João") || strings.Contains(line, "5.000") {
+	if strings.Contains(line, secretText) || strings.Contains(line, "John") || strings.Contains(line, "5,000") {
 		t.Errorf("the text leaked into the log line: %q", line)
 	}
 	for _, want := range []string{"2026-10-21 10:00:00", "←", "5511999990000", "38 chars"} {
@@ -29,10 +29,10 @@ func TestMessageLogLineShowsTheTextWhenAsked(t *testing.T) { // LOGPII-01
 }
 
 func TestMessageLogLineForMediaHidesCaptionAndFilename(t *testing.T) { // LOGPII-01
-	hidden := messageLogLine("t", "←", "55", "document", "contrato-cliente-joao.pdf", "legenda secreta", false)
-	shown := messageLogLine("t", "←", "55", "document", "contrato-cliente-joao.pdf", "legenda secreta", true)
+	hidden := messageLogLine("t", "←", "55", "document", "contract-customer-john.pdf", "secret caption", false)
+	shown := messageLogLine("t", "←", "55", "document", "contract-customer-john.pdf", "secret caption", true)
 
-	for _, leak := range []string{"contrato", "joao", "legenda", "secreta"} {
+	for _, leak := range []string{"contract", "john", "caption", "secret"} {
 		if strings.Contains(hidden, leak) {
 			t.Errorf("hidden line leaks %q: %q", leak, hidden)
 		}
@@ -40,7 +40,7 @@ func TestMessageLogLineForMediaHidesCaptionAndFilename(t *testing.T) { // LOGPII
 	if !strings.Contains(hidden, "document") {
 		t.Errorf("the media type should still show: %q", hidden)
 	}
-	if !strings.Contains(shown, "contrato-cliente-joao.pdf") || !strings.Contains(shown, "legenda secreta") {
+	if !strings.Contains(shown, "contract-customer-john.pdf") || !strings.Contains(shown, "secret caption") {
 		t.Errorf("shown line lacks the details: %q", shown)
 	}
 }
@@ -52,10 +52,10 @@ func TestMessageLogLineIsEmptyWithNothingToLog(t *testing.T) { // LOGPII-01
 }
 
 func TestLoggedTextCountsCharactersNotBytes(t *testing.T) { // LOGPII-01
-	if got := loggedText("ação", false); got != "<4 chars>" {
+	if got := loggedText("café", false); got != "<4 chars>" {
 		t.Errorf("loggedText = %q, want <4 chars>", got)
 	}
-	if got := loggedText("ação", true); got != "ação" {
+	if got := loggedText("café", true); got != "café" {
 		t.Errorf("loggedText = %q, want the text", got)
 	}
 }
