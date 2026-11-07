@@ -136,6 +136,11 @@ export const en = {
   "section.replace.confirm": "Replace file",
   "section.summary.item": "{label}: {message}",
   "section.summary.go": "Go to {label}",
+  "guard.title": "Leave without saving?",
+  "guard.description": "You have changes in {title} that are not saved.",
+  "guard.consequence": "They are lost if you leave.",
+  "guard.leave": "Discard and leave",
+  "guard.stay": "Stay",
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
 } as const;

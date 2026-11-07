@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { useT } from "@/i18n/t";
 import type { FieldSchema, SectionView } from "@/types/api";
+import { useLeaveGuard } from "./useLeaveGuard";
 import { useSection } from "./useSection";
 
 /** The top-level field a dotted error key belongs to: `profiles.0.targets` belongs to `profiles`. */
@@ -54,11 +55,19 @@ function Notes({ view }: { view: SectionView }) {
   );
 }
 
-/** One section as a form, built from its schema: whatever fields the server lists are the fields shown. */
+/**
+ * One section as a form, built from its schema: whatever fields the server lists are the fields shown.
+ * The form is keyed by the section, so moving to another one never carries a draft over.
+ */
 export function SectionPage() {
-  const t = useT();
   const { sectionId = "" } = useParams({ strict: false });
+  return <SectionForm key={sectionId} sectionId={sectionId} />;
+}
+
+function SectionForm({ sectionId }: { sectionId: string }) {
+  const t = useT();
   const section = useSection(sectionId);
+  const guard = useLeaveGuard(section.dirty);
   const { view, draft, errors, general, dirty, query } = section;
   const { requestPermission } = useNotify();
   const form = useRef<HTMLFormElement>(null);
@@ -208,6 +217,19 @@ export function SectionPage() {
         )}
       </form>
 
+      <ConfirmDialog
+        open={guard.open}
+        onOpenChange={(open) => {
+          if (!open) guard.stay();
+        }}
+        title={t("guard.title")}
+        description={t("guard.description", { title: view.title })}
+        destructive
+        consequence={t("guard.consequence")}
+        confirmLabel={t("guard.leave")}
+        cancelLabel={t("guard.stay")}
+        onConfirm={guard.leave}
+      />
       <ConfirmDialog
         open={askRestore}
         onOpenChange={setAskRestore}
