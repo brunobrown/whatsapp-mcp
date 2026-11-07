@@ -128,3 +128,36 @@ def test_tool_is_registered_read_only_and_untrusted(conn):  # WATCH-08
     assert tool.input_schema["required"] == ["message_id"]
     r = asyncio.run(main.watch_poll("P1", A, "1000"))
     assert r["untrusted_content"] is True and r["changes"][0]["voter"] == "alice"
+
+
+def test_first_call_with_a_wait_returns_at_once(conn):  # WATCH-01, WATCH-03
+    add_poll(conn)
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        raise AssertionError("the first call must not wait")
+
+    r = watch("P1", A, wait_seconds=30, sleep=sleep, clock=lambda: 0.0)
+    assert slept == [] and r["timed_out"] is False and r["changes"] == []
+
+
+def test_a_wait_shorter_than_the_poll_interval_is_not_overshot(conn):  # WATCH-03
+    add_poll(conn)
+    now = [0.0]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(seconds)
+        now[0] += seconds
+        assert len(slept) < 10, "the wait never ends"
+
+    r = watch("P1", A, cursor="0", wait_seconds=0.4, sleep=sleep, clock=lambda: now[0])
+    assert r["timed_out"] is True and sum(slept) == pytest.approx(0.4)
+
+
+def test_the_longest_wait_is_accepted_and_a_negative_integer_cursor_is_not(conn):  # WATCH-07
+    add_poll(conn)
+    assert watch("P1", A, cursor="0", wait_seconds=55, sleep=lambda s: asyncio.sleep(0),
+                 clock=iter([0.0, 56.0]).__next__)["success"] is True
+    assert watch("P1", A, cursor=-1)["error_code"] == "INVALID_ARGUMENT"
