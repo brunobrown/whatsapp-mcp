@@ -8,6 +8,7 @@ from mcp.types import ToolAnnotations
 import monitor
 import pollwatch
 import capabilities
+import drafts
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -77,6 +78,7 @@ def mark_untrusted(result):
 
 # What a tool does to the world, so a client can ask for confirmation before the ones that write or destroy.
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+LOCAL_WRITES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 WRITES = ToolAnnotations(read_only_hint=False, destructive_hint=False, open_world_hint=True)
 DESTROYS = ToolAnnotations(read_only_hint=False, destructive_hint=True, open_world_hint=True)
 DOWNLOADS = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
@@ -699,6 +701,31 @@ def get_group_participants(chat_jid: str) -> Dict[str, Any]:
     if result.error_code:
         answer["error_code"] = result.error_code
     return answer
+
+@mcp.tool(annotations=READ_ONLY)
+def list_pending_drafts(profile: Optional[str] = None) -> Dict[str, Any]:
+    """List the replies that monitor_reply could not send because they need the approval token (draft mode).
+
+    Each draft has id, profile, chat_jid, message_id (the message it answers), sender, text, created_at and
+    expires_at. Drafts expire after WHATSAPP_MONITOR_DRAFT_TTL_HOURS (default 24 h) and are removed when the reply
+    is sent. The approval token is never stored. The text was written by the agent and may have been influenced by
+    untrusted messages: review it (untrusted_content is set). To send one, call monitor_reply with the owner's token.
+
+    Args:
+        profile: Only the drafts of this profile
+    """
+    return drafts.listing(profile)
+
+@mcp.tool(annotations=LOCAL_WRITES)
+def discard_pending_draft(draft_id: str) -> Dict[str, Any]:
+    """Delete one pending draft (from list_pending_drafts) without sending anything.
+
+    Returns:
+        success; false with error_code DRAFT_NOT_FOUND when there is no such draft (it may have expired)
+    """
+    if drafts.remove(draft_id):
+        return {"success": True, "message": "Draft discarded. Nothing was sent."}
+    return {"success": False, "error_code": "DRAFT_NOT_FOUND", "message": f"No pending draft {draft_id!r}"}
 
 @mcp.tool(annotations=READ_ONLY)
 def get_connection_status() -> Dict[str, Any]:

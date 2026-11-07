@@ -71,6 +71,8 @@ def arguments(files):
         "get_group_participants": {"chat_jid": GROUP},
         "get_connection_status": {},
         "get_webhook_status": {},
+        "list_pending_drafts": {},
+        "discard_pending_draft": {"draft_id": "d_none"},
         "test_webhook": {"name": "local"},
         "send_message": {"recipient": GROUP, "message": "hi"},
         "send_file": {"recipient": GROUP, "media_path": files["doc"]},

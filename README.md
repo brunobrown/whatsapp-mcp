@@ -467,6 +467,10 @@ class Hook(BaseHTTPRequestHandler):
 HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 ```
 
+### Pending drafts
+
+In draft mode `monitor_reply` sends nothing without the profile's `approval_token`. The reply it refused is kept in `monitor_drafts.json` (next to `monitor_audit.log`, mode 0600) so the owner can review it later: `list_pending_drafts(profile=None)` shows `id`, `profile`, `chat_jid`, `message_id`, `sender`, `text`, `created_at` and `expires_at`, and `discard_pending_draft(draft_id)` deletes one. The token is never stored. A draft expires after `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` (default 24), at most 100 are kept (the oldest go first), and sending the reply removes its draft. The text was written by the agent, possibly after reading untrusted messages, so the listing is marked `untrusted_content`. `WHATSAPP_MONITOR_DRAFTS` changes the file's path.
+
 ### Waking an agent on an event
 
 MCP is request and response: the server cannot interrupt an idle session. Two commands in `whatsapp-mcp-server/` print **one line per event** for a tool that wakes the agent on each line. Both use the same shape and never print message text, names, questions or options (those come from other people; the agent reads them with the read tools, which mark them untrusted):
