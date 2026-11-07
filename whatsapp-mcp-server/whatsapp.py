@@ -1799,6 +1799,24 @@ def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> dict:
 _MAX_POLL_QUESTION, _MIN_POLL_OPTIONS, _MAX_POLL_OPTIONS, _MAX_POLL_OPTION = 255, 2, 12, 100
 
 
+_MAX_POLL_CLOSES_IN_MINUTES = 7 * 24 * 60  # our own ceiling, not WhatsApp's
+
+
+def _poll_extras_problem(options, allow_add_option, quiz_answer, closes_in_minutes) -> Optional[str]:
+    """What is wrong with the quiz answer or the deadline, or None. The options are already valid."""
+    if quiz_answer is not None:
+        if not isinstance(quiz_answer, str) or not quiz_answer.strip() \
+                or quiz_answer.strip().casefold() not in {o.strip().casefold() for o in options}:
+            return "quiz_answer must be the text of one of the options"
+        if allow_add_option:
+            return "A quiz cannot let people add options"
+    if closes_in_minutes is not None and (
+            isinstance(closes_in_minutes, bool) or not isinstance(closes_in_minutes, int)
+            or not 1 <= closes_in_minutes <= _MAX_POLL_CLOSES_IN_MINUTES):
+        return f"closes_in_minutes must be a whole number from 1 to {_MAX_POLL_CLOSES_IN_MINUTES}"
+    return None
+
+
 def _poll_problem(question, options) -> Optional[str]:
     """What is wrong with the poll against WhatsApp's limits, or None. Options differing only in case are the same."""
     if not isinstance(question, str) or not question.strip() or len(question) > _MAX_POLL_QUESTION:
@@ -1820,23 +1838,34 @@ def _poll_problem(question, options) -> Optional[str]:
 
 def send_poll(recipient: str, question: str, options: List[str], allow_multiple: bool = True,
               allow_add_option: bool = False, hide_voter_names: bool = False,
-              override_token: Optional[str] = None, dry_run: bool = False) -> SendResult:
+              override_token: Optional[str] = None, dry_run: bool = False,
+              quiz_answer: Optional[str] = None, closes_in_minutes: Optional[int] = None) -> SendResult:
     if not recipient:
         return SendResult(False, "Recipient must be provided")
     problem = _poll_problem(question, options)
+    if not problem:
+        problem = _poll_extras_problem(options, allow_add_option, quiz_answer, closes_in_minutes)
     if problem:
         return SendResult(False, f"{problem}. Nothing was sent.", error_code="INVALID_POLL")
     options = list(options)
+    extras = {}
+    if quiz_answer is not None:
+        # a quiz takes one answer; the answer goes with the spelling of its option
+        quiz_answer = next(o for o in options if o.strip().casefold() == quiz_answer.strip().casefold())
+        allow_multiple = False
+        extras["quiz_answer"] = quiz_answer
+    if closes_in_minutes is not None:
+        extras["closes_in_minutes"] = closes_in_minutes
 
     def send(target: send_policy.Target) -> SendResult:
         return _post_send({"recipient": target.recipient, "question": question, "options": options,
                            "allow_multiple": allow_multiple, "allow_add_option": allow_add_option,
-                           "hide_voter_names": hide_voter_names}, "send_poll")
+                           "hide_voter_names": hide_voter_names, **extras}, "send_poll")
 
     def preview(target: send_policy.Target) -> SendResult:
         return SendResult(True, "Dry run: nothing was sent", preview={
             "question": question, "options": options, "allow_multiple": allow_multiple,
-            "allow_add_option": allow_add_option, "hide_voter_names": hide_voter_names,
+            "allow_add_option": allow_add_option, "hide_voter_names": hide_voter_names, **extras,
             "chat_jid": target.jid, "chat_name": target.chat_name,
         })
 
