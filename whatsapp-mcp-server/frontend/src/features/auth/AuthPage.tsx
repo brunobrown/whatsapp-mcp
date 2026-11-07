@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { AuthLayout } from "@/app/layouts/AuthLayout";
 import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { useT } from "@/i18n/t";
 import { useSession } from "@/services/services";
+import { useUiStore } from "@/stores/ui";
 import { LoginPage } from "./LoginPage";
 import { SetupPage } from "./SetupPage";
 
@@ -9,6 +11,12 @@ import { SetupPage } from "./SetupPage";
 export function AuthPage() {
   const t = useT();
   const session = useSession();
+
+  // Nobody is signed in here, so nothing from the last session may carry over: a restart marker belongs to the
+  // server's answer after the next sign-in, and edits of a section that is no longer open are gone.
+  useEffect(() => {
+    useUiStore.getState().resetSession();
+  }, []);
 
   if (session.isPending) {
     return (

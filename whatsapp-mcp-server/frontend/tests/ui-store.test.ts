@@ -78,13 +78,17 @@ describe("ui store: restart scopes", () => {
     expect(useUiStore.getState().restart).toEqual(["bridge", "server"]);
   });
 
-  it("clears one scope or all of them", () => {
-    const { addRestart, clearRestart } = useUiStore.getState();
-    addRestart(["bridge", "server"]);
-    clearRestart("bridge");
-    expect(useUiStore.getState().restart).toEqual(["server"]);
-    clearRestart();
-    expect(useUiStore.getState().restart).toEqual([]);
+  it("forgets the scopes, the marked sections and the unsaved-edit flag when the session ends", () => {
+    const { addRestart, setDraftDirty, resetSession, setTheme } = useUiStore.getState();
+    addRestart(["bridge", "server"], "media");
+    setDraftDirty(true);
+    setTheme("dark");
+    resetSession();
+    const after = useUiStore.getState();
+    expect(after.restart).toEqual([]);
+    expect(after.restartSections).toEqual([]);
+    expect(after.draftDirty).toBe(false);
+    expect(after.theme).toBe("dark");
   });
 });
 

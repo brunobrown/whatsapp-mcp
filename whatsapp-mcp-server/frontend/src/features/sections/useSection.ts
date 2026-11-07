@@ -165,7 +165,10 @@ export function useSection(id: string) {
     async (options: { confirmReplace?: boolean } = {}): Promise<SaveOutcome | undefined> => {
       if (payload === null) return undefined;
       const request: SaveRequest = options.confirmReplace ? { ...payload, confirm_replace: true } : payload;
-      const outcome = await mutation.mutateAsync(request);
+      // A request that fails outright (lost connection, ended session) is reported by the HTTP client and kept in
+      // mutation.error; it must not surface as an unhandled rejection from the Save handler.
+      const outcome = await mutation.mutateAsync(request).catch(() => undefined);
+      if (outcome === undefined) return undefined;
       if (outcome.ok) {
         setEdits({});
         setRestored([]);

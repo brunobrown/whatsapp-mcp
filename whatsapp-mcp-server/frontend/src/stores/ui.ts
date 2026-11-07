@@ -60,7 +60,8 @@ interface UiState {
   setTheme: (theme: Theme) => void;
   setMobilePane: (pane: MobilePane) => void;
   addRestart: (scopes: readonly RestartScope[], sectionId?: string) => void;
-  clearRestart: (scope?: RestartScope) => void;
+  /** Forgets everything that belonged to the session that ended: restart markers and unsaved-edit state. */
+  resetSession: () => void;
   pushNotice: (notice: NewNotice) => void;
   dismissNotice: (id: number) => void;
 }
@@ -96,11 +97,8 @@ export const useUiStore = create<UiState>()(
           restartSections: sectionId === undefined ? state.restartSections : [...new Set([...state.restartSections, sectionId])],
         }));
       },
-      clearRestart: (scope) => {
-        set((state) => ({
-          restart: scope === undefined ? [] : state.restart.filter((s) => s !== scope),
-          restartSections: scope === undefined ? [] : state.restartSections,
-        }));
+      resetSession: () => {
+        set({ restart: [], restartSections: [], draftDirty: false });
       },
       pushNotice: (notice) => {
         set((state) => ({
