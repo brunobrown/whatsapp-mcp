@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bridge:
+    name: Go bridge
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: whatsapp-bridge
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: whatsapp-bridge/go.mod
+          cache-dependency-path: whatsapp-bridge/go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Test (encrypted databases)
+        run: go test -race -count=1 ./...
+      - name: Test (plain SQLite)
+        run: go test -race -count=1 ./...
+        env:
+          WHATSAPP_DB_ENCRYPTION: "off"
+
+  server:
+    name: Python MCP server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: whatsapp-mcp-server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: whatsapp-mcp-server/uv.lock
+      - name: Install
+        run: uv sync --locked
+      - name: Test
+        run: uv run pytest -q

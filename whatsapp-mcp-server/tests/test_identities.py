@@ -1,4 +1,4 @@
-"""Testes do P1-5: nomes, LID e telefone na leitura, busca, filtro e participantes de grupo."""
+"""P1-5 tests: names, LID and phone in reads, search, filtering and group participants."""
 import os
 import sqlite3
 import sys
@@ -39,18 +39,18 @@ def build_db(path, with_identity=True):
             [
                 (ALEX_LID, ALEX_PHONE, "Alex Morgan", "Alex"),
                 ("100000000000004", None, None, "Jordan Push"),
-                (None, "551166660303", "Maria da Agenda", "Maria Push"),
+                (None, "551166660303", "Maria Saved", "Maria Push"),
             ],
         )
     conn.execute("INSERT INTO chats VALUES (?, ?, ?)", (GROUP, "Client Beta", "2026-10-20 10:00:00"))
     conn.executemany(
         "INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, ?, 0)",
         [
-            ("m1", GROUP, ALEX_LID, "oi pela lid", "2026-10-20 10:00:00"),
-            ("m2", GROUP, ALEX_PHONE, "oi pelo telefone", "2026-10-20 10:01:00"),
+            ("m1", GROUP, ALEX_LID, "hi via lid", "2026-10-20 10:00:00"),
+            ("m2", GROUP, ALEX_PHONE, "hi via phone", "2026-10-20 10:01:00"),
             ("m3", GROUP, "100000000000004", "hi from jordan", "2026-10-20 10:02:00"),
-            ("m4", GROUP, "999000111222", "ninguem conhece", "2026-10-20 10:03:00"),
-            ("m5", GROUP, "999000111222", "falei com @100000000000001 e @555000999 e @551166660303", "2026-10-20 10:04:00"),
+            ("m4", GROUP, "999000111222", "nobody knows", "2026-10-20 10:03:00"),
+            ("m5", GROUP, "999000111222", "talked to @100000000000001 and @555000999 and @551166660303", "2026-10-20 10:04:00"),
         ],
     )
     conn.commit()
@@ -73,32 +73,32 @@ def message(sender, content="x"):
 
 
 def test_sender_with_known_name_shows_name_and_id(db):  # NAME-01
-    assert f"From: Alex Morgan ({ALEX_LID}): oi" in whatsapp.format_message(message(ALEX_LID, "oi"))
-    assert f"From: Alex Morgan ({ALEX_PHONE}): oi" in whatsapp.format_message(message(ALEX_PHONE, "oi"))
+    assert f"From: Alex Morgan ({ALEX_LID}): hi" in whatsapp.format_message(message(ALEX_LID, "hi"))
+    assert f"From: Alex Morgan ({ALEX_PHONE}): hi" in whatsapp.format_message(message(ALEX_PHONE, "hi"))
 
 
 def test_unknown_sender_shows_only_the_id(db):  # NAME-02
-    out = whatsapp.format_message(message("999000111222", "oi"))
-    assert "From: 999000111222: oi" in out
+    out = whatsapp.format_message(message("999000111222", "hi"))
+    assert "From: 999000111222: hi" in out
     assert "(" not in out.split("From:")[1].split(":")[0]
 
 
 def test_full_name_wins_over_push_name(db):  # NAME-03
-    assert "Maria da Agenda (551166660303)" in whatsapp.format_message(message("551166660303"))
-    assert "Jordan Push (100000000000004)" in whatsapp.format_message(message("100000000000004"))  # só push name
+    assert "Maria Saved (551166660303)" in whatsapp.format_message(message("551166660303"))
+    assert "Jordan Push (100000000000004)" in whatsapp.format_message(message("100000000000004"))  # push name only
 
 
 def test_filter_by_lid_or_phone_returns_both_ids(db):  # NAME-04
     for given in (ALEX_LID, ALEX_PHONE, "+55 (11) 8888-0101", f"{ALEX_PHONE}@s.whatsapp.net"):
         out = whatsapp.list_messages(sender_phone_number=given, include_context=False)
-        assert "oi pela lid" in out and "oi pelo telefone" in out, given
-        assert "hi from jordan" not in out and "ninguem conhece" not in out, given
+        assert "hi via lid" in out and "hi via phone" in out, given
+        assert "hi from jordan" not in out and "nobody knows" not in out, given
 
 
-def test_filter_by_unknown_id_behaves_as_before(db):  # NAME-04 (id sem identidade)
+def test_filter_by_unknown_id_behaves_as_before(db):  # NAME-04 (id without identity)
     out = whatsapp.list_messages(sender_phone_number="999000111222", include_context=False)
-    assert "ninguem conhece" in out and "falei com" in out
-    assert "oi pela lid" not in out
+    assert "nobody knows" in out and "talked to" in out
+    assert "hi via lid" not in out
 
 
 @pytest.mark.parametrize("query", ["alex morgan", "MORGAN", ALEX_LID, ALEX_PHONE, "88880101", "+55 11 8888"])
@@ -125,15 +125,15 @@ def test_search_contacts_does_not_duplicate_person_also_in_chats(db):  # NAME-05
 
 
 def test_mentions_resolve_to_names(db):  # NAME-06
-    out = whatsapp.format_message(message("999000111222", "falei com @100000000000001 e @555000999 e @551166660303"))
+    out = whatsapp.format_message(message("999000111222", "talked to @100000000000001 and @555000999 and @551166660303"))
     assert "@Alex Morgan" in out
-    assert "@Maria da Agenda" in out
-    assert "@555000999" in out  # desconhecido fica igual
+    assert "@Maria Saved" in out
+    assert "@555000999" in out  # unknown stays the same
     assert "@100000000000001" not in out
 
 
 def test_mention_text_without_digits_is_untouched(db):  # NAME-06
-    assert "email@example.com e @fulano" in whatsapp.format_message(message("999000111222", "email@example.com e @fulano"))
+    assert "email@example.com and @someone" in whatsapp.format_message(message("999000111222", "email@example.com and @someone"))
 
 
 def test_reading_works_without_identity_table(tmp_path, monkeypatch):  # NAME-07
@@ -141,14 +141,14 @@ def test_reading_works_without_identity_table(tmp_path, monkeypatch):  # NAME-07
     build_db(path, with_identity=False)
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
 
-    assert "From: 100000000000001: oi" in whatsapp.format_message(message(ALEX_LID, "oi"))
+    assert "From: 100000000000001: hi" in whatsapp.format_message(message(ALEX_LID, "hi"))
     out = whatsapp.list_messages(sender_phone_number=ALEX_LID, include_context=False)
-    assert "oi pela lid" in out and "oi pelo telefone" not in out
-    assert whatsapp.search_contacts("Software") == []  # grupos não são contatos
+    assert "hi via lid" in out and "hi via phone" not in out
+    assert whatsapp.search_contacts("Software") == []  # groups are not contacts
     assert "@100000000000001" in whatsapp.format_message(message("x", "@100000000000001"))
 
 
-def test_list_messages_output_carries_names(db):  # NAME-01 (caminho completo)
+def test_list_messages_output_carries_names(db):  # NAME-01 (full path)
     out = whatsapp.list_messages(chat_jid=GROUP, include_context=False)
     assert "Alex Morgan (100000000000001)" in out
     assert "Jordan Push (100000000000004)" in out
@@ -201,22 +201,22 @@ def test_group_participants_requires_a_jid():  # GRP-05
     post.assert_not_called()
 
 
-def test_filter_normalizes_formatted_number_without_identity(db):  # NAME-04 (telefone formatado, pessoa desconhecida)
+def test_filter_normalizes_formatted_number_without_identity(db):  # NAME-04 (formatted phone, unknown person)
     out = whatsapp.list_messages(sender_phone_number="+99 9000-111222", include_context=False)
-    assert "ninguem conhece" in out
-    assert "oi pela lid" not in out
+    assert "nobody knows" in out
+    assert "hi via lid" not in out
 
 
-def test_sender_name_falls_back_to_chat_name(db):  # NAME-01 (sem identidade, o nome do chat continua valendo)
+def test_sender_name_falls_back_to_chat_name(db):  # NAME-01 (no identity, the chat name still applies)
     conn = sqlite3.connect(db)
-    conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", ("551100000000@s.whatsapp.net", "Cliente X"))
+    conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", ("551100000000@s.whatsapp.net", "Customer X"))
     conn.commit()
     conn.close()
-    assert "From: Cliente X (551100000000): oi" in whatsapp.format_message(message("551100000000", "oi"))
+    assert "From: Customer X (551100000000): hi" in whatsapp.format_message(message("551100000000", "hi"))
 
 
 @pytest.mark.parametrize("text", ["user@100000000000001", "@@100000000000001", "a@100000000000001"])
-def test_mention_ignores_ids_glued_to_other_text(db, text):  # NAME-06 (e-mail ou arroba colada não é menção)
+def test_mention_ignores_ids_glued_to_other_text(db, text):  # NAME-06 (an email or a glued at-sign is not a mention)
     assert whatsapp.resolve_mentions(text) == text
 
 
@@ -224,35 +224,35 @@ def test_legacy_db_still_finds_chat_contacts(tmp_path, monkeypatch):  # NAME-07
     path = str(tmp_path / "old.db")
     build_db(path, with_identity=False)
     conn = sqlite3.connect(path)
-    conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", ("551100000000@s.whatsapp.net", "Cliente X"))
+    conn.execute("INSERT INTO chats VALUES (?, ?, NULL)", ("551100000000@s.whatsapp.net", "Customer X"))
     conn.commit()
     conn.close()
     monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", path)
 
-    found = whatsapp.search_contacts("Cliente")
-    assert [(c.name, c.jid) for c in found] == [("Cliente X", "551100000000@s.whatsapp.net")]
+    found = whatsapp.search_contacts("Customer")
+    assert [(c.name, c.jid) for c in found] == [("Customer X", "551100000000@s.whatsapp.net")]
 
 
-def test_short_digit_query_does_not_match_ids(db):  # NAME-05 (consulta curta não vira ruído)
+def test_short_digit_query_does_not_match_ids(db):  # NAME-05 (a short query does not turn into noise)
     assert whatsapp.search_contacts("5") == []
     assert whatsapp.search_contacts("55") == []
 
 
 def test_non_numeric_text_is_not_treated_as_a_phone(db):  # NAME-04
     conn = sqlite3.connect(db)
-    conn.execute("INSERT INTO contacts_identity (phone, full_name) VALUES ('2024', 'Número Curto')")
+    conn.execute("INSERT INTO contacts_identity (phone, full_name) VALUES ('2024', 'Short Number')")
     conn.commit()
     conn.close()
     assert whatsapp.lookup_identity("Alex2024") is None
-    assert whatsapp.lookup_identity("2024").full_name == "Número Curto"
+    assert whatsapp.lookup_identity("2024").full_name == "Short Number"
 
 
-def test_last_interaction_and_contact_chats_resolve_both_ids(db):  # consistência com NAME-04
-    # a pessoa é consultada pelo telefone, mas a última mensagem dela veio pela LID
+def test_last_interaction_and_contact_chats_resolve_both_ids(db):  # consistency with NAME-04
+    # the person is looked up by phone, but their latest message came through the LID
     out = whatsapp.get_last_interaction(ALEX_PHONE)
-    assert "oi pelo telefone" in out  # m2 é a mais recente entre m1 (LID) e m2 (telefone)
+    assert "hi via phone" in out  # m2 is the most recent of m1 (LID) and m2 (phone)
     out = whatsapp.get_last_interaction(ALEX_LID)
-    assert "oi pelo telefone" in out
+    assert "hi via phone" in out
     assert {c.jid for c in whatsapp.get_contact_chats(ALEX_PHONE)} == {GROUP}
     assert {c.jid for c in whatsapp.get_contact_chats(ALEX_LID)} == {GROUP}
-    assert whatsapp.get_contact_chats("999111000") == []  # desconhecido continua sem resultado
+    assert whatsapp.get_contact_chats("999111000") == []  # unknown still returns nothing

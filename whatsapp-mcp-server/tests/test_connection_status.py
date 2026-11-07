@@ -1,4 +1,4 @@
-"""Testes do P2-11: ferramenta get_connection_status."""
+"""P2-11 tests: get_connection_status tool."""
 import os
 import sqlite3
 import sys
@@ -50,7 +50,7 @@ def test_reachable_bridge_status_is_passed_through(paths, monkeypatch):  # MCPST
     assert calls[0][0] == "http://localhost:8080/api/status" and calls[0][1]["timeout"] > 0
 
 
-def test_disconnected_bridge_keeps_its_last_event_time(paths, monkeypatch):  # MCPSTAT-01 (conectado=false vem do bridge)
+def test_disconnected_bridge_keeps_its_last_event_time(paths, monkeypatch):  # MCPSTAT-01 (connected=false comes from the bridge)
     body = {"connected": False, "last_event_at": "2026-10-21T10:00:00Z"}
     monkeypatch.setattr(requests, "get", lambda url, **kw: Reply(200, body))
 
@@ -72,7 +72,7 @@ def test_unreachable_bridge_reports_not_connected_with_last_signs_of_life(paths,
 
     assert out["connected"] is False and out["bridge_reachable"] is False
     assert out["error_code"] == "BRIDGE_UNREACHABLE" and "refused" in out["message"]
-    assert out["last_message_at"] == "2026-10-21T10:00:00-03:00"  # 13:00 UTC, depois das 12:00 UTC embora o texto seja menor
+    assert out["last_message_at"] == "2026-10-21T10:00:00-03:00"  # 13:00 UTC, after 12:00 UTC although the text is smaller
     from datetime import datetime
     assert datetime.fromisoformat(out["last_log_at"]).timestamp() == 1792576800
 
@@ -86,10 +86,10 @@ def test_unreachable_bridge_without_database_or_log(tmp_path, monkeypatch):  # M
 
     assert out["connected"] is False and out["error_code"] == "BRIDGE_UNREACHABLE"
     assert out["last_message_at"] is None and out["last_log_at"] is None
-    assert not (tmp_path / "missing.db").exists()  # consultar o status não cria banco
+    assert not (tmp_path / "missing.db").exists()  # querying the status does not create a database
 
 
-@pytest.mark.parametrize("reply", [Reply(500, {"error": "x"}), Reply(200, bad_json=True), Reply(200, ["lista"])])
+@pytest.mark.parametrize("reply", [Reply(500, {"error": "x"}), Reply(200, bad_json=True), Reply(200, ["list"])])
 def test_unexpected_answer_is_unknown_but_reachable(paths, monkeypatch, reply):  # MCPSTAT-03
     monkeypatch.setattr(requests, "get", lambda url, **kw: reply)
 

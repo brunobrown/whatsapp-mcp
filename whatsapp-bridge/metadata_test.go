@@ -23,7 +23,7 @@ func TestExtractMessageMetaMimetype(t *testing.T) { // MEDIA-01
 		{"document in caption wrapper", &waProto.Message{DocumentWithCaptionMessage: &waProto.FutureProofMessage{Message: &waProto.Message{
 			DocumentMessage: &waProto.DocumentMessage{Mimetype: proto.String("application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
 		}}}, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-		{"text has none", &waProto.Message{Conversation: proto.String("oi")}, ""},
+		{"text has none", &waProto.Message{Conversation: proto.String("hi")}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestExtractMessageMetaForwardedAndQuoted(t *testing.T) { // MEDIA-02, MEDIA
 	if plain.Forwarded || plain.QuotedID != "" {
 		t.Errorf("not forwarded, no quote: meta = %+v, want zero", plain)
 	}
-	if got := extractMessageMeta(&waProto.Message{Conversation: proto.String("oi")}); got != (MessageMeta{}) {
+	if got := extractMessageMeta(&waProto.Message{Conversation: proto.String("hi")}); got != (MessageMeta{}) {
 		t.Errorf("conversation meta = %+v, want zero", got)
 	}
 }
@@ -87,7 +87,7 @@ func TestSetMessageMetaPersistsAndSurvivesRestore(t *testing.T) { // MEDIA-01..0
 	if err := store.StoreChat("chat@g.us", "Chat", ts); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.StoreMessage("DOC", "chat@g.us", "alice", "", ts, false, "document", "proposta.pdf", "", nil, nil, nil, 2048); err != nil {
+	if err := store.StoreMessage("DOC", "chat@g.us", "alice", "", ts, false, "document", "proposal.pdf", "", nil, nil, nil, 2048); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetMessageMeta("DOC", "chat@g.us", MessageMeta{Mimetype: "application/pdf", Forwarded: true, QuotedID: "Q1"}); err != nil {
@@ -99,7 +99,7 @@ func TestSetMessageMetaPersistsAndSurvivesRestore(t *testing.T) { // MEDIA-01..0
 	}
 
 	// The same message arrives again without metadata (echo, history sync).
-	if err := store.StoreMessage("DOC", "chat@g.us", "alice", "", ts, false, "document", "proposta.pdf", "", nil, nil, nil, 2048); err != nil {
+	if err := store.StoreMessage("DOC", "chat@g.us", "alice", "", ts, false, "document", "proposal.pdf", "", nil, nil, nil, 2048); err != nil {
 		t.Fatal(err)
 	}
 	mime, quoted, fwd = readMeta(t, store, "DOC")
@@ -112,7 +112,7 @@ func TestSetMessageMetaEmptyKeepsStoredValues(t *testing.T) { // MEDIA-05
 	store := newTestStore(t)
 	ts := time.Now()
 	store.StoreChat("chat@g.us", "Chat", ts)
-	store.StoreMessage("M", "chat@g.us", "alice", "oi", ts, false, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("M", "chat@g.us", "alice", "hi", ts, false, "", "", "", nil, nil, nil, 0)
 	if err := store.SetMessageMeta("M", "chat@g.us", MessageMeta{QuotedID: "Q1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestMetaColumnsMigrateLegacyDatabaseIdempotently(t *testing.T) { // MEDIA-0
 			media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB, file_enc_sha256 BLOB,
 			file_length INTEGER, PRIMARY KEY (id, chat_jid));
 		INSERT INTO chats VALUES ('chat@g.us', 'Chat', '2026-10-20 10:00:00');
-		INSERT INTO messages (id, chat_jid, sender, content) VALUES ('OLD', 'chat@g.us', 'alice', 'antiga');`)
+		INSERT INTO messages (id, chat_jid, sender, content) VALUES ('OLD', 'chat@g.us', 'alice', 'old');`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestMetaColumnsMigrateLegacyDatabaseIdempotently(t *testing.T) { // MEDIA-0
 			t.Fatalf("open %d: %v", i+1, err)
 		}
 		var content string
-		if err := store.db.QueryRow("SELECT content FROM messages WHERE id='OLD'").Scan(&content); err != nil || content != "antiga" {
+		if err := store.db.QueryRow("SELECT content FROM messages WHERE id='OLD'").Scan(&content); err != nil || content != "old" {
 			t.Fatalf("open %d: existing message lost: %q %v", i+1, content, err)
 		}
 		if mime, quoted, fwd := readMeta(t, store, "OLD"); mime.Valid || quoted.Valid || fwd.Bool {
@@ -164,7 +164,7 @@ func TestMetaColumnsMigrateLegacyDatabaseIdempotently(t *testing.T) { // MEDIA-0
 func TestRecordSentMessageStoresMetadata(t *testing.T) { // MEDIA-01
 	store := newTestStore(t)
 	msg := &waProto.Message{DocumentMessage: &waProto.DocumentMessage{
-		Mimetype: proto.String("application/pdf"), FileName: proto.String("proposta.pdf"),
+		Mimetype: proto.String("application/pdf"), FileName: proto.String("proposal.pdf"),
 	}}
 	if err := recordSentMessage(store, "chat@g.us", "me", "SENT1", time.Now(), msg); err != nil {
 		t.Fatal(err)

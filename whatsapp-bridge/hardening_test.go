@@ -50,7 +50,7 @@ func TestHardenStoreMakesEverythingPrivate(t *testing.T) { // HARD-02
 	if err != nil || len(result.Failed) != 0 {
 		t.Fatalf("err=%v failed=%v", err, result.Failed)
 	}
-	if result.Changed != 7 { // 3 diretórios (raiz inclusa) + 4 arquivos
+	if result.Changed != 7 { // 3 directories (root included) + 4 files
 		t.Errorf("Changed = %d, want 7", result.Changed)
 	}
 	for _, dir := range []string{"", "chat@g.us", "chat@g.us/MSG1"} {

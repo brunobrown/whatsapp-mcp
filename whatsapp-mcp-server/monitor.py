@@ -34,7 +34,7 @@ DEFAULT_TRIGGERS = ("mention", "reply", "direct")
 MAX_ALIASES = 10
 MODES = ("draft", "auto")
 MIN_TOKEN_CHARS = 8
-EXAMPLE_TOKEN = "troque-por-um-valor-so-seu"
+EXAMPLE_TOKEN = "replace-with-your-own-value"  # the placeholder of monitor.example.json; see also send_policy.PLACEHOLDER_TOKENS
 DEFAULT_LIMITS = {
     "replies_per_chat_per_hour": 6,
     "replies_per_sender_per_hour": 4,
@@ -200,7 +200,7 @@ def _parse_profile(name: str, raw) -> Profile:
         token = raw["approval_token"]
         if not isinstance(token, str) or len(token) < MIN_TOKEN_CHARS:
             raise _Invalid(f"{where}.approval_token must be a text of at least {MIN_TOKEN_CHARS} characters")
-        if token == EXAMPLE_TOKEN:
+        if token in send_policy.PLACEHOLDER_TOKENS:
             raise _Invalid(f"{where}.approval_token is still the placeholder of monitor.example.json: choose your own value")
         profile.approval_token = token
 

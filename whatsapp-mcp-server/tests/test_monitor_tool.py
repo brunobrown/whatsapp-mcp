@@ -1,4 +1,4 @@
-"""Testes do monitor, parte 3: a ferramenta monitor_messages (MON-01, MON-03, MON-13, MON-15, CFG-04/05)."""
+"""Monitor tests, part 3: the monitor_messages tool (MON-01, MON-03, MON-13, MON-15, CFG-04/05)."""
 import asyncio
 import inspect
 import json
@@ -29,7 +29,7 @@ def write_config(profiles):
 
 
 class Time:
-    """Relógio e sleep falsos: a espera avança o relógio sem esperar de verdade."""
+    """Fake clock and sleep: waiting advances the clock without actually waiting."""
 
     def __init__(self, on_sleep=None):
         self.now, self.sleeps, self.on_sleep = 1000.0, [], on_sleep
@@ -61,7 +61,7 @@ def test_tools_are_registered_and_the_monitor_is_async():  # MON-15
 
 
 def test_first_call_returns_only_the_cursor_and_does_not_wait(conn):  # MON-01
-    add(conn, "OLD", f"@{ME} antigo")
+    add(conn, "OLD", f"@{ME} old")
     clock = Time()
 
     out = call(clock, wait_seconds=30)
@@ -72,9 +72,9 @@ def test_first_call_returns_only_the_cursor_and_does_not_wait(conn):  # MON-01
 
 
 def test_new_message_after_the_cursor_is_returned_once(conn):  # MON-02
-    add(conn, "OLD", f"@{ME} antigo")
+    add(conn, "OLD", f"@{ME} old")
     cursor = call()["cursor"]
-    add(conn, "NEW", f"@{ME} novo")
+    add(conn, "NEW", f"@{ME} new")
 
     out = call(cursor=cursor)
     again = call(cursor=out["cursor"])
@@ -84,8 +84,8 @@ def test_new_message_after_the_cursor_is_returned_once(conn):  # MON-02
 
 
 def test_wait_returns_as_soon_as_an_event_arrives(conn):  # MON-03
-    add(conn, "OLD", "ruído")
-    clock = Time(on_sleep=lambda n: add(conn, "NEW", f"@{ME} oi") if n == 3 else None)
+    add(conn, "OLD", "noise")
+    clock = Time(on_sleep=lambda n: add(conn, "NEW", f"@{ME} hi") if n == 3 else None)
 
     out = call(clock, cursor="1", wait_seconds=30)
 
@@ -94,7 +94,7 @@ def test_wait_returns_as_soon_as_an_event_arrives(conn):  # MON-03
 
 
 def test_wait_times_out_with_the_cursor_moved_past_noise(conn):  # MON-03
-    clock = Time(on_sleep=lambda n: add(conn, f"N{n}", "ruído", minute=40 + n) if n == 2 else None)
+    clock = Time(on_sleep=lambda n: add(conn, f"N{n}", "noise", minute=40 + n) if n == 2 else None)
 
     out = call(clock, cursor=0, wait_seconds=5)
 
@@ -121,7 +121,7 @@ def test_cursor_accepts_a_number_or_its_text(conn):  # MON-13
 
 @pytest.mark.parametrize("kwargs", [
     {"cursor": "abc"}, {"cursor": "-1"}, {"cursor": -1}, {"cursor": True}, {"cursor": "1.5"}, {"cursor": "١"},
-    {"cursor": 5},                                  # além do que está gravado
+    {"cursor": 5},                                  # beyond what is recorded
     {"wait_seconds": -1}, {"wait_seconds": 56}, {"wait_seconds": float("nan")}, {"wait_seconds": float("inf")}, {"wait_seconds": float("-inf")}, {"wait_seconds": "5"}, {"wait_seconds": True},
     {"limit": 0}, {"limit": 101}, {"limit": "5"}, {"limit": True}, {"limit": 1.5},
     {"triggers": ["poke"]}, {"triggers": []}, {"triggers": "mention"},
@@ -147,21 +147,21 @@ def test_neither_profile_nor_targets(conn):  # MON-13
 
 
 def test_profile_brings_targets_instructions_and_filters(conn):  # MON-12, CFG-04
-    write_config({"suporte": {"targets": ["me"], "triggers": ["mention"], "topics": ["deploy"], "mode": "auto",
-                              "auto_senders": [ANA], "instructions": "Responda só sobre o software X"}})
-    add(conn, "SKIP", f"@{ME} outro assunto")
-    add(conn, "HIT", f"@{ME} o deploy falhou")
+    write_config({"support": {"targets": ["me"], "triggers": ["mention"], "topics": ["deploy"], "mode": "auto",
+                              "auto_senders": [ANA], "instructions": "Only answer about software X"}})
+    add(conn, "SKIP", f"@{ME} other subject")
+    add(conn, "HIT", f"@{ME} the deploy failed")
 
-    out = asyncio.run(monitor.monitor_messages(profile="suporte", cursor=0, now=NOW))
+    out = asyncio.run(monitor.monitor_messages(profile="support", cursor=0, now=NOW))
 
     assert [e["message"]["id"] for e in out["events"]] == ["HIT"]
     assert out["events"][0]["reply_mode"] == "auto"
-    assert out["profile"] == "suporte" and out["instructions"] == "Responda só sobre o software X"
+    assert out["profile"] == "support" and out["instructions"] == "Only answer about software X"
     assert out["untrusted_content"] is True
 
 
 def test_ad_hoc_watching_is_read_only(conn):  # MON-12
-    add(conn, "M", f"@{ME} oi")
+    add(conn, "M", f"@{ME} hi")
 
     out = call(cursor=0)
 
@@ -169,8 +169,8 @@ def test_ad_hoc_watching_is_read_only(conn):  # MON-12
 
 
 def test_ad_hoc_targets_and_triggers(conn):  # MON-04, MON-07
-    add(conn, "G", "do grupo", sender=ANA)
-    add(conn, "D", "do privado", chat=DM_ANA, sender=ANA)
+    add(conn, "G", "from the group", sender=ANA)
+    add(conn, "D", "from private", chat=DM_ANA, sender=ANA)
 
     only_from = call(cursor=0, targets=[ANA], triggers=["from"])
     default = call(cursor=0, targets=[ANA])
@@ -191,12 +191,12 @@ def test_profile_errors(conn):  # CFG-05
 
 def test_unknown_own_account_is_reported_even_on_the_first_call(conn, monkeypatch):  # MON-14
     def unknown():
-        raise monitor.OwnAccountUnknown("sem número")
+        raise monitor.OwnAccountUnknown("no number")
     monkeypatch.setattr(monitor, "own_number", unknown)
 
     assert call()["error_code"] == "OWN_ACCOUNT_UNKNOWN"
     assert call(cursor=0)["error_code"] == "OWN_ACCOUNT_UNKNOWN"
-    assert call(targets=["5511999990000"])["success"] is True  # sem "me" não precisa do número
+    assert call(targets=["5511999990000"])["success"] is True  # without "me" the number is not needed
 
 
 def test_missing_database(tmp_path, monkeypatch):  # MON-14
@@ -221,15 +221,15 @@ def test_a_page_is_reported_with_has_more(conn):  # MON-11
 
 
 def test_get_monitor_profiles_tool(conn):  # CFG-04
-    write_config({"p": {"targets": ["me"], "approval_token": "segredo-12345"}})
+    write_config({"p": {"targets": ["me"], "approval_token": "secret-12345"}})
 
     out = main.get_monitor_profiles()
 
-    assert out["profiles"][0]["name"] == "p" and "segredo-12345" not in json.dumps(out)
+    assert out["profiles"][0]["name"] == "p" and "secret-12345" not in json.dumps(out)
 
 
 def test_waiting_does_not_block_the_event_loop(conn):  # MON-15
-    add(conn, "OLD", "ruído")
+    add(conn, "OLD", "noise")
 
     async def scenario():
         ticks = 0
@@ -240,8 +240,8 @@ def test_waiting_does_not_block_the_event_loop(conn):  # MON-15
                 await asyncio.sleep(0.02)
                 ticks += 1
         task = asyncio.create_task(ticker())
-        await monitor.monitor_messages(targets=["me"], cursor=1, wait_seconds=1, now=NOW)   # espera de verdade
+        await monitor.monitor_messages(targets=["me"], cursor=1, wait_seconds=1, now=NOW)   # actually waits
         task.cancel()
         return ticks
 
-    assert asyncio.run(scenario()) >= 20      # em 1 s o relógio do laço corre ~50 vezes; bloqueado, daria 0
+    assert asyncio.run(scenario()) >= 20      # in 1 s the loop's ticker runs ~50 times; if blocked, it would be 0

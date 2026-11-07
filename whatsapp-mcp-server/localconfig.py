@@ -13,8 +13,8 @@ _TOKEN = re.compile(r"[0-9a-f]{64}")
 
 BRIDGE_UNAUTHORIZED = "BRIDGE_UNAUTHORIZED"
 UNAUTHORIZED_HINT = (
-    "O bridge recusou o token da API. Reinicie o bridge e o servidor MCP para que usem o mesmo token "
-    "(ele fica em api_token, no diretório de configuração do usuário)."
+    "The bridge refused the API token. Restart the bridge and the MCP server so they use the same token "
+    "(it is stored in api_token, in the user's configuration directory)."
 )
 
 

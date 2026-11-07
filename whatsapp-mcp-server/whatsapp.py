@@ -1109,13 +1109,21 @@ def send_audio_message(recipient: str, media_path: str, override_token: Optional
         return SendResult(False, f"Media file not found: {media_path}")
 
     def send(target: send_policy.Target) -> SendResult:
-        path = media_path
+        path, converted = media_path, False
         if not path.endswith(".ogg"):
             try:
                 path = audio.convert_to_opus_ogg_temp(path)
+                converted = True
             except Exception as e:
                 return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
-        return _post_send({"recipient": target.recipient, "media_path": path})
+        try:
+            return _post_send({"recipient": target.recipient, "media_path": path})
+        finally:
+            if converted:  # only the temporary copy; the user's own file is never touched
+                try:
+                    os.unlink(path)
+                except OSError:
+                    logger.warning("Could not remove the converted audio %s", path)
 
     return _guarded_send("audio", recipient, os.path.getsize(media_path), override_token, send)
 
@@ -1149,8 +1157,8 @@ def get_group_participants(chat_jid: str) -> GroupParticipantsResult:
 
 
 LINK_EXPIRED_HINT = (
-    "O link da mídia expirou e o celular não respondeu ao pedido de reenvio. "
-    "Abra o WhatsApp no celular conectado ao bridge, desbloqueado e online, e tente de novo."
+    "The media link expired and the phone did not answer the resend request. "
+    "Open WhatsApp on the phone connected to the bridge, unlocked and online, and try again."
 )
 
 
@@ -1962,3 +1970,97 @@ def delete_message(chat_jid: str, message_id: str, override_token: Optional[str]
             "message_id": message_id, "chat_jid": target.jid, "chat_name": target.chat_name, "text": found["text"]})
 
     return _guarded_send("delete", chat_jid, 0, override_token, send, preview if dry_run else None)
+
+
+_MAX_EMOJI = 16
+
+
+def _emoji_problem(emoji) -> Optional[str]:
+    """Why this cannot be a reaction, or None. An empty emoji is allowed: it takes the reaction back."""
+    if not isinstance(emoji, str):
+        return "emoji must be text"
+    if len(emoji) > _MAX_EMOJI or any(ch.isspace() for ch in emoji):
+        return f"Use up to {_MAX_EMOJI} characters without spaces, or an empty emoji to take the reaction back"
+    return None
+
+
+def react_to_message(chat_jid: str, message_id: str, emoji: str, override_token: Optional[str] = None,
+                     dry_run: bool = False) -> SendResult:
+    if not chat_jid:
+        return SendResult(False, "chat_jid must be provided")
+    if not message_id:
+        return SendResult(False, "message_id must be provided")
+    problem = _emoji_problem(emoji)
+    if problem:
+        return SendResult(False, f"{problem}. Nothing was sent.", error_code="INVALID_EMOJI")
+
+    def known(target: send_policy.Target) -> "Tuple[Optional[dict], Optional[SendResult]]":
+        found = _find_message(message_id, target.jid)
+        if found is None:
+            return None, SendResult(False, f"Message {message_id} was not found in {target.jid}. Nothing was sent.",
+                                    error_code="MESSAGE_NOT_FOUND")
+        return found, None
+
+    def send(target: send_policy.Target) -> SendResult:
+        found, error = known(target)
+        if error:
+            return error
+        return _post_send({"chat_jid": found["chat_jid"], "message_id": message_id, "emoji": emoji}, "react")
+
+    def preview(target: send_policy.Target) -> SendResult:
+        found, error = known(target)
+        if error:
+            return error
+        return SendResult(True, "Dry run: nothing was sent", preview={
+            "message_id": message_id, "chat_jid": target.jid, "chat_name": target.chat_name,
+            "emoji": emoji, "text": found["text"]})
+
+    return _guarded_send("reaction", chat_jid, len(emoji), override_token, send, preview if dry_run else None)
+
+
+def get_message_reactions(message_id: str, chat_jid: Optional[str] = None) -> dict:
+    """The reactions that stand on a message, who made each, and how many of each emoji."""
+    if not message_id:
+        return _poll_error("INVALID_ARGUMENT", "message_id is required")
+    try:
+        conn = _open_chats()
+    except (*dbcrypto.DB_ERRORS, send_policy.DirectoryError) as e:
+        return _poll_error("DIRECTORY_UNAVAILABLE", f"Could not read the message database: {e}")
+    try:
+        cursor = conn.cursor()
+        where, params = "messages.id = ?", [message_id]
+        if chat_jid:
+            candidates = _chat_candidates(chat_jid)
+            where += f" AND messages.chat_jid IN ({','.join('?' * len(candidates))})"
+            params += candidates
+        rows = cursor.execute(
+            f"SELECT messages.chat_jid, chats.name FROM messages LEFT JOIN chats ON chats.jid = messages.chat_jid WHERE {where}",
+            params).fetchall()
+        if not rows:
+            return _poll_error("MESSAGE_NOT_FOUND", f"Message {message_id} was not found" + (f" in {chat_jid}" if chat_jid else ""))
+        if len(rows) > 1:
+            return _poll_error("AMBIGUOUS_MESSAGE", f"Message {message_id} exists in {len(rows)} chats; give chat_jid")
+        found_chat, chat_name = rows[0]
+
+        reactions: List[dict] = []
+        tables = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "reactions" in tables:
+            own = _own_sender(cursor)
+            for reactor, emoji, at in cursor.execute(
+                    "SELECT reactor, emoji, timestamp_ms FROM reactions WHERE target_id = ? AND chat_jid = ? AND emoji != '' "
+                    "ORDER BY timestamp_ms, reactor", (message_id, found_chat)).fetchall():
+                reactions.append({
+                    "reactor": reactor,
+                    "reactor_name": _voter_label(reactor, own),
+                    "emoji": emoji,
+                    "timestamp": datetime.fromtimestamp(at / 1000, tz=timezone.utc).isoformat(),
+                })
+        counts: dict = {}
+        for reaction in reactions:
+            counts[reaction["emoji"]] = counts.get(reaction["emoji"], 0) + 1
+        return {"success": True, "message_id": message_id, "chat_jid": found_chat, "chat_name": chat_name,
+                "total": len(reactions), "reactions": reactions, "counts": counts}
+    except dbcrypto.DB_ERRORS as e:
+        return _poll_error("UNKNOWN", f"Database error: {e}")
+    finally:
+        conn.close()

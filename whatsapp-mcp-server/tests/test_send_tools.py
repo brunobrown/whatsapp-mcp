@@ -1,4 +1,4 @@
-"""Testes do SENT-08/09: as ferramentas de envio devolvem message_id, timestamp e chat_jid."""
+"""SENT-08/09 tests: the send tools return message_id, timestamp and chat_jid."""
 import os
 import sys
 from unittest import mock
@@ -36,7 +36,7 @@ def media_file(tmp_path):
 def invoke(tool, response, media_file):
     with mock.patch("whatsapp.requests.post", return_value=response):
         if tool == "send_message":
-            return main.send_message("120363999@g.us", "oi")
+            return main.send_message("120363999@g.us", "hi")
         if tool == "send_file":
             return getattr(main, "send_file")("120363999@g.us", media_file)
         ogg = media_file.replace(".pdf", ".ogg")
@@ -75,8 +75,8 @@ def test_failure_with_http_200_has_no_message_id(tool, media_file):  # SENT-09
     assert "message_id" not in out
 
 
-def test_old_bridge_without_identifiers_still_succeeds():  # compatibilidade
+def test_old_bridge_without_identifiers_still_succeeds():  # compatibility
     body = {"success": True, "message": "Message sent to 5511999990000"}
     with mock.patch("whatsapp.requests.post", return_value=fake_response(200, body)):
-        out = main.send_message("5511999990000", "oi")
+        out = main.send_message("5511999990000", "hi")
     assert out == {"success": True, "message": "Message sent to 5511999990000"}

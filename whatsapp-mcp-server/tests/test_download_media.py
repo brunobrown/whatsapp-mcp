@@ -1,4 +1,4 @@
-"""Testes do DLERR-01..06: a ferramenta download_media reporta o erro real do bridge."""
+"""DLERR-01..06 tests: the download_media tool reports the bridge's real error."""
 import os
 import sys
 from unittest import mock
@@ -16,8 +16,8 @@ BRIDGE_403 = (
     "(make sure your phone is online, unlocked, and WhatsApp is not force-stopped))"
 )
 HINT = (
-    "O link da mídia expirou e o celular não respondeu ao pedido de reenvio. "
-    "Abra o WhatsApp no celular conectado ao bridge, desbloqueado e online, e tente de novo."
+    "The media link expired and the phone did not answer the resend request. "
+    "Open WhatsApp on the phone connected to the bridge, unlocked and online, and try again."
 )
 
 
@@ -75,7 +75,7 @@ def test_unknown_error_keeps_bridge_message():  # DLERR-04
     assert "hint" not in out
 
 
-def test_403_without_retry_timeout_is_not_phone_offline():  # DLERR-04 (fronteira de DLERR-01)
+def test_403_without_retry_timeout_is_not_phone_offline():  # DLERR-04 (boundary of DLERR-01)
     msg = "Failed to download media: download failed with status code 403"
     out = call(fake_response(500, {"success": False, "message": msg}))
     assert out["error_code"] == "UNKNOWN"

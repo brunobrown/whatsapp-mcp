@@ -15,15 +15,15 @@ var (
 )
 
 func TestBuildTextMessagePlainStaysConversation(t *testing.T) { // MENT-04
-	msg := buildTextMessage("*oi* _tudo_ bem", nil, nil)
+	msg := buildTextMessage("*hi* _all_ good", nil, nil)
 
-	if msg.GetConversation() != "*oi* _tudo_ bem" || msg.GetExtendedTextMessage() != nil {
+	if msg.GetConversation() != "*hi* _all_ good" || msg.GetExtendedTextMessage() != nil {
 		t.Errorf("plain text must stay a Conversation, got %+v", msg)
 	}
 }
 
 func TestBuildTextMessageWithMentionsUsesContextInfo(t *testing.T) { // MENT-04, MENT-07
-	text := "*aviso* @551188880101\n> citação"
+	text := "*notice* @551188880101\n> quote"
 	msg := buildTextMessage(text, []types.JID{mPhone, mLID}, nil)
 
 	ext := msg.GetExtendedTextMessage()
@@ -40,15 +40,15 @@ func TestBuildTextMessageWithMentionsUsesContextInfo(t *testing.T) { // MENT-04,
 }
 
 func TestBuildTextMessageQuote(t *testing.T) { // REPLY-01
-	quote := &QuoteInfo{ID: "ORIG1", Participant: mLID, Text: "texto original"}
+	quote := &QuoteInfo{ID: "ORIG1", Participant: mLID, Text: "original text"}
 
-	msg := buildTextMessage("de acordo", nil, quote)
+	msg := buildTextMessage("agreed", nil, quote)
 
 	ctx := msg.GetExtendedTextMessage().GetContextInfo()
 	if ctx.GetStanzaID() != "ORIG1" || ctx.GetParticipant() != "100000000000001@lid" {
 		t.Errorf("StanzaID/Participant = %q/%q", ctx.GetStanzaID(), ctx.GetParticipant())
 	}
-	if ctx.GetQuotedMessage().GetConversation() != "texto original" {
+	if ctx.GetQuotedMessage().GetConversation() != "original text" {
 		t.Errorf("QuotedMessage = %q, want the stored text", ctx.GetQuotedMessage().GetConversation())
 	}
 	if len(ctx.GetMentionedJID()) != 0 {
@@ -58,7 +58,7 @@ func TestBuildTextMessageQuote(t *testing.T) { // REPLY-01
 
 func TestSentReplyStoresQuotedID(t *testing.T) { // REPLY-03
 	store := newTestStore(t)
-	msg := buildTextMessage("de acordo", nil, &QuoteInfo{ID: "ORIG1", Participant: mLID, Text: "x"})
+	msg := buildTextMessage("agreed", nil, &QuoteInfo{ID: "ORIG1", Participant: mLID, Text: "x"})
 
 	if err := recordSentMessage(store, "chat@g.us", "me", "SENT1", time.Now(), msg); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestSentReplyStoresQuotedID(t *testing.T) { // REPLY-03
 	}
 	var content string
 	store.db.QueryRow("SELECT content FROM messages WHERE id='SENT1'").Scan(&content)
-	if content != "de acordo" {
+	if content != "agreed" {
 		t.Errorf("stored content = %q", content)
 	}
 }
@@ -82,9 +82,9 @@ func TestResolveGroupMentionsSwapsToTheGroupAddressing(t *testing.T) { // MENT-0
 	// the group addresses Alex by LID; the text and mention came as the phone number
 	parts := []types.GroupParticipant{participant(mLID, mPhone, mLID)}
 
-	text, jids := resolveGroupMentions("oi @551188880101, tudo bem? @551188880101", []types.JID{mPhone}, parts)
+	text, jids := resolveGroupMentions("hi @551188880101, all good? @551188880101", []types.JID{mPhone}, parts)
 
-	if text != "oi @100000000000001, tudo bem? @100000000000001" {
+	if text != "hi @100000000000001, all good? @100000000000001" {
 		t.Errorf("text = %q", text)
 	}
 	if !reflect.DeepEqual(jids, []types.JID{mLID}) {
@@ -95,9 +95,9 @@ func TestResolveGroupMentionsSwapsToTheGroupAddressing(t *testing.T) { // MENT-0
 func TestResolveGroupMentionsFromLidToPhoneGroup(t *testing.T) { // MENT-05
 	parts := []types.GroupParticipant{participant(mPhone, mPhone, mLID)}
 
-	text, jids := resolveGroupMentions("@100000000000001 oi", []types.JID{mLID}, parts)
+	text, jids := resolveGroupMentions("@100000000000001 hi", []types.JID{mLID}, parts)
 
-	if text != "@551188880101 oi" || !reflect.DeepEqual(jids, []types.JID{mPhone}) {
+	if text != "@551188880101 hi" || !reflect.DeepEqual(jids, []types.JID{mPhone}) {
 		t.Errorf("got %q %v", text, jids)
 	}
 }
@@ -119,9 +119,9 @@ func TestResolveGroupMentionsKeepsCorrectAddressingAndStrangers(t *testing.T) { 
 func TestResolveGroupMentionsOnlyRewritesWholeTokens(t *testing.T) { // MENT-05
 	parts := []types.GroupParticipant{participant(mLID, mPhone, mLID)}
 
-	text, _ := resolveGroupMentions("@5511888801019 não é @551188880101", []types.JID{mPhone}, parts)
+	text, _ := resolveGroupMentions("@5511888801019 is not @551188880101", []types.JID{mPhone}, parts)
 
-	if text != "@5511888801019 não é @100000000000001" {
+	if text != "@5511888801019 is not @100000000000001" {
 		t.Errorf("text = %q (a longer number must not be rewritten)", text)
 	}
 }
@@ -141,7 +141,7 @@ func TestParseMentions(t *testing.T) { // MENT-04
 	if err != nil || !reflect.DeepEqual(got, []types.JID{mPhone, mLID}) {
 		t.Fatalf("parseMentions = %v, %v", got, err)
 	}
-	if _, err := parseMentions([]string{"não é jid"}); err == nil {
+	if _, err := parseMentions([]string{"not a jid"}); err == nil {
 		t.Error("a malformed mention must be an error, not silently dropped")
 	}
 	if got, err := parseMentions(nil); err != nil || len(got) != 0 {
@@ -154,9 +154,9 @@ func seedQuotable(t *testing.T, store *MessageStore) {
 	ts := time.Now()
 	store.StoreChat("g@g.us", "G", ts)
 	store.StoreChat("5551@s.whatsapp.net", "DM", ts)
-	store.StoreMessage("THEIRS", "g@g.us", "100000000000001", "pergunta", ts, false, "", "", "", nil, nil, nil, 0)
-	store.StoreMessage("MINE", "g@g.us", "551100000001", "resposta minha", ts, true, "", "", "", nil, nil, nil, 0)
-	store.StoreMessage("DMMSG", "5551@s.whatsapp.net", "5551", "oi", ts, false, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("THEIRS", "g@g.us", "100000000000001", "question", ts, false, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("MINE", "g@g.us", "551100000001", "my answer", ts, true, "", "", "", nil, nil, nil, 0)
+	store.StoreMessage("DMMSG", "5551@s.whatsapp.net", "5551", "hi", ts, false, "", "", "", nil, nil, nil, 0)
 }
 
 func TestGetQuotedMessage(t *testing.T) { // REPLY-01, REPLY-02
@@ -164,7 +164,7 @@ func TestGetQuotedMessage(t *testing.T) { // REPLY-01, REPLY-02
 	seedQuotable(t, store)
 
 	ref, ok, err := store.GetQuotedMessage("THEIRS", "g@g.us")
-	if err != nil || !ok || ref.Sender != "100000000000001" || ref.Content != "pergunta" || ref.IsFromMe {
+	if err != nil || !ok || ref.Sender != "100000000000001" || ref.Content != "question" || ref.IsFromMe {
 		t.Fatalf("THEIRS = %+v %v %v", ref, ok, err)
 	}
 	if ref, ok, _ := store.GetQuotedMessage("MINE", "g@g.us"); !ok || !ref.IsFromMe {
@@ -209,17 +209,17 @@ func fakeEnv(parts []types.GroupParticipant, err error) sendEnv {
 	}
 }
 
-var errTest = errors.New("falha")
+var errTest = errors.New("failure")
 
 var testGroup = types.JID{User: "120363222", Server: "g.us"}
 
 func TestBuildTextSendInAGroupAlignsMentions(t *testing.T) { // MENT-05
 	env := fakeEnv([]types.GroupParticipant{participant(mLID, mPhone, mLID)}, nil)
 
-	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "oi @551188880101", []string{"551188880101@s.whatsapp.net"}, "")
+	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "hi @551188880101", []string{"551188880101@s.whatsapp.net"}, "")
 
 	ext := msg.GetExtendedTextMessage()
-	if errMsg != "" || ext.GetText() != "oi @100000000000001" ||
+	if errMsg != "" || ext.GetText() != "hi @100000000000001" ||
 		!reflect.DeepEqual(ext.GetContextInfo().GetMentionedJID(), []string{"100000000000001@lid"}) {
 		t.Errorf("got %q %+v", errMsg, msg)
 	}
@@ -228,10 +228,10 @@ func TestBuildTextSendInAGroupAlignsMentions(t *testing.T) { // MENT-05
 func TestBuildTextSendKeepsMentionsWhenTheGroupLookupFails(t *testing.T) { // MENT-06
 	env := fakeEnv(nil, errTest)
 
-	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "oi @551188880101", []string{"551188880101@s.whatsapp.net"}, "")
+	msg, errMsg := buildTextSend(env, newTestStore(t), testGroup, "hi @551188880101", []string{"551188880101@s.whatsapp.net"}, "")
 
 	ext := msg.GetExtendedTextMessage()
-	if errMsg != "" || ext.GetText() != "oi @551188880101" ||
+	if errMsg != "" || ext.GetText() != "hi @551188880101" ||
 		!reflect.DeepEqual(ext.GetContextInfo().GetMentionedJID(), []string{"551188880101@s.whatsapp.net"}) {
 		t.Errorf("got %q %+v", errMsg, msg)
 	}
@@ -255,7 +255,7 @@ func TestBuildTextSendReply(t *testing.T) { // REPLY-01, REPLY-02, REPLY-04
 	msg, errMsg := buildTextSend(env, store, types.JID{User: "g", Server: "g.us"}, "ok", nil, "THEIRS")
 	ctx := msg.GetExtendedTextMessage().GetContextInfo()
 	if errMsg != "" || ctx.GetStanzaID() != "THEIRS" || ctx.GetParticipant() != "100000000000001@lid" ||
-		ctx.GetQuotedMessage().GetConversation() != "pergunta" {
+		ctx.GetQuotedMessage().GetConversation() != "question" {
 		t.Errorf("reply to someone else: %q %+v", errMsg, ctx)
 	}
 
@@ -270,7 +270,7 @@ func TestBuildTextSendReply(t *testing.T) { // REPLY-01, REPLY-02, REPLY-04
 }
 
 func TestBuildTextSendRejectsMalformedMentions(t *testing.T) { // MENT-04
-	if msg, errMsg := buildTextSend(fakeEnv(nil, nil), newTestStore(t), testGroup, "x", []string{"lixo"}, ""); msg != nil || errMsg == "" {
+	if msg, errMsg := buildTextSend(fakeEnv(nil, nil), newTestStore(t), testGroup, "x", []string{"junk"}, ""); msg != nil || errMsg == "" {
 		t.Errorf("a malformed mention must refuse the send: %v %q", msg, errMsg)
 	}
 }

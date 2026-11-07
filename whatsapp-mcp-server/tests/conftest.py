@@ -11,7 +11,7 @@ import whatsapp  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolated_config_dir(tmp_path, monkeypatch):
-    """Nenhum teste lê o token ou a chave reais do usuário."""
+    """No test reads the user's real token or key."""
     monkeypatch.setenv("WHATSAPP_CONFIG_DIR", str(tmp_path / "config"))
     monkeypatch.delenv("WHATSAPP_DB_KEY", raising=False)
     monkeypatch.delenv("WHATSAPP_DB_KEY_FILE", raising=False)
@@ -19,13 +19,13 @@ def isolated_config_dir(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def isolated_send_files(tmp_path, monkeypatch):
-    """Nenhum teste lê a política real nem grava no log de auditoria real."""
+    """No test reads the real policy or writes to the real audit log."""
     monkeypatch.setattr(send_policy, "POLICY_PATH", str(tmp_path / "no_policy.json"))
     monkeypatch.setattr(send_policy, "AUDIT_PATH", str(tmp_path / "send_audit.log"))
 
 
 @pytest.fixture(autouse=True)
 def isolated_messages_db(tmp_path, monkeypatch):
-    """Nenhum teste lê o banco real do bridge: o caminho padrão aponta para um arquivo que não existe.
-    Os testes que precisam de um banco trocam o caminho por um deles."""
-    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "sem_banco" / "messages.db"))
+    """No test reads the bridge's real database: the default path points to a file that does not exist.
+    Tests that need a database swap the path for their own."""
+    monkeypatch.setattr(whatsapp, "MESSAGES_DB_PATH", str(tmp_path / "no_db" / "messages.db"))

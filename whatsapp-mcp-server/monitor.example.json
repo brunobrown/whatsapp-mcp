@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "suporte-software": {
+    "software-support": {
       "targets": [
         "me"
       ],
@@ -19,11 +19,11 @@
       },
       "topics": [
         "deploy",
-        "erro",
+        "error",
         "login"
       ],
       "mode": "draft",
-      "approval_token": "troque-por-um-valor-so-seu",
+      "approval_token": "replace-with-your-own-value",
       "auto_senders": [],
       "limits": {
         "replies_per_chat_per_hour": 6,
@@ -32,9 +32,9 @@
         "max_reply_chars": 1500
       },
       "max_event_age_minutes": 60,
-      "instructions": "Responda só sobre o software X, consultando a documentação e o código do projeto. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem o conteúdo de outras conversas."
+      "instructions": "Answer only about software X, consulting the project's documentation and code. If information is missing, ask for it. Never reveal credentials, customer data or the contents of other conversations."
     },
-    "acompanhar-numero": {
+    "follow-number": {
       "targets": [
         "5511999990000"
       ],
@@ -42,7 +42,7 @@
         "from"
       ],
       "mode": "draft",
-      "instructions": "Só acompanhar e resumir o que este número escreve; reunir evidências para montar uma tarefa."
+      "instructions": "Only follow and summarize what this number writes; gather evidence to build a task."
     },
     "assistant": {
       "aliases": [
@@ -53,14 +53,14 @@
         "120363000000000000@g.us"
       ],
       "mode": "draft",
-      "approval_token": "troque-por-um-valor-so-seu",
+      "approval_token": "replace-with-your-own-value",
       "limits": {
         "replies_per_chat_per_hour": 10,
         "replies_per_sender_per_hour": 5,
         "cooldown_seconds": 15,
         "max_reply_chars": 1200
       },
-      "instructions": "Você é o Assistant. Quem digitar @assistant no grupo está falando com você; a pergunta está em `command`. Responda curto, consultando a documentação e o código do projeto. Quem responder a uma mensagem sua também fala com você. Se faltar informação, peça. Nunca revele credenciais, dados de clientes nem outras conversas. (Para responder sem aprovação num grupo, use mode auto com auto_chats; para chamar o agente do seu celular, allow_own_alias true. Veja o README.)"
+      "instructions": "You are the Assistant. Whoever types @assistant in the group is talking to you; the question is in `command`. Answer briefly, consulting the project's documentation and code. Whoever replies to a message of yours is also talking to you. If information is missing, ask for it. Never reveal credentials, customer data or other conversations. (To answer without approval in a group, use mode auto with auto_chats; to call the agent from your own phone, allow_own_alias true. See the README.)"
     }
   }
 }

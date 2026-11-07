@@ -27,7 +27,7 @@ func plaintextStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.StoreChat("chat@g.us", "Grupo", migrationTime); err != nil {
+	if err := store.StoreChat("chat@g.us", "Group", migrationTime); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"M1", "M2", "M3"} {
@@ -95,7 +95,7 @@ func TestPlaintextDatabaseIsMigratedWithEverythingInIt(t *testing.T) { // MIG-01
 	if chats != 1 || identities != 1 || view != 1 || trigger != 1 || index != 1 || version != 7 {
 		t.Errorf("chats=%d identities=%d view=%d trigger=%d index=%d user_version=%d", chats, identities, view, trigger, index, version)
 	}
-	if err := store.StoreMessage("M4", "chat@g.us", "x", "depois da migração", migrationTime, false, "", "", "", nil, nil, nil, 0); err != nil {
+	if err := store.StoreMessage("M4", "chat@g.us", "x", "after the migration", migrationTime, false, "", "", "", nil, nil, nil, 0); err != nil {
 		t.Errorf("the migrated database must accept writes: %v", err)
 	}
 
@@ -159,12 +159,12 @@ func TestAFailedVerificationLeavesTheOriginalAlone(t *testing.T) { // MIG-02
 	plaintextStore(t)
 	before := fileHash(t, "store/messages.db")
 	real := verifyEncryptedCopy
-	verifyEncryptedCopy = func(path, tmp, name string, cfg dbConfig) error { return errors.New("contagens diferentes") }
+	verifyEncryptedCopy = func(path, tmp, name string, cfg dbConfig) error { return errors.New("counts differ") }
 	defer func() { verifyEncryptedCopy = real }()
 
 	_, err := NewMessageStore()
 
-	if err == nil || !strings.Contains(err.Error(), "contagens diferentes") || !strings.Contains(err.Error(), "left as it was") {
+	if err == nil || !strings.Contains(err.Error(), "counts differ") || !strings.Contains(err.Error(), "left as it was") {
 		t.Errorf("err = %v", err)
 	}
 	if fileHash(t, "store/messages.db") != before || !startsWithSQLiteMagic(t, "store/messages.db") {
@@ -251,7 +251,7 @@ func TestInterruptionAtAnyStageKeepsAValidDatabase(t *testing.T) { // MIG-03, MI
 			real := migrationStep
 			migrationStep = func(s string) error {
 				if s == stage {
-					return errors.New("o processo morreu aqui")
+					return errors.New("the process died here")
 				}
 				return nil
 			}
@@ -278,8 +278,8 @@ func TestInterruptionAtAnyStageKeepsAValidDatabase(t *testing.T) { // MIG-03, MI
 
 func TestALeftoverTemporaryFileIsRemovedAndTheMigrationRuns(t *testing.T) { // MIG-04
 	plaintextStore(t)
-	os.WriteFile("store/messages.db"+migrationTempSuffix, []byte("lixo de uma execução interrompida"), 0o600)
-	os.WriteFile("store/messages.db"+migrationTempSuffix+"-journal", []byte("lixo"), 0o600)
+	os.WriteFile("store/messages.db"+migrationTempSuffix, []byte("junk from an interrupted run"), 0o600)
+	os.WriteFile("store/messages.db"+migrationTempSuffix+"-journal", []byte("junk"), 0o600)
 
 	store, err := NewMessageStore()
 	if err != nil {
@@ -325,7 +325,7 @@ func TestTheSessionDatabaseIsMigratedToo(t *testing.T) { // MIG-01
 		t.Fatal(err)
 	}
 	db.Exec("CREATE TABLE session_note (secret TEXT)")
-	db.Exec("INSERT INTO session_note VALUES ('chave-de-sessao-secreta')")
+	db.Exec("INSERT INTO session_note VALUES ('secret-session-key')")
 	container.Close()
 	cfg, _ := loadDBConfig()
 
@@ -342,7 +342,7 @@ func TestTheSessionDatabaseIsMigratedToo(t *testing.T) { // MIG-01
 	var secret string
 	migrated.QueryRow("SELECT secret FROM session_note").Scan(&secret)
 	copies, _ := filepath.Glob("store/whatsapp.db.plain-*.bak")
-	if secret != "chave-de-sessao-secreta" || len(copies) != 1 || startsWithSQLiteMagic(t, "store/whatsapp.db") {
+	if secret != "secret-session-key" || len(copies) != 1 || startsWithSQLiteMagic(t, "store/whatsapp.db") {
 		t.Errorf("secret=%q copies=%v", secret, copies)
 	}
 }
@@ -442,7 +442,7 @@ func TestOtherSubcommandsAndNoArguments(t *testing.T) { // MIG-06
 	if handled, _ := runCommand(nil, &out); handled {
 		t.Error("no arguments must start the bridge")
 	}
-	handled, code := runCommand([]string{"desconhecido"}, &out)
+	handled, code := runCommand([]string{"unknown"}, &out)
 	if !handled || code != 2 || !strings.Contains(out.String(), "Usage") {
 		t.Errorf("handled=%v code=%d out=%q", handled, code, out.String())
 	}
@@ -486,7 +486,7 @@ func TestBackupNamesNeverCollideAndAreReusedForTheSameFile(t *testing.T) { // MI
 	}
 }
 
-func TestPurgeNeverReachesALiveDatabaseThroughABackupLink(t *testing.T) { // MIG-06 (perda de dados)
+func TestPurgeNeverReachesALiveDatabaseThroughABackupLink(t *testing.T) { // MIG-06 (data loss)
 	skipOnWindows(t)
 	plaintextStore(t) // a live plaintext messages.db
 	live := "store/messages.db"
@@ -513,7 +513,7 @@ func TestAFailedSwapLeavesNoLinkToTheLiveDatabase(t *testing.T) { // MIG-03, MIG
 	real := migrationStep
 	migrationStep = func(stage string) error {
 		if stage == "backed-up" {
-			return errors.New("o processo morreu aqui")
+			return errors.New("the process died here")
 		}
 		return nil
 	}
@@ -531,7 +531,7 @@ func TestAFailedSwapLeavesNoLinkToTheLiveDatabase(t *testing.T) { // MIG-03, MIG
 	}
 }
 
-func TestADatabaseWithAWALIsRecoveredOnACopyAndLosesNothing(t *testing.T) { // MIG-01, MIG-03 (bridge morto no meio da escrita)
+func TestADatabaseWithAWALIsRecoveredOnACopyAndLosesNothing(t *testing.T) { // MIG-01, MIG-03 (bridge killed mid-write)
 	skipOnWindows(t)
 	plaintextStore(t)
 	t.Setenv("WHATSAPP_DB_ENCRYPTION", "off")
@@ -543,7 +543,7 @@ func TestADatabaseWithAWALIsRecoveredOnACopyAndLosesNothing(t *testing.T) { // M
 	live.db.Exec("PRAGMA journal_mode=WAL")
 	live.db.Exec("PRAGMA wal_autocheckpoint=0")
 	for _, id := range []string{"W1", "W2"} {
-		if err := live.StoreMessage(id, "chat@g.us", "x", "só no WAL "+id, migrationTime, false, "", "", "", nil, nil, nil, 0); err != nil {
+		if err := live.StoreMessage(id, "chat@g.us", "x", "only in the WAL "+id, migrationTime, false, "", "", "", nil, nil, nil, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -663,7 +663,7 @@ func TestADatabaseWithAHotJournalIsRecoveredOnACopyAndTheOriginalStaysUntouched(
 	}
 }
 
-func TestAStaleRecoveryCopyIsWipedOnTheNextStart(t *testing.T) { // MIG-04 (revisão de segurança)
+func TestAStaleRecoveryCopyIsWipedOnTheNextStart(t *testing.T) { // MIG-04 (security review)
 	skipOnWindows(t)
 	plaintextStore(t)
 	stale := "store/messages.db" + migrationTempSuffix + "-src"

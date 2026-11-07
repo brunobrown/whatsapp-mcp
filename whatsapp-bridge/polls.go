@@ -165,7 +165,7 @@ func (store *MessageStore) PollVotes(pollID, chatJID string) ([]PollVote, error)
 
 // pollContentPrefix marks the stored text of a poll message, so list_messages and the monitor
 // show the poll as what it is.
-const pollContentPrefix = "[enquete] "
+const pollContentPrefix = "[poll] "
 
 // pollCreationOf returns the poll creation inside msg. WhatsApp sends it in different fields
 // depending on the client and on how the poll accepts answers.
@@ -290,6 +290,7 @@ type pollEnv struct {
 	// JID of a stored sender user (phone number or LID).
 	buildVote     func(poll *types.MessageInfo, options []string) (*waE2E.Message, error)
 	buildRevoke   func(chat types.JID, id string) *waE2E.Message
+	buildReaction func(chat, sender types.JID, id, emoji string) *waE2E.Message
 	resolveSender func(user string) types.JID
 }
 
@@ -301,6 +302,9 @@ func newPollEnv(client *whatsmeow.Client) pollEnv {
 		},
 		buildVote: func(poll *types.MessageInfo, options []string) (*waE2E.Message, error) {
 			return client.BuildPollVote(context.Background(), poll, options)
+		},
+		buildReaction: func(chat, sender types.JID, id, emoji string) *waE2E.Message {
+			return client.BuildReaction(chat, sender, id, emoji)
 		},
 		buildRevoke: func(chat types.JID, id string) *waE2E.Message {
 			return client.BuildRevoke(chat, types.EmptyJID, id) // an empty sender revokes our own message
@@ -569,4 +573,10 @@ func deleteMessage(env pollEnv, store *MessageStore, req DeleteMessageRequest, l
 		logger.Warnf("Message %s was deleted on WhatsApp but not locally: %v", req.MessageID, err)
 	}
 	return http.StatusOK, SendMessageResponse{Success: true, Message: "Message deleted", MessageID: req.MessageID, ChatJID: chat.String()}
+}
+
+// jsonOptions is how the options of a poll are stored.
+func jsonOptions(options []string) (string, error) {
+	encoded, err := json.Marshal(options)
+	return string(encoded), err
 }

@@ -24,14 +24,14 @@ func seedDownloaded(t *testing.T, store *MessageStore, id string, age time.Durat
 	if err := store.StoreChat("chat@g.us", "Chat", ts); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.StoreMessage(id, "chat@g.us", "alice", "legenda", ts, false, "image", id+".jpg", "", nil, nil, nil, 5); err != nil {
+	if err := store.StoreMessage(id, "chat@g.us", "alice", "caption", ts, false, "image", id+".jpg", "", nil, nil, nil, 5); err != nil {
 		t.Fatal(err)
 	}
 	_, abs, err := mediaFilePath("chat@g.us", id, id+".jpg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(abs, []byte("dados"), 0o644); err != nil {
+	if err := os.WriteFile(abs, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetLocalPath(id, "chat@g.us", abs); err != nil {
@@ -74,8 +74,8 @@ func TestCleanupDeletesOnlyExpiredMedia(t *testing.T) { // RET-02, RET-03, RET-0
 func TestCleanupNeverDeletesOutsideStore(t *testing.T) { // RET-04
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
-	victim := filepath.Join(t.TempDir(), "importante.txt")
-	if err := os.WriteFile(victim, []byte("não apague"), 0o644); err != nil {
+	victim := filepath.Join(t.TempDir(), "important.txt")
+	if err := os.WriteFile(victim, []byte("do not delete"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
@@ -99,8 +99,8 @@ func TestCleanupNeverDeletesThroughSymlinkedDirectory(t *testing.T) { // RET-04
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	outside := t.TempDir()
-	victim := filepath.Join(outside, "importante.txt")
-	if err := os.WriteFile(victim, []byte("não apague"), 0o644); err != nil {
+	victim := filepath.Join(outside, "important.txt")
+	if err := os.WriteFile(victim, []byte("do not delete"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
@@ -111,7 +111,7 @@ func TestCleanupNeverDeletesThroughSymlinkedDirectory(t *testing.T) { // RET-04
 	if err := os.Symlink(outside, link); err != nil {
 		t.Fatal(err)
 	}
-	viaLink := filepath.Join(link, "importante.txt")
+	viaLink := filepath.Join(link, "important.txt")
 	if err := store.SetLocalPath("OLD", "chat@g.us", viaLink); err != nil {
 		t.Fatal(err)
 	}
@@ -134,11 +134,11 @@ func TestCleanupNeverDeletesSiblingWithStorePrefix(t *testing.T) { // RET-04
 	if err := os.MkdirAll("store-evil", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	victim, err := filepath.Abs(filepath.Join("store-evil", "importante.txt"))
+	victim, err := filepath.Abs(filepath.Join("store-evil", "important.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(victim, []byte("não apague"), 0o644); err != nil {
+	if err := os.WriteFile(victim, []byte("do not delete"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetLocalPath("OLD", "chat@g.us", victim); err != nil {
@@ -153,7 +153,7 @@ func TestCleanupNeverDeletesSiblingWithStorePrefix(t *testing.T) { // RET-04
 	}
 }
 
-func TestCleanupKeepsMessagesWithoutKnownAge(t *testing.T) { // RET-03 (idade desconhecida não é antiga)
+func TestCleanupKeepsMessagesWithoutKnownAge(t *testing.T) { // RET-03 (unknown age is not old)
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	zero := seedDownloaded(t, store, "ZERO", 0, now)
@@ -207,11 +207,11 @@ func TestCleanupClearsLocalPathOfMissingFile(t *testing.T) { // RET-05
 	}
 }
 
-func TestCleanupKeepsDirectoryWithOtherFiles(t *testing.T) { // RET-06 (diretório não vazio)
+func TestCleanupKeepsDirectoryWithOtherFiles(t *testing.T) { // RET-06 (non-empty directory)
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	old := seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
-	other := filepath.Join(filepath.Dir(old), "outro.txt")
+	other := filepath.Join(filepath.Dir(old), "other.txt")
 	os.WriteFile(other, []byte("x"), 0o644)
 
 	if _, err := store.CleanupExpiredMedia(now, 30); err != nil {
@@ -237,14 +237,14 @@ func TestMaybeAutoDownloadSkipsOwnMessages(t *testing.T) { // RET-07
 	}
 }
 
-func TestCleanupClearsLocalPathWhenTheWholeDirectoryIsGone(t *testing.T) { // RET-05 (diretório ausente)
+func TestCleanupClearsLocalPathWhenTheWholeDirectoryIsGone(t *testing.T) { // RET-05 (missing directory)
 	store := newTestStore(t)
 	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	gone := seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
 	if err := os.RemoveAll(filepath.Dir(gone)); err != nil {
 		t.Fatal(err)
 	}
-	outside := filepath.Join(t.TempDir(), "nao-existe", "arquivo.jpg") // lexically outside store/, directory also missing
+	outside := filepath.Join(t.TempDir(), "does-not-exist", "file.jpg") // lexically outside store/, directory also missing
 	seedDownloaded(t, store, "OUT", 90*24*time.Hour, now)
 	if err := store.SetLocalPath("OUT", "chat@g.us", outside); err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestCleanupCountsOnlyTheFilesItDeleted(t *testing.T) { // RET-02, RET-05, R
 	gone := seedDownloaded(t, store, "GONE", 90*24*time.Hour, now)
 	os.Remove(gone) // the file is missing, the directory stays
 	shared := seedDownloaded(t, store, "SHARED", 90*24*time.Hour, now)
-	os.WriteFile(filepath.Join(filepath.Dir(shared), "outro.txt"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(filepath.Dir(shared), "other.txt"), []byte("x"), 0o644)
 
 	n, err := store.CleanupExpiredMedia(now, 30)
 
@@ -318,7 +318,7 @@ func TestRemoveStoreFileReportsWhatHappened(t *testing.T) { // RET-02, RET-04, R
 		t.Errorf("missing directory inside store/: removed=%v forget=%v, want false true", removed, forget)
 	}
 
-	outside := filepath.Join(t.TempDir(), "importante.txt")
+	outside := filepath.Join(t.TempDir(), "important.txt")
 	write(outside)
 	if removed, forget := removeStoreFile(root, outside); removed || forget || !exists(outside) {
 		t.Errorf("existing file outside store/: removed=%v forget=%v, want false false and the file kept", removed, forget)
@@ -349,7 +349,7 @@ func TestRemoveStoreFileLeavesAnUnresolvableDirectoryAlone(t *testing.T) { // RE
 
 func TestStoreItselfBeingASymlinkStillDeletesInsideIt(t *testing.T) { // RET-02, RET-04
 	t.Chdir(t.TempDir())
-	real := filepath.Join(t.TempDir(), "disco-externo")
+	real := filepath.Join(t.TempDir(), "external-disk")
 	if err := os.MkdirAll(filepath.Join(real, "chat", "m1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +358,7 @@ func TestStoreItselfBeingASymlinkStillDeletesInsideIt(t *testing.T) { // RET-02,
 	}
 	file := filepath.Join(real, "chat", "m1", "a.jpg")
 	os.WriteFile(file, []byte("x"), 0o644)
-	sibling := real + "-vizinho"
+	sibling := real + "-neighbour"
 	os.MkdirAll(sibling, 0o755)
 	neighbour := filepath.Join(sibling, "b.jpg")
 	os.WriteFile(neighbour, []byte("x"), 0o644)

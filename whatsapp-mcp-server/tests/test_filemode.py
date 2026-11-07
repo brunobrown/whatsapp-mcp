@@ -1,4 +1,4 @@
-"""Testes do T6: aviso quando arquivos com token têm acesso de grupo ou outros (WARN-01)."""
+"""T6 tests: warning when files holding a token are accessible by group or others (WARN-01)."""
 import json
 import logging
 import os
@@ -62,7 +62,7 @@ def test_the_warning_is_logged_once_per_state(tmp_path, caplog):  # WARN-01
         os.chmod(path, 0o666)
         filemode.warn_if_open(path)
 
-    assert len([r for r in caplog.records if path in r.getMessage()]) == 2   # abriu de novo depois de fechar
+    assert len([r for r in caplog.records if path in r.getMessage()]) == 2   # opened again after being closed
 
 
 @posix_only
@@ -88,7 +88,7 @@ def test_monitor_listing_has_no_warnings_key_when_all_is_private(tmp_path, monke
 
 
 @posix_only
-def test_an_open_profiles_file_still_works(tmp_path, monkeypatch):  # WARN-01 (avisa, não bloqueia)
+def test_an_open_profiles_file_still_works(tmp_path, monkeypatch):  # WARN-01 (warns, does not block)
     profiles = make(tmp_path, "monitor_profiles.json", 0o644, json.dumps({"profiles": {"p": {"targets": ["me"]}}}))
     monkeypatch.setattr(monitor, "CONFIG_PATH", profiles)
 

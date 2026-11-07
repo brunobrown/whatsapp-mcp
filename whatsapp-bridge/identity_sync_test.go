@@ -17,7 +17,7 @@ type fakeSource struct {
 	contacts map[types.JID]types.ContactInfo
 	pnToLID  map[string]string
 	lidToPN  map[string]string
-	failPN   map[string]bool // LIDForPN falha para estes telefones
+	failPN   map[string]bool // LIDForPN fails for these phones
 }
 
 func (f *fakeSource) AllContacts(context.Context) (map[types.JID]types.ContactInfo, error) {
@@ -58,8 +58,8 @@ func TestSyncRecordsAddressBook(t *testing.T) { // SYNC-01
 	src := &fakeSource{
 		contacts: map[types.JID]types.ContactInfo{
 			pnJID("551155550404"): {FullName: "Chris Taylor - Acme", FirstName: "Chris", PushName: "Chris"},
-			pnJID("551155550505"): {FirstName: "Sam", PushName: "Samantha"}, // sem full name: usa o primeiro nome
-			lidJID("999"):         {PushName: "Só Lid"},
+			pnJID("551155550505"): {FirstName: "Sam", PushName: "Samantha"}, // no full name: uses the first name
+			lidJID("999"):         {PushName: "Only Lid"},
 		},
 		pnToLID: map[string]string{"551155550404": "123"},
 	}
@@ -78,16 +78,16 @@ func TestSyncRecordsAddressBook(t *testing.T) { // SYNC-01
 	if got := getID(t, store, "551155550505"); got.FullName != "Sam" || got.PushName != "Samantha" {
 		t.Errorf("first-name fallback = %+v", got)
 	}
-	if got := getID(t, store, "999"); got.LID != "999" || got.PushName != "Só Lid" {
+	if got := getID(t, store, "999"); got.LID != "999" || got.PushName != "Only Lid" {
 		t.Errorf("lid-only contact = %+v", got)
 	}
 }
 
 func TestSyncLinksLIDSendersFromMessages(t *testing.T) { // SYNC-02
 	store := newTestStore(t)
-	seedMedia(t, store, "M1", "image", "f.jpg") // cria o chat
+	seedMedia(t, store, "M1", "image", "f.jpg") // creates the chat
 	for _, sender := range []string{"100000000000005", "777", "unknown-lid-1"} {
-		if err := store.StoreMessage("m-"+sender, "chat@g.us", sender, "oi", time.Now(), false, "", "", "", nil, nil, nil, 0); err != nil {
+		if err := store.StoreMessage("m-"+sender, "chat@g.us", sender, "hi", time.Now(), false, "", "", "", nil, nil, nil, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -110,8 +110,8 @@ func TestSyncContinuesAfterFailedLookup(t *testing.T) { // SYNC-05
 	store := newTestStore(t)
 	src := &fakeSource{
 		contacts: map[types.JID]types.ContactInfo{
-			pnJID("111"): {FullName: "Quebrado"},
-			pnJID("222"): {FullName: "Inteiro"},
+			pnJID("111"): {FullName: "Broken"},
+			pnJID("222"): {FullName: "Whole"},
 		},
 		pnToLID: map[string]string{"222": "lid222"},
 		failPN:  map[string]bool{"111": true},
@@ -121,7 +121,7 @@ func TestSyncContinuesAfterFailedLookup(t *testing.T) { // SYNC-05
 		t.Fatal(err)
 	}
 
-	if got := getID(t, store, "111"); got.FullName != "Quebrado" {
+	if got := getID(t, store, "111"); got.FullName != "Broken" {
 		t.Errorf("contact whose LID lookup failed must still be recorded: %+v", got)
 	}
 	if got := getID(t, store, "222"); got.LID != "lid222" {
@@ -141,7 +141,7 @@ func TestMessageIdentityLinksSenderAndAlt(t *testing.T) { // SYNC-03
 		t.Errorf("identity = %+v", got)
 	}
 
-	// sem SenderAlt: só o id que existe, e a ordem inversa (telefone como Sender) também liga
+	// no SenderAlt: only the id that exists, and the reverse order (phone as Sender) also links
 	recordMessageIdentity(store, types.MessageInfo{
 		MessageSource: types.MessageSource{Sender: pnJID("551166660303")}, PushName: "Maria",
 	})
@@ -168,21 +168,21 @@ func TestMessageIdentityWithoutPushNameStillLinks(t *testing.T) { // SYNC-03
 
 func TestPushNameAndContactEvents(t *testing.T) { // SYNC-04
 	store := newTestStore(t)
-	recordPushNameEvent(store, &events.PushName{JID: lidJID("111"), JIDAlt: pnJID("5581"), NewPushName: "Novo Push"})
-	if got := getID(t, store, "111"); got != (Identity{LID: "111", Phone: "5581", PushName: "Novo Push"}) {
+	recordPushNameEvent(store, &events.PushName{JID: lidJID("111"), JIDAlt: pnJID("5581"), NewPushName: "New Push"})
+	if got := getID(t, store, "111"); got != (Identity{LID: "111", Phone: "5581", PushName: "New Push"}) {
 		t.Errorf("push name event: %+v", got)
 	}
 
-	recordContactEvent(store, &events.Contact{JID: pnJID("5581"), Action: &waSyncAction.ContactAction{FullName: proto.String("Nome da Agenda")}})
-	if got := getID(t, store, "5581"); got.FullName != "Nome da Agenda" || got.LID != "111" || got.PushName != "Novo Push" {
+	recordContactEvent(store, &events.Contact{JID: pnJID("5581"), Action: &waSyncAction.ContactAction{FullName: proto.String("Address Book Name")}})
+	if got := getID(t, store, "5581"); got.FullName != "Address Book Name" || got.LID != "111" || got.PushName != "New Push" {
 		t.Errorf("contact event: %+v", got)
 	}
 
-	recordContactEvent(store, &events.Contact{JID: pnJID("5581"), Action: &waSyncAction.ContactAction{FirstName: proto.String("Só Primeiro")}})
-	if got := getID(t, store, "5581"); got.FullName != "Só Primeiro" {
+	recordContactEvent(store, &events.Contact{JID: pnJID("5581"), Action: &waSyncAction.ContactAction{FirstName: proto.String("Only First")}})
+	if got := getID(t, store, "5581"); got.FullName != "Only First" {
 		t.Errorf("first name fallback: %+v", got)
 	}
-	recordContactEvent(store, &events.Contact{JID: pnJID("5581")}) // sem Action: não pode derrubar
+	recordContactEvent(store, &events.Contact{JID: pnJID("5581")}) // no Action: must not crash
 }
 
 func groupInfo(parts ...types.GroupParticipant) *types.GroupInfo {
@@ -196,7 +196,7 @@ func TestGroupParticipantsListedAndRecorded(t *testing.T) { // GRP-01, GRP-02
 		types.GroupParticipant{JID: lidJID("100000000000001"), LID: lidJID("100000000000001"), PhoneNumber: pnJID("551188880101")},
 		types.GroupParticipant{JID: lidJID("100000000000004"), LID: lidJID("100000000000004"), PhoneNumber: pnJID("551166660303"), IsAdmin: true},
 		types.GroupParticipant{JID: pnJID("551100000000"), IsSuperAdmin: true},
-		types.GroupParticipant{JID: lidJID("555555")}, // desconhecido, sem telefone
+		types.GroupParticipant{JID: lidJID("555555")}, // unknown, no phone
 	)
 
 	got, err := recordAndListParticipants(store, info)
@@ -269,9 +269,9 @@ func TestGroupParticipantsSuccessResponse(t *testing.T) { // GRP-01
 
 func TestGroupParticipantNameFoundByPhoneWhenLIDUnknown(t *testing.T) { // GRP-01
 	store := newTestStore(t)
-	store.UpsertIdentity("", "551100000000", "Só Telefone", "")
+	store.UpsertIdentity("", "551100000000", "Only Phone", "")
 	got, err := recordAndListParticipants(store, groupInfo(types.GroupParticipant{JID: pnJID("551100000000")}))
-	if err != nil || len(got) != 1 || got[0].Name != "Só Telefone" {
+	if err != nil || len(got) != 1 || got[0].Name != "Only Phone" {
 		t.Errorf("participants = %+v, err = %v", got, err)
 	}
 }

@@ -1,4 +1,4 @@
-"""Testes do monitor, parte 5: chamar o agente pelo nome, responder ao agente, mensagens da própria conta, auto_chats."""
+"""Monitor tests, part 5: calling the agent by name, replying to the agent, the account's own messages, auto_chats."""
 import asyncio
 import json
 import os
@@ -50,11 +50,11 @@ def parsed(**fields):
     return monitor.get_profile("p")
 
 
-# ---- ALIAS-01: o nome na mensagem --------------------------------------------------------------------------
+# ---- ALIAS-01: the name in the message --------------------------------------------------------------------------
 
 @pytest.mark.parametrize("text", [
-    "@assistant qual é o próximo item?", "oi @Assistant, me ajuda", "@ASSISTANT", "ok. @assistant!", "(@assistant)", "pergunta @assistant",
-    "@assistant\ne a segunda linha", "¿@assistant?", "x\t@assistant",
+    "@assistant what is the next item?", "hi @Assistant, help me", "@ASSISTANT", "ok. @assistant!", "(@assistant)", "question @assistant",
+    "@assistant\nand the second line", "¿@assistant?", "x\t@assistant",
 ])
 def test_alias_fires_as_a_whole_word_in_any_case(conn, text):  # ALIAS-01
     add(conn, "M", text)
@@ -63,7 +63,7 @@ def test_alias_fires_as_a_whole_word_in_any_case(conn, text):  # ALIAS-01
 
 
 @pytest.mark.parametrize("text", [
-    "@assistantx", "@assistant-bot", "@assistant2", "a@assistant", "email: eu@assistant.com", "assistant", "@wall", "@@assistant2", "sem nome",
+    "@assistantx", "@assistant-bot", "@assistant2", "a@assistant", "email: me@assistant.com", "assistant", "@assist", "@@assistant2", "no name",
     "x@assistant", "@assistant_",
 ])
 def test_alias_does_not_fire_inside_other_words(conn, text):  # ALIAS-01
@@ -73,23 +73,23 @@ def test_alias_does_not_fire_inside_other_words(conn, text):  # ALIAS-01
 
 
 def test_alias_without_arroba_matches_the_word_only(conn):  # ALIAS-01
-    add(conn, "HIT", "ei assistant, tudo bem?")
-    add(conn, "MISS1", "o assistantx")
+    add(conn, "HIT", "hey assistant, how are you?")
+    add(conn, "MISS1", "the assistantx")
     add(conn, "MISS2", "a@assistant")
-    add(conn, "MISS3", "@assistant") # com @ antes: o nome sem @ não casa dentro de uma menção ao outro
+    add(conn, "MISS3", "@assistant") # with @ before: the name without @ does not match inside a mention of the other
 
     assert [h[0] for h in hits(run(profile(aliases=["assistant"])))] == ["HIT"]
 
 
 def test_several_aliases_each_report_themselves(conn):  # ALIAS-01
-    add(conn, "M", "@robo e @assistant juntos")
+    add(conn, "M", "@robot and @assistant together")
 
-    assert hits(run(profile(aliases=["@assistant", "@robo", "@outro"]))) == [("M", [("alias", "@assistant"), ("alias", "@robo")])]
+    assert hits(run(profile(aliases=["@assistant", "@robot", "@other"]))) == [("M", [("alias", "@assistant"), ("alias", "@robot")])]
 
 
 def test_regex_characters_in_an_alias_are_literal(conn):  # ALIAS-01
-    add(conn, "HIT", "chama @bot+1 aqui")
-    add(conn, "MISS", "chama @bot111 aqui")
+    add(conn, "HIT", "call @bot+1 here")
+    add(conn, "MISS", "call @bot111 here")
 
     assert [h[0] for h in hits(run(profile(aliases=["@bot+1"])))] == ["HIT"]
 
@@ -97,14 +97,14 @@ def test_regex_characters_in_an_alias_are_literal(conn):  # ALIAS-01
 # ---- ALIAS-02: command -------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("text, command", [
-    ("@assistant qual é o próximo item da lista de tarefas?", "qual é o próximo item da lista de tarefas?"),
-    ("@Assistant, me ajuda", "me ajuda"),
-    ("oi @assistant: veja isso", "oi veja isso"),
-    ("pergunta para o @assistant", "pergunta para o"),
+    ("@assistant what is the next item on the task list?", "what is the next item on the task list?"),
+    ("@Assistant, help me", "help me"),
+    ("hi @assistant: look at this", "hi look at this"),
+    ("question for the @assistant", "question for the"),
     ("@assistant - status?", "status?"),
     ("@assistant", ""),
-    ("  @assistant   muitos   espaços  ", "muitos   espaços"),
-    ("@assistant primeira, @assistant segunda", "primeira, @assistant segunda"),
+    ("  @assistant   many   spaces  ", "many   spaces"),
+    ("@assistant first, @assistant second", "first, @assistant second"),
 ])
 def test_command_is_the_text_without_the_name(conn, text, command):  # ALIAS-02
     add(conn, "M", text)
@@ -115,30 +115,30 @@ def test_command_is_the_text_without_the_name(conn, text, command):  # ALIAS-02
 
 
 def test_events_without_alias_have_no_command(conn):  # ALIAS-02
-    add(conn, "M", f"@{ME} oi")
+    add(conn, "M", f"@{ME} hi")
 
     event = run(monitor.Profile(name="p", targets=["me"])).events[0]
 
     assert event["command"] is None
 
 
-# ---- ALIAS-03: grupo e privado -----------------------------------------------------------------------------
+# ---- ALIAS-03: group and private -----------------------------------------------------------------------------
 
 def test_alias_in_groups_and_direct_chats_but_not_every_direct_message(conn):  # ALIAS-03
-    add(conn, "G", "@assistant no grupo", chat=GROUP)
-    add(conn, "D", "@assistant no privado", chat=DM_ANA, sender=ANA)
-    add(conn, "D2", "privado sem o nome", chat=DM_ANA, sender=ANA)
-    add(conn, "G2", "grupo sem o nome", chat=GROUP)
+    add(conn, "G", "@assistant in the group", chat=GROUP)
+    add(conn, "D", "@assistant in private", chat=DM_ANA, sender=ANA)
+    add(conn, "D2", "private without the name", chat=DM_ANA, sender=ANA)
+    add(conn, "G2", "group without the name", chat=GROUP)
 
     assert [h[0] for h in hits(run())] == ["G", "D"]
 
 
-# ---- ALIAS-04/05: configuração ----------------------------------------------------------------------------
+# ---- ALIAS-04/05: configuration ----------------------------------------------------------------------------
 
 @pytest.mark.parametrize("fields, fragment", [
     ({"aliases": "assistant"}, "aliases"),
     ({"aliases": []}, "aliases"),
-    ({"aliases": ["com espaço"]}, "aliases"),
+    ({"aliases": ["with space"]}, "aliases"),
     ({"aliases": ["a"]}, "aliases"),
     ({"aliases": ["x" * 41]}, "aliases"),
     ({"aliases": [f"@bot{n}" for n in range(11)]}, "aliases"),
@@ -149,11 +149,11 @@ def test_alias_in_groups_and_direct_chats_but_not_every_direct_message(conn):  #
     ({"aliases": ["@bot"], "triggers": ["mention"]}, "targets"),
     ({"aliases": ["@bot"], "triggers": ["from"]}, "targets"),
     ({"aliases": ["@bot"], "triggers": ["reply", "alias"]}, "targets"),
-    ({"aliases": ["@bot"], "allow_own_alias": "sim"}, "allow_own_alias"),
+    ({"aliases": ["@bot"], "allow_own_alias": "yes"}, "allow_own_alias"),
     ({"aliases": ["@bot"], "triggers": ["agent_reply"], "allow_own_alias": True}, "alias"),
     ({"targets": ["me"], "allow_own_alias": True}, "aliases"),
-    ({"aliases": ["@bot"], "auto_chats": "grupo"}, "auto_chats"),
-    ({"aliases": ["@bot"], "auto_chats": ["Grupo"]}, "auto_chats"),
+    ({"aliases": ["@bot"], "auto_chats": "group"}, "auto_chats"),
+    ({"aliases": ["@bot"], "auto_chats": ["Group"]}, "auto_chats"),
     ({"aliases": ["@bot"], "auto_chats": [5]}, "auto_chats"),
 ])
 def test_invalid_alias_configuration(conn, fields, fragment):  # ALIAS-04
@@ -163,13 +163,13 @@ def test_invalid_alias_configuration(conn, fields, fragment):  # ALIAS-04
 
 
 def test_aliases_are_stored_in_lower_case_and_listed(conn):  # ALIAS-04, ALIAS-12
-    config(aliases=["@Assistant", "@ROBO"], allow_own_alias=True, auto_chats=[GROUP], mode="auto")
+    config(aliases=["@Assistant", "@ROBOT"], allow_own_alias=True, auto_chats=[GROUP], mode="auto")
 
     p, _ = monitor.get_profile("p")
     listed = monitor.list_profiles()["profiles"][0]
 
-    assert p.aliases == ["@assistant", "@robo"]
-    assert (listed["aliases"], listed["allow_own_alias"], listed["auto_chats"]) == (["@assistant", "@robo"], True, [GROUP])
+    assert p.aliases == ["@assistant", "@robot"]
+    assert (listed["aliases"], listed["allow_own_alias"], listed["auto_chats"]) == (["@assistant", "@robot"], True, [GROUP])
     assert listed["triggers"] == ["alias", "agent_reply"] and "approval_token" not in listed
 
 
@@ -191,18 +191,18 @@ def test_defaults_of_the_new_fields(conn):  # ALIAS-05
     assert (p.allow_own_alias, p.auto_chats) == (False, [])
 
 
-# ---- ALIAS-06: responder ao agente ------------------------------------------------------------------------
+# ---- ALIAS-06: replying to the agent ------------------------------------------------------------------------
 
 def agent_message(conn, id="AGENT1", chat=GROUP, minute=50):
-    """Uma resposta que o monitor enviou: está no banco como da própria conta e o id está no log de auditoria."""
-    add(conn, id, "Resposta do agente", chat=chat, from_me=1, minute=minute)
+    """A reply the monitor sent: it is in the database as the account's own and its id is in the audit log."""
+    add(conn, id, "Agent reply", chat=chat, from_me=1, minute=minute)
     put_audit(reply_id=id, chat_jid=chat, ts=(NOW - timedelta(minutes=30)).isoformat())
 
 
 def test_a_reply_to_a_message_the_agent_sent_fires_agent_reply(conn):  # ALIAS-06
     agent_message(conn)
-    add(conn, "R", "obrigado, mas e a segunda parte?", quoted="AGENT1", sender=BOB)
-    add(conn, "OTHER", "resposta a outra coisa", quoted="NOT_AGENT", sender=BOB)
+    add(conn, "R", "thanks, but what about the second part?", quoted="AGENT1", sender=BOB)
+    add(conn, "OTHER", "reply to something else", quoted="NOT_AGENT", sender=BOB)
 
     result = run(profile(triggers=["agent_reply"]))
 
@@ -212,23 +212,23 @@ def test_a_reply_to_a_message_the_agent_sent_fires_agent_reply(conn):  # ALIAS-0
 
 def test_agent_reply_needs_the_same_chat(conn):  # ALIAS-06
     agent_message(conn, chat=GROUP)
-    add(conn, "R", "cita o id em outro chat", quoted="AGENT1", chat=GROUP2, sender=BOB)
+    add(conn, "R", "quotes the id in another chat", quoted="AGENT1", chat=GROUP2, sender=BOB)
 
     assert hits(run(profile(triggers=["agent_reply"]))) == []
 
 
 def test_agent_reply_counts_replies_sent_by_any_profile(conn):  # ALIAS-06
-    add(conn, "A2", "do outro perfil", from_me=1, minute=50)
-    put_audit(reply_id="A2", profile="outro-perfil", chat_jid=GROUP)
-    add(conn, "R", "e agora?", quoted="A2", sender=BOB)
+    add(conn, "A2", "from the other profile", from_me=1, minute=50)
+    put_audit(reply_id="A2", profile="other-profile", chat_jid=GROUP)
+    add(conn, "R", "and now?", quoted="A2", sender=BOB)
 
     assert [h[0] for h in hits(run(profile(triggers=["agent_reply"])))] == ["R"]
 
 
 def test_only_sent_replies_are_agent_messages(conn):  # ALIAS-06
-    add(conn, "BLOCKED", "bloqueada", from_me=1, minute=50)
+    add(conn, "BLOCKED", "blocked", from_me=1, minute=50)
     put_audit(reply_id="BLOCKED", result="blocked", chat_jid=GROUP)
-    add(conn, "HUMAN", "eu mesmo escrevi", from_me=1, minute=51)
+    add(conn, "HUMAN", "I wrote this myself", from_me=1, minute=51)
     add(conn, "R1", "r", quoted="BLOCKED", sender=BOB)
     add(conn, "R2", "r", quoted="HUMAN", sender=BOB)
 
@@ -243,29 +243,29 @@ def test_agent_reply_without_an_audit_log_just_does_not_fire(conn):  # ALIAS-06
 
 def test_agent_reply_obeys_the_profile_filters(conn):  # ALIAS-06
     agent_message(conn)
-    add(conn, "OK", "continua?", quoted="AGENT1", sender=ANA)
-    add(conn, "DENIED", "continua?", quoted="AGENT1", sender=BOB)
-    add(conn, "OFFTOPIC", "ok valeu", quoted="AGENT1", sender=ANA)
+    add(conn, "OK", "continues?", quoted="AGENT1", sender=ANA)
+    add(conn, "DENIED", "continues?", quoted="AGENT1", sender=BOB)
+    add(conn, "OFFTOPIC", "ok thanks", quoted="AGENT1", sender=ANA)
 
     assert [h[0] for h in hits(run(profile(triggers=["agent_reply"], senders_deny=[BOB])))] == ["OK", "OFFTOPIC"]
-    assert [h[0] for h in hits(run(profile(triggers=["agent_reply"], topics=["continua"], senders_deny=[BOB])))] == ["OK"]
+    assert [h[0] for h in hits(run(profile(triggers=["agent_reply"], topics=["continues"], senders_deny=[BOB])))] == ["OK"]
 
 
-# ---- ALIAS-07/08: a própria conta -------------------------------------------------------------------------
+# ---- ALIAS-07/08: the account itself -------------------------------------------------------------------------
 
 def test_own_messages_never_fire_by_default(conn):  # ALIAS-07
-    add(conn, "OWN", "@assistant eu mesmo chamando", from_me=1)
+    add(conn, "OWN", "@assistant me calling myself", from_me=1)
 
     assert hits(run()) == []
 
 
 def test_own_alias_fires_only_the_alias_trigger(conn):  # ALIAS-07
-    add(conn, "OWN", f"@assistant e também @{ME}", from_me=1)
-    add(conn, "OWN2", "sem o nome", from_me=1)
+    add(conn, "OWN", f"@assistant and also @{ME}", from_me=1)
+    add(conn, "OWN2", "without the name", from_me=1)
     p = profile(targets=["me"], triggers=["alias", "mention", "reply", "direct", "from"], allow_own_alias=True)
 
     assert hits(run(p)) == [("OWN", [("alias", BOT)])]
-    assert run(p).events[0]["command"] == f"e também @{ME}"
+    assert run(p).events[0]["command"] == f"and also @{ME}"
 
 
 def test_own_alias_needs_the_alias_trigger_and_the_option(conn):  # ALIAS-07
@@ -276,38 +276,38 @@ def test_own_alias_needs_the_alias_trigger_and_the_option(conn):  # ALIAS-07
 
 
 def test_a_reply_sent_by_the_monitor_never_fires_even_with_the_alias_in_it(conn):  # ALIAS-08
-    add(conn, "AGENT1", "Sou o @assistant e respondo isso", from_me=1, minute=50)
+    add(conn, "AGENT1", "I am the @assistant and I answer this", from_me=1, minute=50)
     put_audit(reply_id="AGENT1", chat_jid=GROUP)
-    add(conn, "OWN", "@assistant agora fui eu", from_me=1, minute=51)
+    add(conn, "OWN", "@assistant this time it was me", from_me=1, minute=51)
 
     assert hits(run(profile(allow_own_alias=True))) == [("OWN", [("alias", BOT)])]
 
 
 def test_a_reply_still_being_recorded_is_waited_for(conn, monkeypatch):  # ALIAS-08
-    """O banco já tem a resposta enviada, mas o log ainda não: a varredura espera o fim do envio em andamento."""
-    add(conn, "AGENT1", "Sou o @assistant", from_me=1, minute=50)
+    """The database already has the sent reply but the log does not yet: the scan waits for the send in progress to finish."""
+    add(conn, "AGENT1", "I am the @assistant", from_me=1, minute=50)
     outcome = []
 
-    with monitor._reply_lock:      # um monitor_reply no meio do envio
+    with monitor._reply_lock:      # a monitor_reply in the middle of sending
         thread = threading.Thread(target=lambda: outcome.append(hits(run(profile(allow_own_alias=True)))))
         thread.start()
         time.sleep(0.3)
-        assert outcome == [], "a varredura deve esperar o envio terminar"
-        put_audit(reply_id="AGENT1", chat_jid=GROUP)      # o envio registra a resposta antes de soltar o lock
+        assert outcome == [], "the scan must wait for the send to finish"
+        put_audit(reply_id="AGENT1", chat_jid=GROUP)      # the send records the reply before releasing the lock
     thread.join(5)
 
     assert outcome == [[]]
 
 
 def test_the_wait_is_only_for_own_messages_with_the_alias(conn):  # ALIAS-08
-    add(conn, "OTHERS", "@assistant oi", sender=BOB)
+    add(conn, "OTHERS", "@assistant hi", sender=BOB)
     result = {}
 
     with monitor._reply_lock:
         thread = threading.Thread(target=lambda: result.setdefault("hits", hits(run(profile(allow_own_alias=True)))))
         thread.start()
         thread.join(2)
-        assert not thread.is_alive(), "uma mensagem de outra pessoa não deve esperar o envio de outra resposta"
+        assert not thread.is_alive(), "a message from someone else must not wait for another reply to be sent"
 
     assert result["hits"] == [("OTHERS", [("alias", BOT)])]
 
@@ -315,9 +315,9 @@ def test_the_wait_is_only_for_own_messages_with_the_alias(conn):  # ALIAS-08
 # ---- ALIAS-09: auto_chats ---------------------------------------------------------------------------------
 
 def test_auto_chats_answer_anyone_in_auto_mode(conn):  # ALIAS-09
-    add(conn, "G", "@assistant oi", chat=GROUP, sender=BOB)
-    add(conn, "G2", "@assistant oi", chat=GROUP2, sender=BOB, minute=56)
-    add(conn, "T", "@assistant oi", chat=GROUP2, sender=ANA, minute=57)
+    add(conn, "G", "@assistant hi", chat=GROUP, sender=BOB)
+    add(conn, "G2", "@assistant hi", chat=GROUP2, sender=BOB, minute=56)
+    add(conn, "T", "@assistant hi", chat=GROUP2, sender=ANA, minute=57)
 
     auto = run(profile(mode="auto", auto_chats=[GROUP], auto_senders=[ANA]))
     draft = run(profile(mode="draft", auto_chats=[GROUP], auto_senders=[ANA]))
@@ -327,7 +327,7 @@ def test_auto_chats_answer_anyone_in_auto_mode(conn):  # ALIAS-09
 
 
 def test_own_messages_are_auto_in_auto_mode_only(conn):  # ALIAS-09
-    add(conn, "OWN", "@assistant eu", from_me=1)
+    add(conn, "OWN", "@assistant me", from_me=1)
 
     assert run(profile(mode="auto", allow_own_alias=True)).events[0]["reply_mode"] == "auto"
     assert run(profile(mode="draft", allow_own_alias=True)).events[0]["reply_mode"] == "draft"
@@ -336,12 +336,12 @@ def test_own_messages_are_auto_in_auto_mode_only(conn):  # ALIAS-09
 # ---- ALIAS-10: monitor_reply -------------------------------------------------------------------------------
 
 def reply(message_id, chat_jid=GROUP, token=TOKEN, **kwargs):
-    return monitor.monitor_reply("p", chat_jid, message_id, "Resposta", approval_token=token, now=NOW, **kwargs)
+    return monitor.monitor_reply("p", chat_jid, message_id, "Reply", approval_token=token, now=NOW, **kwargs)
 
 
 def test_monitor_reply_accepts_an_alias_message_and_refuses_others(conn, sent):  # ALIAS-10
-    add(conn, "CALL", "@assistant qual o status?", sender=BOB)
-    add(conn, "PLAIN", "conversa normal", sender=BOB)
+    add(conn, "CALL", "@assistant what is the status?", sender=BOB)
+    add(conn, "PLAIN", "normal conversation", sender=BOB)
     config()
 
     assert reply("CALL")["success"] is True
@@ -351,14 +351,14 @@ def test_monitor_reply_accepts_an_alias_message_and_refuses_others(conn, sent): 
 
 def test_monitor_reply_accepts_a_reply_to_the_agent(conn, sent):  # ALIAS-10
     agent_message(conn)
-    add(conn, "FOLLOW", "e a segunda parte?", quoted="AGENT1", sender=BOB)
+    add(conn, "FOLLOW", "and the second part?", quoted="AGENT1", sender=BOB)
     config()
 
     assert reply("FOLLOW")["success"] is True
 
 
 def test_monitor_reply_to_an_own_alias_message_needs_allow_own_alias(conn, sent):  # ALIAS-10
-    add(conn, "OWN", "@assistant eu", from_me=1)
+    add(conn, "OWN", "@assistant me", from_me=1)
     config()
     assert reply("OWN")["error_code"] == "NOT_A_TRIGGER"
     config(allow_own_alias=True)
@@ -366,7 +366,7 @@ def test_monitor_reply_to_an_own_alias_message_needs_allow_own_alias(conn, sent)
 
 
 def test_monitor_reply_never_answers_a_reply_the_monitor_sent(conn, sent):  # ALIAS-10, ALIAS-08
-    add(conn, "AGENT1", "Sou o @assistant", from_me=1, minute=50)
+    add(conn, "AGENT1", "I am the @assistant", from_me=1, minute=50)
     put_audit(reply_id="AGENT1", chat_jid=GROUP)
     config(allow_own_alias=True)
 
@@ -374,9 +374,9 @@ def test_monitor_reply_never_answers_a_reply_the_monitor_sent(conn, sent):  # AL
 
 
 def test_monitor_reply_auto_chats_and_own_messages_skip_the_token(conn, sent):  # ALIAS-09, ALIAS-10
-    add(conn, "CALL", "@assistant oi", chat=GROUP2, sender=BOB)
-    add(conn, "CALL2", "@assistant oi", chat=GROUP, sender=BOB, minute=56)
-    add(conn, "OWN", "@assistant eu", chat=GROUP, from_me=1, minute=57)
+    add(conn, "CALL", "@assistant hi", chat=GROUP2, sender=BOB)
+    add(conn, "CALL2", "@assistant hi", chat=GROUP, sender=BOB, minute=56)
+    add(conn, "OWN", "@assistant me", chat=GROUP, from_me=1, minute=57)
     config(mode="auto", auto_chats=[GROUP2], allow_own_alias=True,
            limits={"cooldown_seconds": 1, "replies_per_chat_per_hour": 20, "replies_per_sender_per_hour": 20})
 
@@ -385,20 +385,20 @@ def test_monitor_reply_auto_chats_and_own_messages_skip_the_token(conn, sent):  
     assert reply("OWN", token=None)["success"] is True
 
 
-# ---- ALIAS-11: sem perfil ---------------------------------------------------------------------------------
+# ---- ALIAS-11: without a profile ---------------------------------------------------------------------------------
 
 def test_aliases_without_a_profile_only_read(conn):  # ALIAS-11
-    add(conn, "CALL", "@assistant oi", sender=BOB)
+    add(conn, "CALL", "@assistant hi", sender=BOB)
 
     out = asyncio.run(monitor.monitor_messages(aliases=["@assistant"], cursor=0, now=NOW))
 
     assert out["success"] is True and out["events"][0]["reply_mode"] == "none"
-    assert out["events"][0]["command"] == "oi" and out["events"][0]["matched"] == [{"trigger": "alias", "target": "@assistant"}]
+    assert out["events"][0]["command"] == "hi" and out["events"][0]["matched"] == [{"trigger": "alias", "target": "@assistant"}]
 
 
 def test_aliases_and_targets_can_be_mixed_without_a_profile(conn):  # ALIAS-11
-    add(conn, "A", f"@{ME} oi", sender=BOB)
-    add(conn, "B", "@assistant oi", sender=BOB, minute=56)
+    add(conn, "A", f"@{ME} hi", sender=BOB)
+    add(conn, "B", "@assistant hi", sender=BOB, minute=56)
 
     out = asyncio.run(monitor.monitor_messages(targets=["me"], aliases=["@assistant"], cursor=0, now=NOW))
 
@@ -406,7 +406,7 @@ def test_aliases_and_targets_can_be_mixed_without_a_profile(conn):  # ALIAS-11
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"profile": "p", "aliases": ["@assistant"]}, {"aliases": ["com espaço"]}, {"aliases": "assistant"}, {"aliases": []},
+    {"profile": "p", "aliases": ["@assistant"]}, {"aliases": ["with space"]}, {"aliases": "assistant"}, {"aliases": []},
     {"aliases": ["@bot"], "triggers": ["mention"]},
 ])
 def test_invalid_alias_arguments_without_a_profile(conn, kwargs):  # ALIAS-11
@@ -424,9 +424,9 @@ def test_the_tool_documents_the_name_and_the_new_triggers():  # ALIAS-11, ALIAS-
 
 
 def test_unreadable_audit_log_fails_closed_for_own_messages_and_agent_replies(conn, tmp_path, monkeypatch):  # ALIAS-08
-    add(conn, "AGENT1", "Sou o @assistant", from_me=1, minute=50)
-    add(conn, "R", "e agora?", quoted="AGENT1", sender=BOB)
-    monkeypatch.setattr(monitor, "AUDIT_PATH", str(tmp_path))      # um diretório: não dá para ler como log
+    add(conn, "AGENT1", "I am the @assistant", from_me=1, minute=50)
+    add(conn, "R", "and now?", quoted="AGENT1", sender=BOB)
+    monkeypatch.setattr(monitor, "AUDIT_PATH", str(tmp_path))      # a directory: it cannot be read as a log
 
     own = hits(run(profile(allow_own_alias=True)))
     follow = hits(run(profile(triggers=["agent_reply"])))
@@ -436,14 +436,14 @@ def test_unreadable_audit_log_fails_closed_for_own_messages_and_agent_replies(co
 
 def test_own_message_with_the_id_of_a_reply_sent_in_another_chat_still_fires(conn):  # ALIAS-08
     agent_message(conn, id="SAMEID", chat=GROUP2)
-    add(conn, "SAMEID", "@assistant fui eu", chat=GROUP, from_me=1, minute=56)
+    add(conn, "SAMEID", "@assistant it was me", chat=GROUP, from_me=1, minute=56)
 
     assert hits(run(profile(allow_own_alias=True))) == [("SAMEID", [("alias", BOT)])]
 
 
 def test_a_reply_id_sent_in_two_chats_is_remembered_for_both(conn):  # ALIAS-06
-    add(conn, "DUP", "agente 1", chat=GROUP, from_me=1, minute=50)
-    add(conn, "DUP", "agente 2", chat=GROUP2, from_me=1, minute=51)
+    add(conn, "DUP", "agent 1", chat=GROUP, from_me=1, minute=50)
+    add(conn, "DUP", "agent 2", chat=GROUP2, from_me=1, minute=51)
     put_audit(reply_id="DUP", chat_jid=GROUP)
     put_audit(reply_id="DUP", chat_jid=GROUP2)
     add(conn, "R1", "r", quoted="DUP", chat=GROUP, sender=BOB, minute=56)
@@ -454,8 +454,8 @@ def test_a_reply_id_sent_in_two_chats_is_remembered_for_both(conn):  # ALIAS-06
 
 def test_alias_and_agent_reply_need_to_be_listed_triggers(conn):  # ALIAS-05
     agent_message(conn)
-    add(conn, "CALL", "@assistant oi", sender=BOB)
-    add(conn, "FOLLOW", "e a segunda?", quoted="AGENT1", sender=BOB, minute=56)
+    add(conn, "CALL", "@assistant hi", sender=BOB)
+    add(conn, "FOLLOW", "and the second one?", quoted="AGENT1", sender=BOB, minute=56)
     only_mention = monitor.Profile(name="p", targets=["me"], aliases=[BOT], triggers=["mention"])
 
     assert hits(run(only_mention)) == []

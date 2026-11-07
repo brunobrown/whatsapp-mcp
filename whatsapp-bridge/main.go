@@ -106,6 +106,11 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
+	if _, err := db.Exec(reactionSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create reactions table: %v", err)
+	}
+
 	if _, err := db.Exec(pollSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to create poll tables: %v", err)
@@ -452,7 +457,7 @@ func extractTextContent(msg *waProto.Message) string {
 		return doc.GetCaption()
 	}
 
-	return ""
+	return nonTextContent(msg)
 }
 
 // SendMessageResponse represents the response for the send message API
@@ -759,6 +764,16 @@ func extractMediaInfo(msg *waProto.Message, messageID string) (mediaType string,
 
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
+	own := ""
+	if client != nil && client.Store != nil && client.Store.ID != nil {
+		own = client.Store.ID.User
+	}
+	handleMessageWith(clientDecryptors(client), own, client, messageStore, msg, logger)
+}
+
+// handleMessageWith is handleMessage with the decryption of votes and encrypted envelopes, and the user
+// of this account, given by the caller, so tests can supply them.
+func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
@@ -782,13 +797,15 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		return
 	}
 
-	own := ""
-	if client != nil && client.Store != nil && client.Store.ID != nil {
-		own = client.Store.ID.User
+	// Encrypted envelopes (edits of a message, an option added to a poll, an edited poll question)
+	// change what is stored; they are not messages themselves.
+	if recordSecretEdit(messageStore, own, decrypt.secret, msg, logger) {
+		return
 	}
-	if !recordPoll(messageStore, own, func(e *events.Message) (*waProto.PollVoteMessage, error) {
-		return client.DecryptPollVote(context.Background(), e)
-	}, msg, logger) {
+	if recordReaction(messageStore, own, msg, logger) {
+		return
+	}
+	if !recordPoll(messageStore, own, decrypt.vote, msg, logger) {
 		return
 	}
 
@@ -800,6 +817,9 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// Skip if there's no content and no media
 	if content == "" && mediaType == "" {
+		if fields := droppedFields(msg.Message); len(fields) > 0 {
+			logger.Infof("Not stored: message %s in %s has no text or media (fields: %s)", msg.Info.ID, chatJID, strings.Join(fields, ", "))
+		}
 		return
 	}
 
@@ -1620,6 +1640,9 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 		return votePoll(pollClient, messageStore, req, logger)
 	}))
 
+	mux.HandleFunc("/api/react", pollEndpoint(func(req ReactRequest) (int, SendMessageResponse) {
+		return reactToMessage(pollClient, messageStore, req, logger)
+	}))
 	mux.HandleFunc("/api/delete_message", pollEndpoint(func(req DeleteMessageRequest) (int, SendMessageResponse) {
 		return deleteMessage(pollClient, messageStore, req, logger)
 	}))

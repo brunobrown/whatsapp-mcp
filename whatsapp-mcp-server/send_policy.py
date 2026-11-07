@@ -44,6 +44,11 @@ _JID = re.compile(r"(?P<user>[0-9]+(?:-[0-9]+)?)(?:\.[0-9]+)?(?::[0-9]+)?@(?P<se
 _SERVERS = ("s.whatsapp.net", "lid", "g.us")
 
 
+# Placeholders of the example files (the current one, and the one earlier versions shipped, still
+# refused for installs that copied it): public values, never accepted as a real token.
+PLACEHOLDER_TOKENS = frozenset({"replace-with-your-own-value", "troque-por-um-valor-so-seu"})
+
+
 def canonical_jid(text: str) -> Optional[str]:
     """The plain `user@server` the bridge will address, or None when text is not a destination we accept.
 
@@ -210,6 +215,8 @@ def evaluate(target: Target, override_token: Optional[str], directory: Directory
         return Decision(True)
 
     configured = policy.get("override_token")
+    if configured in PLACEHOLDER_TOKENS:
+        configured = None  # a value copied from an example file is public, so it never releases a blocked send
     if override_token and configured and hmac.compare_digest(override_token.encode(), configured.encode()):
         return Decision(True, rule=decision.rule, override=True)
     return decision

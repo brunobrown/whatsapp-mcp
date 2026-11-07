@@ -2,5 +2,5 @@
   "mode": "denylist",
   "allow": ["Project Alpha"],
   "deny": ["Client Beta"],
-  "override_token": "troque-por-um-valor-so-seu"
+  "override_token": "replace-with-your-own-value"
 }

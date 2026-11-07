@@ -80,7 +80,7 @@ func TestTokenFileWithWideModeIsTightened(t *testing.T) { // API-05
 }
 
 func TestBrokenTokenFileIsReplaced(t *testing.T) { // API-05
-	for _, content := range []string{"", "curto", "não é hexadecimal " + strings.Repeat("z", 64)} {
+	for _, content := range []string{"", "short", "not hexadecimal " + strings.Repeat("z", 64)} {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "api_token"), []byte(content), 0o600)
 

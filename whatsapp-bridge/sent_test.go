@@ -51,7 +51,7 @@ func sendResp(id string, ts time.Time) whatsmeow.SendResponse {
 func TestCompleteSendStoresText(t *testing.T) { // SENT-01
 	store := newTestStore(t)
 	ts := time.Date(2026, 10, 21, 10, 30, 0, 0, time.UTC)
-	msg := &waProto.Message{Conversation: proto.String("olá time")}
+	msg := &waProto.Message{Conversation: proto.String("hello team")}
 
 	res := completeSend(store, "chat@g.us", "5511999", msg, sendResp("SENT1", ts), nil, nil)
 
@@ -59,19 +59,19 @@ func TestCompleteSendStoresText(t *testing.T) { // SENT-01
 		t.Fatalf("result = %+v", res)
 	}
 	row := readRow(t, store, "SENT1")
-	if !row.isFromMe || row.content != "olá time" || row.sender != "5511999" || !row.ts.Equal(ts) {
+	if !row.isFromMe || row.content != "hello team" || row.sender != "5511999" || !row.ts.Equal(ts) {
 		t.Errorf("row = %+v", row)
 	}
 }
 
 func TestCompleteSendStoresMedia(t *testing.T) { // SENT-02
 	store := newTestStore(t)
-	msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{Caption: proto.String("foto da tela")}}
+	msg := &waProto.Message{ImageMessage: &waProto.ImageMessage{Caption: proto.String("screenshot")}}
 
 	completeSend(store, "chat@g.us", "5511999", msg, sendResp("IMG1", time.Now()), nil, nil)
 
 	row := readRow(t, store, "IMG1")
-	if row.mediaType != "image" || row.filename != "image_IMG1.jpg" || row.content != "foto da tela" {
+	if row.mediaType != "image" || row.filename != "image_IMG1.jpg" || row.content != "screenshot" {
 		t.Errorf("row = %+v", row)
 	}
 }
@@ -92,7 +92,7 @@ func TestCompleteSendKeepsChatNameAndAdvancesTime(t *testing.T) { // SENT-03
 	}
 }
 
-func TestCompleteSendCreatesUnknownChatWithJIDAsName(t *testing.T) { // SENT-03 (chat novo)
+func TestCompleteSendCreatesUnknownChatWithJIDAsName(t *testing.T) { // SENT-03 (new chat)
 	store := newTestStore(t)
 	completeSend(store, "chat@g.us", "me", &waProto.Message{Conversation: proto.String("x")}, sendResp("S", time.Now()), nil, nil)
 	if name, _ := chatRow(t, store); name != "chat@g.us" {
@@ -103,10 +103,10 @@ func TestCompleteSendCreatesUnknownChatWithJIDAsName(t *testing.T) { // SENT-03 
 func TestEchoAfterSendKeepsOneRow(t *testing.T) { // SENT-04
 	store := newTestStore(t)
 	ts := time.Now()
-	completeSend(store, "chat@g.us", "me", &waProto.Message{Conversation: proto.String("oi")}, sendResp("DUP", ts), nil, nil)
+	completeSend(store, "chat@g.us", "me", &waProto.Message{Conversation: proto.String("hi")}, sendResp("DUP", ts), nil, nil)
 
-	// o eco chega pelo caminho de handleMessage
-	if err := store.StoreMessage("DUP", "chat@g.us", "me", "oi", ts, true, "", "", "", nil, nil, nil, 0); err != nil {
+	// the echo arrives through the handleMessage path
+	if err := store.StoreMessage("DUP", "chat@g.us", "me", "hi", ts, true, "", "", "", nil, nil, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	if n := countMessages(t, store); n != 1 {
@@ -128,7 +128,7 @@ func TestCompleteSendFailureStoresNothing(t *testing.T) { // SENT-05
 
 func TestCompleteSendStoreFailureStillSucceeds(t *testing.T) { // SENT-06
 	store := newTestStore(t)
-	store.Close() // força o erro de gravação
+	store.Close() // forces the write error
 
 	res := completeSend(store, "chat@g.us", "me", &waProto.Message{Conversation: proto.String("x")}, sendResp("S", time.Now()), nil, nil)
 
