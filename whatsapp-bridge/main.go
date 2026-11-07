@@ -452,7 +452,7 @@ func extractTextContent(msg *waProto.Message) string {
 		return doc.GetCaption()
 	}
 
-	return ""
+	return nonTextContent(msg)
 }
 
 // SendMessageResponse represents the response for the send message API
