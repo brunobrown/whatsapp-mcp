@@ -7,6 +7,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 import monitor
 import pollwatch
+import capabilities
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -709,8 +710,11 @@ def get_connection_status() -> Dict[str, Any]:
         has not happened since the bridge started) and pending_media_retries (media waiting for the phone to re-upload).
         When the bridge does not answer: connected=false, bridge_reachable=false, error_code=BRIDGE_UNREACHABLE,
         last_message_at (newest stored message) and last_log_at (last write to the bridge log)
+        Always added: server_version, features (names of what this server can do) and enabled (what is switched
+        on now, e.g. webhooks). A client whose answer lacks these fields is talking to an older server: reconnect it.
     """
-    return whatsapp_get_connection_status()
+    status = whatsapp_get_connection_status()
+    return {**status, **capabilities.describe(VERSION, status)}
 
 @mcp.tool(annotations=READ_ONLY)
 def get_webhook_status() -> Dict[str, Any]:
