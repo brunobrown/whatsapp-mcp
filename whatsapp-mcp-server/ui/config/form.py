@@ -100,7 +100,7 @@ class FormFlow:
 
     def _load_file(self) -> None:
         loaded = self._store.load(self.section.id)
-        self.version, self._stored = loaded.version, copy.deepcopy(loaded.values)
+        self.version, self._stored = loaded.version, self.section.decode(copy.deepcopy(loaded.values))
         self._warnings = list(loaded.warnings)
         if loaded.error:
             self._status, self._banner = "error", loaded.error
@@ -182,7 +182,7 @@ class FormFlow:
                 if why:
                     result.errors[f.key] = why
         if self._is_file and not result.errors:
-            _split(self.section.validator(self._draft), result.errors, result.general)
+            _split(self.section.validator(self.section.encode(self._draft)), result.errors, result.general)
         if self.section.read_only and not result.errors:
             result.general.append("this section is read-only")
         return result
@@ -202,7 +202,7 @@ class FormFlow:
         if self._is_env:
             result = self._env.save(self.section.id, self._env_changes(), self.version, confirm_replace)
         else:
-            result = self._store.save(self.section.id, self._draft, self.version, confirm_replace)
+            result = self._store.save(self.section.id, self.section.encode(self._draft), self.version, confirm_replace)
         outcome = SaveOutcome(ok=result.ok, conflict=result.conflict, needs_confirmation=result.needs_confirmation)
         _split(result.errors, outcome.errors, outcome.general)
         if result.ok and self.section.restart:

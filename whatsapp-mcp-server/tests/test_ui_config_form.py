@@ -313,3 +313,51 @@ def test_the_stale_version_of_an_environment_section_is_a_conflict(ctx):
     f.apply({"max_mb": "40"})
     f.version = "stale"
     assert f.save().conflict is True
+
+
+def _keyed_section(target, seen):
+    """A file that keeps its entries in an object keyed by name, shown as a list of records."""
+    def decode(values):
+        return {"items": [{"name": k, **v} for k, v in values.get("items", {}).items()]} if "items" in values else {}
+
+    def encode(values):
+        return {"items": {r["name"]: {k: v for k, v in r.items() if k != "name"} for r in values.get("items", [])}}
+
+    def validator(values):
+        seen.append(values)
+        return [Problem("items", "the file keeps items in an object")] if not isinstance(values.get("items", {}), dict) else []
+
+    reg = Registry()
+    reg.register(Section(
+        id="keyed", title="Keyed", order=1, storage=JsonFile(lambda: str(target)), validator=validator,
+        decode=decode, encode=encode,
+        fields=(Field("items", "Items", "records", id_key="name", fields=(
+            Field("name", "Name", "text"), Field("level", "Level", "int"), Field("secret", "Secret", "secret"))),)))
+    store = ConfigStore(reg)
+    flow = FormFlow("keyed", reg, store)
+    return flow
+
+
+def test_a_section_can_show_a_file_in_another_shape_and_write_it_back(tmp_path):
+    target = tmp_path / "keyed.json"
+    target.write_text(json.dumps({"items": {"a": {"level": 1, "secret": "s1"}, "b": {"level": 2}}}))
+    seen = []
+    flow = _keyed_section(target, seen)
+    view = flow.load()
+    assert view.values["items"] == [{"name": "a", "level": 1, "secret": {"set": True}},
+                                    {"name": "b", "level": 2, "secret": {"set": False}}]
+    assert "s1" not in repr(view)
+    flow.apply({"items": [{"name": "b", "level": 2}, {"name": "a", "level": 5}]})      # reordered; a's secret not sent
+    outcome = flow.save()
+    assert outcome.ok is True
+    assert json.loads(target.read_text()) == {"items": {"b": {"level": 2}, "a": {"level": 5, "secret": "s1"}}}
+    assert all(isinstance(v["items"], dict) for v in seen)          # the validator always sees the file shape
+
+
+def test_the_validator_sees_the_file_shape_when_a_draft_is_checked(tmp_path):
+    seen = []
+    flow = _keyed_section(tmp_path / "keyed.json", seen)
+    flow.load()
+    flow.apply({"items": [{"name": "x", "level": 3}]})
+    assert flow.validate().can_save is True
+    assert seen[-1] == {"items": {"x": {"level": 3}}}

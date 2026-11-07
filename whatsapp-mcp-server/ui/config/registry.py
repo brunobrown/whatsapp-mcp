@@ -33,6 +33,10 @@ class ReadOnly:
 Storage = Union[JsonFile, EnvKeys, ReadOnly]
 
 
+def _identity(values: Dict[str, Any]) -> Dict[str, Any]:
+    return values
+
+
 def _no_problems(_values: Dict[str, Any]) -> List[Problem]:
     return []
 
@@ -49,6 +53,10 @@ class Section:
     description: str = ""
     icon: str = ""
     listed: bool = True
+    # A file whose shape does not fit the form (entries keyed by name, say) is shown through these two: `decode`
+    # turns the file's values into the form's, `encode` turns them back. The validator always sees the file shape.
+    decode: Callable[[Dict[str, Any]], Dict[str, Any]] = field(default=_identity, repr=False)
+    encode: Callable[[Dict[str, Any]], Dict[str, Any]] = field(default=_identity, repr=False)
 
     def __post_init__(self):
         keys = [f.key for f in self.fields]

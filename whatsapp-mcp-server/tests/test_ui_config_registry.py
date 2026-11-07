@@ -121,3 +121,9 @@ def test_a_section_in_a_test_shows_without_changing_the_shell():  # EXT-03
     reg = Registry()
     reg.register(make("probe", order=1))
     assert [s.id for s in reg.sections()] == ["probe"]
+
+
+def test_a_section_without_a_translation_keeps_the_file_shape():
+    section = make("plain", order=1)
+    assert section.decode({"a": [1]}) == {"a": [1]}
+    assert section.encode({"a": [1]}) == {"a": [1]}
