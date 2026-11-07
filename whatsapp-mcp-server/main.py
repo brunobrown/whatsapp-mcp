@@ -822,7 +822,7 @@ def get_webhook_status() -> Dict[str, Any]:
 
     Returns:
         success and webhooks: enabled, error (why the file was refused, when it was) and endpoints, each with name,
-        delivered, failed, dropped (events lost because its queue was full), queued, last_error and last_success_at.
+        delivered, failed, dropped (events lost because its queue was full), queued, last_error, last_success_at, persistent (durable queue on) and recovered (events picked up from it at start).
         The address and the secret of an endpoint are never shown. Webhooks are off unless webhooks.json exists
         in the bridge's configuration directory.
         Errors: success=false with error_code BRIDGE_UNREACHABLE or BRIDGE_UNAUTHORIZED

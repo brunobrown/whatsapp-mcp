@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dataclasses import dataclass
@@ -1747,8 +1748,14 @@ def _tally(cursor: sqlite3.Cursor, poll_id: str, chat_jid: str, options: List[st
 def _poll_row_dict(cursor: sqlite3.Cursor, row) -> dict:
     """Everything shown about one poll row: (id, chat_jid, author, question, options_json, selectable_count,
     allow_add_option, hide_voter_names, chat name, created timestamp, created by us)."""
-    (poll_id, chat_jid, author, question, options_json, selectable, add_option, hide, chat_name, created, from_me) = row
+    (poll_id, chat_jid, author, question, options_json, selectable, add_option, hide, chat_name, created, from_me) = row[:11]
+    ends_ms, quiz, correct = (row[11:14] + (None, None, None))[:3] if len(row) > 11 else (None, None, None)
     anonymous = bool(hide)
+    tally = _tally(cursor, poll_id, chat_jid, json.loads(options_json), anonymous)
+    own_quiz = bool(quiz and from_me and correct)
+    if own_quiz:
+        for option in tally["options"]:
+            option["correct"] = option["text"] == correct
     return {
         "message_id": poll_id,
         "chat_jid": chat_jid,
@@ -1759,12 +1766,27 @@ def _poll_row_dict(cursor: sqlite3.Cursor, row) -> dict:
         "anonymous": anonymous,
         "created_at": _aware(datetime.fromisoformat(created)).isoformat() if created else None,
         "created_by": "Me" if from_me else sender_label(author),
-        **_tally(cursor, poll_id, chat_jid, json.loads(options_json), anonymous),
+        "closes_at": datetime.fromtimestamp(ends_ms / 1000, tz=timezone.utc).isoformat() if ends_ms else None,
+        "closed": bool(ends_ms and time.time() * 1000 >= ends_ms),
+        "quiz": bool(quiz),
+        # the right answer is shown only for a quiz this account created
+        "correct_answer": correct if own_quiz else None,
+        **tally,
     }
 
 
 _POLL_COLUMNS = ("polls.id, polls.chat_jid, polls.author, polls.question, polls.options_json, polls.selectable_count, "
                  "polls.allow_add_option, polls.hide_voter_names, chats.name, messages.timestamp, messages.is_from_me")
+_POLL_EXTRA_COLUMNS = ("ends_at_ms", "quiz", "correct_answer")
+
+
+def _poll_select(cursor: sqlite3.Cursor) -> str:
+    """The poll columns, with the ones a database from an older bridge lacks read as NULL."""
+    have = {row[1] for row in cursor.execute("PRAGMA table_info(polls)")}
+    extra = ", ".join(f"polls.{c}" if c in have else f"NULL AS {c}" for c in _POLL_EXTRA_COLUMNS)
+    return f"{_POLL_COLUMNS}, {extra}"
+
+
 _POLL_JOIN = ("FROM polls LEFT JOIN chats ON chats.jid = polls.chat_jid "
               "LEFT JOIN messages ON messages.id = polls.id AND messages.chat_jid = polls.chat_jid")
 
@@ -1784,7 +1806,7 @@ def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> dict:
             candidates = _chat_candidates(chat_jid)
             where += f" AND polls.chat_jid IN ({','.join('?' * len(candidates))})"
             params += candidates
-        rows = cursor.execute(f"SELECT {_POLL_COLUMNS} {_POLL_JOIN} WHERE {where}", params).fetchall() \
+        rows = cursor.execute(f"SELECT {_poll_select(cursor)} {_POLL_JOIN} WHERE {where}", params).fetchall() \
             if _has_poll_tables(cursor) else []
         if not rows:
             return _poll_error("POLL_NOT_FOUND", f"Poll {message_id} was not found" + (f" in {chat_jid}" if chat_jid else ""))
@@ -1816,7 +1838,7 @@ def list_polls(chat_jid: str, limit: int = 20, page: int = 0) -> dict:
         marks = ",".join("?" * len(candidates))
         total = cursor.execute(f"SELECT COUNT(*) FROM polls WHERE chat_jid IN ({marks})", candidates).fetchone()[0]
         rows = cursor.execute(
-            f"SELECT {_POLL_COLUMNS} {_POLL_JOIN} WHERE polls.chat_jid IN ({marks}) "
+            f"SELECT {_poll_select(cursor)} {_POLL_JOIN} WHERE polls.chat_jid IN ({marks}) "
             f"ORDER BY {_INSTANT} DESC, messages.rowid DESC LIMIT ? OFFSET ?",
             (*candidates, limit, page * limit)).fetchall()
         polls = []

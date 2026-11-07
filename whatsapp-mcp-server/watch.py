@@ -188,9 +188,18 @@ async def watch_poll_votes(poll_id: str, out: TextIO, cursor_file: str, since: O
     async def fetch(pos):
         return await pollwatch.watch_poll(poll_id, cursor=pos, wait_seconds=0 if pos is None else wait_seconds)
 
+    was_closed = []     # [False] once seen open; the line is for a poll that closes while we watch
+
     def render(answer):
-        chat = answer["results"].get("chat_jid")
-        return [vote_line(poll_id, chat, c) for c in answer["changes"]]
+        results = answer["results"]
+        chat = results.get("chat_jid")
+        lines = [vote_line(poll_id, chat, c) for c in answer["changes"]]
+        closed = bool(results.get("closed"))
+        if was_closed and not was_closed[0] and closed:
+            lines.append(line([("event", "poll_closed"), ("poll", poll_id), ("chat", chat),
+                               ("voters", results.get("total_voters"))]))
+        was_closed[:] = [closed]
+        return lines
 
     w.state("started", poll=poll_id)
     return await w.run(fetch, render, position)

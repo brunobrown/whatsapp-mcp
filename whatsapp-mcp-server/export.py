@@ -151,12 +151,14 @@ def _polls(cursor, jid: str, window_ids: List[str], pseudo: Pseudonyms) -> List[
         return []
     marks = ",".join("?" * len(window_ids))
     out = []
-    for row in cursor.execute(f"SELECT {whatsapp._POLL_COLUMNS} {whatsapp._POLL_JOIN} "
+    for row in cursor.execute(f"SELECT {whatsapp._poll_select(cursor)} {whatsapp._POLL_JOIN} "
                               f"WHERE polls.chat_jid = ? AND polls.id IN ({marks})", [jid] + window_ids).fetchall():
         poll = whatsapp._poll_row_dict(cursor, row)
         poll.pop("chat_jid"), poll.pop("chat_name")
         poll["question"] = pseudo.text(poll["question"])
         poll["created_by"] = "Me" if poll["created_by"] == "Me" else pseudo.who(row[2]) if pseudo.enabled else poll["created_by"]
+        if poll.get("correct_answer"):
+            poll["correct_answer"] = pseudo.text(poll["correct_answer"])
         for option in poll["options"]:
             option["text"] = pseudo.text(option["text"])
         by_hash = {hashlib.sha256(o.encode()).hexdigest(): o for o in json.loads(row[4])}

@@ -126,6 +126,10 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create messages index: %v", err)
 	}
 
+	if err := ensurePollColumns(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to migrate polls table: %v", err)
+	}
 	if err := ensureMessageColumns(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
@@ -1906,6 +1910,7 @@ func main() {
 
 	// Start REST API server
 	startMediaRetention(messageStore, loadRetentionDays(os.Getenv), logger)
+	startPollCloseWatcher(messageStore, logger)
 	// The API is never started without its token: it can send messages as the account.
 	apiConfigDir, err := configDir()
 	if err != nil {

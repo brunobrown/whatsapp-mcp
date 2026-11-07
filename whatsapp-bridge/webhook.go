@@ -51,13 +51,14 @@ const (
 	eventReaction       = "reaction"
 	eventMessageEdit    = "message_edit"
 	eventMessageDeleted = "message_deleted"
+	eventPollClosed     = "poll_closed"
 	eventConnection     = "connection"
 	eventPing           = "ping"
 )
 
 var webhookEventTypes = map[string]bool{
 	eventMessage: true, eventPollCreated: true, eventPollVote: true, eventReaction: true,
-	eventMessageEdit: true, eventMessageDeleted: true, eventConnection: true, eventPing: true,
+	eventMessageEdit: true, eventMessageDeleted: true, eventPollClosed: true, eventConnection: true, eventPing: true,
 }
 
 // webhookBackoff is the wait before each repetition: one attempt and five repetitions in all.

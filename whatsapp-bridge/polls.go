@@ -58,6 +58,9 @@ type Poll struct {
 	SelectableCount int
 	AllowAddOption  bool
 	HideVoterNames  bool
+	EndsAtMs        int64  // the deadline set when it was created, in Unix milliseconds; 0 for none
+	Quiz            bool   // a quiz poll
+	CorrectAnswer   string // the right option of a quiz, when the message says it
 }
 
 // PollVote is the current choice of one person: hex hashes of the options, none once retracted.
@@ -76,14 +79,17 @@ func (store *MessageStore) StorePoll(p Poll) (bool, error) {
 		return false, err
 	}
 	res, err := store.db.Exec(
-		`INSERT INTO polls (id, chat_jid, author, question, options_json, selectable_count, allow_add_option, hide_voter_names)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO polls (id, chat_jid, author, question, options_json, selectable_count, allow_add_option, hide_voter_names,
+			ends_at_ms, quiz, correct_answer)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id, chat_jid) DO UPDATE SET
 			question = excluded.question, options_json = excluded.options_json,
 			selectable_count = excluded.selectable_count, allow_add_option = excluded.allow_add_option,
-			hide_voter_names = excluded.hide_voter_names
+			hide_voter_names = excluded.hide_voter_names,
+			ends_at_ms = excluded.ends_at_ms, quiz = excluded.quiz, correct_answer = excluded.correct_answer
 		WHERE polls.author = excluded.author`,
 		p.ID, p.ChatJID, p.Author, p.Question, string(options), p.SelectableCount, p.AllowAddOption, p.HideVoterNames,
+		p.EndsAtMs, p.Quiz, p.CorrectAnswer,
 	)
 	if err != nil {
 		return false, err
@@ -198,6 +204,8 @@ func pollFromMessage(chatJID, id, author string, msg *waE2E.Message) (Poll, bool
 		ID: id, ChatJID: chatJID, Author: author, Question: creation.GetName(), Options: options,
 		SelectableCount: int(creation.GetSelectableOptionsCount()),
 		AllowAddOption:  creation.GetAllowAddOption(), HideVoterNames: creation.GetHideParticipantName(),
+		EndsAtMs: creation.GetEndTime(), Quiz: creation.GetPollType() == waE2E.PollType_QUIZ,
+		CorrectAnswer: creation.GetCorrectAnswer().GetOptionName(),
 	}, true
 }
 
