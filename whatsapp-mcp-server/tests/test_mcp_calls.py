@@ -64,6 +64,7 @@ def arguments(files):
         "get_message_context": {"message_id": "M1"},
         "get_message_thread": {"message_id": "M1", "chat_jid": GROUP},
         "get_poll_results": {"message_id": "P1", "chat_jid": GROUP},
+        "watch_poll": {"message_id": "P1", "chat_jid": GROUP},
         "list_polls": {"chat_jid": GROUP},
         "get_monitor_profiles": {},
         "monitor_messages": {"targets": ["5511999990000"]},
