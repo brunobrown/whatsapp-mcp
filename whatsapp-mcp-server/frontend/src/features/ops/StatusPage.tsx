@@ -1,4 +1,5 @@
 import { CircleCheck, Unplug } from "lucide-react";
+import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +7,7 @@ import { en } from "@/i18n/en";
 import type { TextKey } from "@/i18n/t";
 import { useT } from "@/i18n/t";
 import { formatCount, formatDuration, formatMoment } from "@/lib/format";
+import { raiseNotice } from "@/lib/notices";
 import { useOpsCounters, useOpsStatus } from "@/services/services";
 import type { BridgeStatus, OpsCounters, Unavailable } from "@/types/api";
 import { Cell, DataTable } from "./DataTable";
@@ -128,6 +130,11 @@ function Connection({ status }: { status: BridgeStatus }) {
 function ConnectionSection() {
   const t = useT();
   const query = useOpsStatus();
+  const gone = query.data !== undefined && isUnavailable(query.data);
+  // The bridge going away is a global event: one notification, not one per refresh.
+  useEffect(() => {
+    if (gone) raiseNotice("bridgeUnavailable");
+  }, [gone]);
   let body: ReactNode;
   if (query.isPending) body = <Loading label={t("status.loading")} />;
   else if (query.isError)

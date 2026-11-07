@@ -1,10 +1,12 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AppProviders } from "../src/app/providers";
 import { createAppRouter } from "../src/app/router";
 import { queryClient } from "../src/lib/queryClient";
+import { resetNoticeMemory } from "../src/lib/notices";
 import { useUiStore } from "../src/stores/ui";
 import { mockViewport } from "./helpers/viewport";
 import { server } from "./msw/server";
@@ -43,6 +45,7 @@ function serve(status: Record<string, unknown>, countersBody: Record<string, unk
 
 beforeEach(() => {
   viewport = mockViewport(1280);
+  resetNoticeMemory();
   queryClient.clear();
   useUiStore.setState(useUiStore.getInitialState(), true);
   server.use(
@@ -51,6 +54,9 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  act(() => {
+    toast.dismiss();
+  });
   viewport.restore();
 });
 
@@ -83,6 +89,20 @@ describe("status page", () => {
     openStatus();
     expect((await screen.findAllByText(sentence)).length).toBeGreaterThan(0);
     expect(screen.queryByText("raw")).not.toBeInTheDocument();
+  });
+
+  it("announces a bridge that does not answer once, as a notification, and stays quiet while it is connected", async () => {
+    serve({ unavailable: "unreachable", message: "x" }, { unavailable: "unreachable", message: "x" });
+    openStatus();
+    await screen.findByText("Bridge status unavailable");
+    expect(await screen.findAllByText("The bridge status is unavailable.")).toHaveLength(1);
+  });
+
+  it("raises no notification for a connected bridge", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    await screen.findByText("Connected");
+    expect(screen.queryByText("The bridge status is unavailable.")).not.toBeInTheDocument();
   });
 
   it("shows the server's words for a reason it does not know", async () => {
