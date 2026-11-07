@@ -131,7 +131,7 @@ func recordSecretEdit(store *MessageStore, own string, decrypt secretDecryptor, 
 		}
 	case waE2E.SecretEncryptedMessage_POLL_ADD_OPTION:
 		name := inner.GetPollAddOptionMessage().GetAddOption().GetOptionName()
-		if added, err := store.AddPollOption(target, chatJID, name); err != nil {
+		if added, err := store.AddPollOption(target, store.pollChat(target, evt.Info.Chat), name); err != nil {
 			logger.Warnf("Failed to add an option to poll %s: %v", target, err)
 		} else if !added {
 			logger.Infof("Ignoring the option added to poll %s: unknown poll, not accepted, repeated or full", target)
@@ -142,7 +142,7 @@ func recordSecretEdit(store *MessageStore, own string, decrypt secretDecryptor, 
 			logger.Warnf("The edit of poll %s carries no question", target)
 			return true
 		}
-		if updated, err := store.EditPollQuestion(target, chatJID, who, question); err != nil {
+		if updated, err := store.EditPollQuestion(target, store.pollChat(target, evt.Info.Chat), who, question); err != nil {
 			logger.Warnf("Failed to edit poll %s: %v", target, err)
 		} else if !updated {
 			logger.Infof("Ignoring the edit of poll %s: unknown poll, or not by its author", target)
