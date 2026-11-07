@@ -204,6 +204,36 @@ func pollFromMessage(chatJID, id, author string, msg *waE2E.Message) (Poll, bool
 // pollVoteDecryptor decrypts the vote of a poll update message (client.DecryptPollVote).
 type pollVoteDecryptor func(*events.Message) (*waE2E.PollVoteMessage, error)
 
+// pollChat is the chat a poll's votes and edits belong to. A person has two addresses (phone and LID),
+// and the poll is stored under the one it was sent or received on, so what arrives by the other address
+// must go to the poll's chat or it is never counted. Groups have one address; an unknown poll or person
+// keeps the chat of the event.
+func (store *MessageStore) pollChat(pollID string, chat types.JID) string {
+	eventChat := chat.String()
+	if chat.Server == types.GroupServer || pollID == "" {
+		return eventChat
+	}
+	if _, found, err := store.GetPoll(pollID, eventChat); err != nil || found {
+		return eventChat
+	}
+	identity, known, err := store.GetIdentity(chat.User)
+	if err != nil || !known {
+		return eventChat
+	}
+	for _, other := range []string{
+		types.JID{User: identity.Phone, Server: types.DefaultUserServer}.String(),
+		types.JID{User: identity.LID, Server: types.HiddenUserServer}.String(),
+	} {
+		if other == eventChat || strings.HasPrefix(other, "@") {
+			continue
+		}
+		if _, found, err := store.GetPoll(pollID, other); err == nil && found {
+			return other
+		}
+	}
+	return eventChat
+}
+
 // recordPoll stores the poll of a poll message, or the decrypted vote of a poll update. A vote that
 // cannot be decrypted (the bridge never saw the poll) is only logged. It reports false when the
 // message is a poll that was refused because it reuses the ID of another person's poll.
@@ -244,7 +274,7 @@ func recordPoll(store *MessageStore, own string, decrypt pollVoteDecryptor, evt 
 	if ms := update.GetSenderTimestampMS(); ms > 0 {
 		at = time.UnixMilli(ms)
 	}
-	if _, err := store.StorePollVote(pollID, chatJID, who, hashes, at); err != nil {
+	if _, err := store.StorePollVote(pollID, store.pollChat(pollID, evt.Info.Chat), who, hashes, at); err != nil {
 		logger.Warnf("Failed to store a vote on poll %s: %v", pollID, err)
 	}
 	return true
