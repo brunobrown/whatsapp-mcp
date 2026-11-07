@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import hmac
 import ipaddress
+import socket
 import json
 import os
 import stat
@@ -27,6 +28,7 @@ MAX_BODY = 64 * 1024 + 1
 TOLERANCE_SECONDS = 300
 MIN_SECRET_BYTES = 32
 SEEN_LIMIT = 10000
+READ_TIMEOUT_SECONDS = 10
 PLACEHOLDER_SECRETS = {"replace-with-your-own-value", "<at least 32 random bytes, e.g. openssl rand -hex 32>"}
 
 
@@ -84,7 +86,7 @@ class Receiver:
             return 401
         try:
             event = json.loads(body)
-        except ValueError:
+        except (ValueError, RecursionError):     # deeply nested JSON raises RecursionError, not ValueError
             return 400
         if not isinstance(event, dict) or not isinstance(event.get("event_id"), str) or not event["event_id"] \
                 or not isinstance(event.get("type"), str) or not event["type"]:
@@ -114,6 +116,8 @@ def make_server(host: str, port: int, receiver: Receiver) -> ThreadingHTTPServer
         raise ConfigError("the receiver listens on loopback only (127.0.0.1, ::1 or localhost)")
 
     class Hook(BaseHTTPRequestHandler):
+        timeout = READ_TIMEOUT_SECONDS      # a client that stops sending cannot hold a thread for ever
+
         def do_POST(self):
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -124,7 +128,11 @@ def make_server(host: str, port: int, receiver: Receiver) -> ThreadingHTTPServer
             elif length >= MAX_BODY:
                 status = 413
             else:
-                status = receiver.handle(self.headers, self.rfile.read(length))
+                try:
+                    status = receiver.handle(self.headers, self.rfile.read(length))
+                except OSError:             # timeout or reset while reading the body
+                    self.close_connection = True
+                    return
             self.send_response(status)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -132,7 +140,11 @@ def make_server(host: str, port: int, receiver: Receiver) -> ThreadingHTTPServer
         def log_message(self, *args):   # the default log line would print the client address for each request
             pass
 
-    return ThreadingHTTPServer((host, port), Hook)
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+        address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    return Server((host, port), Hook)
 
 
 def main(argv=None) -> int:
