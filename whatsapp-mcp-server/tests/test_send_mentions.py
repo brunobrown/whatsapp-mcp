@@ -217,7 +217,7 @@ def test_real_blocked_send_is_still_audited(db, post):  # regressão de DRY-03
 
 
 def test_too_many_mentions_are_refused(db, post):  # MENT-08
-    text = " ".join(f"@55518199{n:04d}" for n in range(51))
+    text = " ".join(f"@55118888{n:04d}" for n in range(51))
 
     out = main.send_message(GROUP, text)
 
@@ -226,14 +226,14 @@ def test_too_many_mentions_are_refused(db, post):  # MENT-08
 
 
 def test_fifty_mentions_are_accepted(db, post):  # MENT-08
-    text = " ".join(f"@55518199{n:04d}" for n in range(50))
+    text = " ".join(f"@55118888{n:04d}" for n in range(50))
 
     assert main.send_message(GROUP, text)["success"] is True
     assert len(sent(post)["mentions"]) == 50
 
 
 @pytest.mark.parametrize("text", [
-    "veja https://x.com/@1234567 agora", "rode `@12345678` no shell", "prazo @2024-10-21 fechado", "a@5551819932",
+    "veja https://x.com/@1234567 agora", "rode `@12345678` no shell", "prazo @2024-10-21 fechado", "a@5511888801",
 ])
 def test_urls_code_dates_and_emails_are_not_mentions(db, post, text):  # MENT-09
     main.send_message(GROUP, text)

@@ -63,7 +63,7 @@ def test_alias_fires_as_a_whole_word_in_any_case(conn, text):  # ALIAS-01
 
 
 @pytest.mark.parametrize("text", [
-    "@assistantx", "@assistant-bot", "@assistant2", "a@assistant", "email: eu@assistant.com", "assistant", "@wall", "@@assistant2", "sem nome",
+    "@assistantx", "@assistant-bot", "@assistant2", "a@assistant", "email: eu@assistant.com", "assistant", "@assist", "@@assistant2", "sem nome",
     "x@assistant", "@assistant_",
 ])
 def test_alias_does_not_fire_inside_other_words(conn, text):  # ALIAS-01

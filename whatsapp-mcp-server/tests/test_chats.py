@@ -52,7 +52,7 @@ def test_time_and_text_come_from_the_latest_message(db):  # LAST-01, LAST-02
     db.message("g@g.us", "2026-10-21 11:30:49-03:00", "mais antiga", sender="100000000000002")
     db.message("g@g.us", "2026-10-21 11:41:05-03:00", "a última gravada", sender="100000000000006")
 
-    [chat] = whatsapp.list_chats(query="Projeto")
+    [chat] = whatsapp.list_chats(query="Project")
 
     assert chat.last_message_time == datetime(2026, 10, 21, 11, 41, 5, tzinfo=BRT)
     assert chat.last_message == "a última gravada"
@@ -64,7 +64,7 @@ def test_stale_chat_time_still_shows_real_last_message(db):  # LAST-01 (o caso d
     db.chat("g@g.us", "Client Beta", "2026-08-31 21:43:56-03:00")
     db.message("g@g.us", "2026-10-20 18:00:00-03:00", "mensagem de outubro")
 
-    [chat] = whatsapp.list_chats(query="Software")
+    [chat] = whatsapp.list_chats(query="Client")
 
     assert chat.last_message_time == datetime(2026, 10, 20, 18, 0, tzinfo=BRT)
     assert chat.last_message == "mensagem de outubro"
