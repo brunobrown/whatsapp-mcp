@@ -1,26 +1,41 @@
 # WhatsApp MCP Server
 
-This is a Model Context Protocol (MCP) server for WhatsApp.
+A Model Context Protocol (MCP) server for WhatsApp. It lets an AI agent (Claude Desktop, Claude Code, Cursor or any MCP client) read your WhatsApp messages, search contacts, send messages, files, voice messages, polls and reactions, download media, and, if you allow it, watch the account and answer under guardrails you control.
 
-With this you can search and read your personal Whatsapp messages (including images, videos, documents, and audio messages), search your contacts and send messages to either individuals or groups. You can also send media files including images, videos, documents, and audio messages.
-
-It connects to your **personal WhatsApp account** directly via the Whatsapp web multidevice API (using the [whatsmeow](https://github.com/tulir/whatsmeow) library). All your messages are stored locally in a SQLite database and only sent to an LLM (such as Claude) when the agent accesses them through tools (which you control).
-
-Here's an example of what you can do when it's connected to Claude.
+It connects to your **personal WhatsApp account** directly through the WhatsApp Web multi-device API (using the [whatsmeow](https://github.com/tulir/whatsmeow) library). Your messages are stored **locally**, in encrypted SQLite databases, and reach an LLM only when the agent calls a tool.
 
 ![WhatsApp MCP](./example-use.png)
 
-> To get updates on this and other projects I work on [enter your email here](https://docs.google.com/forms/d/1rTF9wMBTN0vPfzWuQa2BjfGKdKIpTbyeKxhPMcEzgyI/preview)
+> This repository is a fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) (MIT, by Luke Harries), which provided the first version: the Go bridge, the Python MCP server and the basic tools. This fork adds, among other things, encryption of the stored data, a local API token, a send policy with an audit log, real mentions and replies, polls, reactions, deletion, media auto-download, monitoring with auto-reply guardrails, webhooks, a Claude Code channel and a long list of fixes. See [What this fork adds](#what-this-fork-adds).
 
-> *Caution:* as with many MCP servers, the WhatsApp MCP is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). This means that project injection could lead to private data exfiltration.
+> **Caution:** as with many MCP servers, this one is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/): an agent that reads private data, reads text written by strangers and can send messages can be tricked by that text (prompt injection) into leaking data. Read [Security of your data](#security-of-your-data) and the [security guide for agents](docs/security-guide.md) before letting an agent answer on its own.
+
+## Contents
+
+- [What this fork adds](#what-this-fork-adds)
+- [Installation](#installation) · [Architecture](#architecture-overview) · [Usage](#usage) (tools, reading, monitoring, sending, reactions, polls, media, webhooks, channel, watch)
+- [Configuration](#configuration) · [Error codes](#error-codes) · [Security of your data](#security-of-your-data) · [Troubleshooting](#troubleshooting)
+- More documents: [security guide for agents](docs/security-guide.md), [example monitor profiles](docs/profile-examples.md)
+
+## What this fork adds
+
+| Area | What you get |
+| ---- | ------------ |
+| **Your data** | Databases encrypted with SQLCipher (key kept outside the project), `0600` files, a token on the bridge's local API, logs without message text, an automatic and verified migration of old plaintext databases |
+| **Reading** | Dates with a time zone, structured output, pagination, replies linked into threads, captions, file name/type/size/forwarded information, real names behind phone numbers and LIDs, group participants, `list_chats` with the real last message, conversation export with optional anonymization |
+| **Sending** | A [send policy](#send-policy) (allow or deny lists, override token, audit log), real @mentions, replies, `dry_run`, polls (single or multiple choice, anonymous, quiz, deadline), reactions, deletion for everyone, voice messages |
+| **Media** | Automatic download on arrival (so links do not expire), real error codes, batch download, optional retention |
+| **Agents** | [Monitoring and auto-reply](#monitoring-and-auto-reply) with profiles, approval token, rate limits and audit; pending drafts; [webhooks](#webhooks) with an optional durable queue; a [Claude Code channel](#claude-code-channel-research-preview); a [`watch` command and a webhook receiver](#waking-an-agent-on-an-event) for Claude Code's `Monitor`; [metrics](#metrics) |
+| **Operation** | `get_connection_status` (version, features, uptime, last events), a rotating log, `make run` and a hardened `systemd --user` unit, CI for Go and Python |
 
 ## Installation
 
 ### Prerequisites
 
-- Go
+- Go (a recent version; see `whatsapp-bridge/go.mod`) and a C compiler, because the bridge needs CGO for SQLite and SQLCipher
+- `make` (optional; it is how `make run` and `make install-service` work)
 - Python 3.11+ (the MCP server reads ISO-8601 dates in all their forms and uses `zoneinfo`; `uv` picks a matching Python for you and installs `sqlcipher3-binary`, which reads the encrypted databases)
-- Anthropic Claude Desktop app (or Cursor)
+- An MCP client: Claude Desktop, Claude Code, Cursor or another
 - UV (Python package manager), install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - FFmpeg (_optional_) - Only needed for audio messages. If you want to send audio files as playable WhatsApp voice messages, they must be in `.ogg` Opus format. With FFmpeg installed, the MCP server will automatically convert non-Opus audio files. Without FFmpeg, you can still send raw audio files using the `send_file` tool.
 
@@ -29,7 +44,7 @@ Here's an example of what you can do when it's connected to Claude.
 1. **Clone this repository**
 
    ```bash
-   git clone https://github.com/lharries/whatsapp-mcp.git
+   git clone https://github.com/brunobrown/whatsapp-mcp.git
    cd whatsapp-mcp
    ```
 
@@ -73,17 +88,25 @@ Here's an example of what you can do when it's connected to Claude.
    ~/Library/Application Support/Claude/claude_desktop_config.json
    ```
 
+   (The easy way to open it is Claude Desktop → Settings → Developer → Edit Config, which creates the file if it is missing. On Windows it is `%APPDATA%\Claude\claude_desktop_config.json`. Anthropic does not ship Claude Desktop for Linux; community builds usually read `~/.config/Claude/claude_desktop_config.json`, but check the one you use.)
+
    For **Cursor**, save this as `mcp.json` in your Cursor configuration directory at:
 
    ```
    ~/.cursor/mcp.json
    ```
 
-4. **Restart Claude Desktop / Cursor**
+   For **Claude Code**, add the server from a terminal instead of editing a file:
 
-   Open Claude Desktop and you should now see WhatsApp as an available integration.
+   ```bash
+   claude mcp add whatsapp -- uv --directory /path/to/whatsapp-mcp/whatsapp-mcp-server run main.py
+   ```
 
-   Or restart Cursor.
+4. **Restart the client** (Claude Desktop, Cursor; Claude Code needs a new session)
+
+   WhatsApp should now appear as an available integration. Ask for `get_connection_status` to check that the bridge is connected.
+
+5. **Read the security notes** in [Security of your data](#security-of-your-data) before you let an agent send anything. By default every sending tool works; the [send policy](#send-policy) is how you restrict where the agent may write.
 
 ### Windows Compatibility
 
@@ -125,7 +148,7 @@ This application consists of two main components:
 
 #### Database changes
 
-The bridge upgrades `store/messages.db` by itself when it starts, only by adding to it (`ALTER TABLE … ADD COLUMN`, `CREATE … IF NOT EXISTS`); nothing is recreated or dropped, and existing messages are kept. Added over time: `messages.local_path`, `messages.mimetype`, `messages.forwarded`, `messages.quoted_id`, the `contacts_identity`, `polls`, `poll_votes` and `reactions` tables and the `idx_messages_chat_ts` index. The MCP server opens the database read-only and still works, with those fields empty, if the bridge has not upgraded it yet. Back up `store/messages.db` before the first start with a new version if you want a way back.
+The bridge upgrades `store/messages.db` by itself when it starts, only by adding to it (`ALTER TABLE … ADD COLUMN`, `CREATE … IF NOT EXISTS`); nothing is recreated or dropped, and existing messages are kept. Added over time: `messages.local_path`, `messages.mimetype`, `messages.forwarded`, `messages.quoted_id`, `messages.deleted_at`, `polls.ends_at_ms`, `polls.quiz`, `polls.correct_answer`, `polls.closed_notified`, the `contacts_identity`, `polls`, `poll_votes` and `reactions` tables and the `idx_messages_chat_ts` index. The MCP server opens the database read-only and still works, with those fields empty, if the bridge has not upgraded it yet. Back up `store/messages.db` before the first start with a new version if you want a way back.
 
 ## Usage
 
@@ -133,7 +156,7 @@ Once connected, you can interact with your WhatsApp contacts through Claude, lev
 
 ### MCP Tools
 
-Claude can access the following 26 tools to interact with WhatsApp.
+The server offers the following 34 tools to interact with WhatsApp.
 
 Every tool declares what it does through MCP tool annotations: the readers are marked read-only, the senders write but do not destroy, `delete_message` is marked destructive and the downloads write local files, so a client can ask for confirmation before the ones that reach other people. The server also tells the client, in its instructions, that the text of messages, captions, names and polls is written by other people and is untrusted data, not instructions; the structured readers that carry that text (`get_message_thread`, `get_poll_results`, `list_polls`, `get_message_reactions`) add `untrusted_content=true` to a successful answer.
 
@@ -153,6 +176,7 @@ Every tool declares what it does through MCP tool annotations: the readers are m
 - **list_polls**: The polls of a chat, newest first, with the votes of each option. See [Polls](#polls).
 - **watch_poll**: Wait for new votes in a poll and say who changed what. Call it in a loop with the returned cursor. See [Polls](#polls).
 - **get_group_participants**: List the participants of a group with name, phone number, LID and admin status
+- **export_conversation**: A window of one chat (messages, polls with votes, reactions) as structured data, oldest first, with optional anonymization. Read only. See [Exporting a conversation](#exporting-a-conversation).
 
 **Sending**
 
@@ -174,15 +198,18 @@ Every tool declares what it does through MCP tool annotations: the readers are m
 - **monitor_messages**: Watch for new messages that mention, reply to or write to the account (or to other numbers), call the agent by name, or reply to the agent. Call it in a loop with the returned cursor; it can wait for new events.
 - **monitor_reply**: Answer one of those messages, in its chat and quoting it, under the guardrails of a profile (approval, trusted senders, rate limits, audit).
 - **get_monitor_profiles**: List the monitoring profiles and their guardrails.
+- **list_pending_drafts**, **discard_pending_draft**: The replies that `monitor_reply` could not send for lack of the approval token, and a way to drop one. See [Pending drafts](#pending-drafts).
 
 **Webhooks** (see [Webhooks](#webhooks))
 
 - **get_webhook_status**: Are the webhooks on, how are the deliveries going (delivered, failed, dropped, queued, last error) for each endpoint.
 - **test_webhook**: Send one signed ping to an endpoint and report its answer.
 
-**Diagnostics**
+**Diagnostics and files**
 
-- **get_connection_status**: Is the bridge running and connected to WhatsApp? Returns the number, uptime, the time of the last event and message, pending media retries. See [Checking the bridge](#checking-the-bridge).
+- **get_metrics**: Counters (messages, replies per profile, sends, drafts, webhooks) without any text. See [Metrics](#metrics).
+- **save_conversation_export**: `export_conversation`, also written to a private file in the configuration directory.
+- **get_connection_status**: Is the bridge running and connected to WhatsApp? Returns the number, uptime, the time of the last event and message, pending media retries, plus the server version, its features and what is switched on (webhooks, channel). See [Checking the bridge](#checking-the-bridge).
 
 ### What else the bridge understands
 
@@ -225,7 +252,7 @@ Each message has `id`, `timestamp`, `chat_jid`, `chat_name`, `sender`, `sender_n
 
 An agent can watch the account (`"me"`) and/or other numbers and answer on its own. Two uses: *be answered when someone mentions or writes to you* and *follow what other numbers write* (for example, to gather evidence for a task, a feature or a fix). The server enforces the guardrails; the agent only sees the result.
 
-**How it works.** MCP cannot push events to an agent, so the agent calls `monitor_messages` in a loop:
+**How it works.** MCP cannot push events to an agent on its own, so the agent calls `monitor_messages` in a loop (to be *told* instead, see the [channel](#claude-code-channel-research-preview) and [`watch.py`](#waking-an-agent-on-an-event)):
 
 1. First call, without `cursor`: returns the current `cursor` and no events (history is not replayed).
 2. Next calls, with the `cursor`: return the events that arrived after it, in arrival order, and a new cursor. With `wait_seconds` (up to 55) the call waits for a new event and comes back with `timed_out=true` if none arrives. Call again at once with the cursor you got.
@@ -607,6 +634,9 @@ Environment variables are read **only when the process starts**: after changing 
 | `WHATSAPP_KEEP_DELETED_CONTENT` | bridge | off | `true` keeps the text and media of a message its author deleted for everyone (see [Messages deleted for everyone](#messages-deleted-for-everyone)) |
 | `WHATSAPP_MONITOR_DRAFTS` | MCP server | `monitor_drafts.json` next to the audit log | Path of the pending drafts file, or `off` to keep none |
 | `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` | MCP server | `24` | How long a pending draft lives (at most 168) |
+| `WHATSAPP_CHANNEL_CONFIG` | MCP server | `<config dir>/channel.json` | Path of the [channel](#claude-code-channel-research-preview) configuration. No file means off |
+| `WHATSAPP_CHANNEL_STATE` | MCP server | `<config dir>/channel_state.json` | Where the channel keeps its position and the ids it announced |
+| `WEBHOOK_SECRET` | `webhook_receiver.py` | - | The endpoint's secret for the reference receiver (or `--secret-file`) |
 | `WHATSAPP_DB_ENCRYPTION` | bridge | `on` | `on` encrypts the databases (and migrates plaintext ones at start); `off` keeps them in plain SQLite |
 | `WHATSAPP_DB_KEY` | bridge, MCP server | - | The master key of the databases, 64 hexadecimal characters; wins over the key file |
 | `WHATSAPP_DB_KEY_FILE` | bridge, MCP server | `<config dir>/db.key` | A file with the master key (it must exist) |
@@ -630,6 +660,9 @@ Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`,
 Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
 Status: `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
 Webhooks: `ENDPOINT_NOT_FOUND`, `INVALID_ARGUMENT`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `UNKNOWN`.
+Drafts: `DRAFT_NOT_FOUND`.
+Export: `CHAT_NOT_FOUND`, `AMBIGUOUS_CHAT`, `EXPORT_EXISTS`, `EXPORT_WRITE_FAILED`, `DIRECTORY_UNAVAILABLE`, `INVALID_ARGUMENT`.
+Command line (`watch.py`): lines `state=error code=...` with `PROFILE_NOT_FOUND`, `PROFILE_DISABLED`, `MONITOR_CONFIG_INVALID`, `CURSOR_FILE_OPEN`, `CURSOR_FILE_INVALID`, `CURSOR_FILE_UNREADABLE`, `INVALID_ARGUMENT`, `DIRECTORY_UNAVAILABLE`.
 Database: `DATABASE_KEY_UNAVAILABLE`, `DATABASE_UNREADABLE` (the MCP server cannot open an encrypted database).
 
 ## Security of your data
@@ -676,7 +709,7 @@ The bridge keeps a random token in `api_token` (same directory as `db.key`, `060
 
 ### Files with tokens
 
-`send_policy.json` and `monitor_profiles.json` hold tokens. If other users can read them, the server logs a warning, and `get_monitor_profiles` lists `warnings`, with the `chmod 600` to run.
+`send_policy.json` and `monitor_profiles.json` hold tokens (and `webhooks.json` holds secrets; the bridge refuses it if others can read it). `channel.json`, `monitor_drafts.json`, the cursor files of `watch.py` and the exports are also private (`0600`); the channel refuses a `channel.json` that others can read. If other users can read them, the server logs a warning, and `get_monitor_profiles` lists `warnings`, with the `chmod 600` to run.
 
 ### As a service
 
@@ -693,6 +726,7 @@ Permissions and `umask` do not apply (they rely on your user profile's access ru
 3. The Go accesses the WhatsApp API and keeps the SQLite database up to date
 4. Data flows back through the chain to Claude
 5. When sending messages, the request flows from Claude through the MCP server to the Go bridge and to WhatsApp
+6. Events can also flow the other way, only as notices: the bridge's [webhooks](#webhooks), the [channel](#claude-code-channel-research-preview) and the [`watch.py`](#waking-an-agent-on-an-event) lines tell an agent that something happened; the agent then reads it with the tools
 
 **Versioning.** Releases follow [Semantic Versioning](https://semver.org) (`MAJOR.MINOR.PATCH`) and are tagged `vMAJOR.MINOR.PATCH`. While the major version is 0, a new minor version may change how a tool behaves and a patch only fixes. The version is written once, in `whatsapp-mcp-server/pyproject.toml`, and the MCP server reports it when a client connects. Earlier tag: `v0.0.1`.
 
