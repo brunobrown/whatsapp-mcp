@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -13,6 +13,7 @@ import { FakeBridge } from "./fakeBridge";
 const FRONTEND = resolve(import.meta.dirname, "..", "..");
 export const SERVER_DIR = resolve(FRONTEND, "..");
 const HOOK_DIR = resolve(import.meta.dirname, "pyhook");
+export const FIXTURE_DIR = join(SERVER_DIR, "tests", "fixtures", "ui");
 
 /** The password every harness creates. Made up for the tests. */
 export const PASSWORD = "correct horse battery staple";
@@ -26,6 +27,10 @@ export interface HarnessOptions {
   extraSections?: boolean;
   /** The port of the interface; a free one by default. */
   port?: number;
+  /** Files of tests/fixtures/ui (written by 0.6.0) copied into the configuration directory before the start. */
+  seed?: string[];
+  /** The idle limit of a session in seconds (the product's own is 30 minutes). */
+  idleSeconds?: number;
 }
 
 export async function freePort(): Promise<number> {
@@ -82,6 +87,10 @@ export class Harness {
     const token = randomBytes(32).toString("hex");
     writeFileSync(join(this.configDir, "api_token"), token, { mode: 0o600 });
     this.bridge = new FakeBridge(token);
+    for (const name of options.seed ?? []) {
+      copyFileSync(join(FIXTURE_DIR, name), this.file(name));
+      chmodSync(this.file(name), 0o600);
+    }
   }
 
   get url(): string {
@@ -109,7 +118,7 @@ export class Harness {
     }
     await this.bridge.start();
     await this.launch();
-    if (this.options.password !== false) await this.createPassword();
+    if (this.options.password !== false && !(this.options.seed ?? []).includes("ui_auth.json")) await this.createPassword();
   }
 
   /** Starts the interface process on the harness' port; the first call picks the port. */
@@ -130,6 +139,7 @@ export class Harness {
       PYTHONUNBUFFERED: "1",
       E2E_BRIDGE_URL: this.bridge.url,
       ...(this.extraDir !== undefined && { E2E_EXTRA_SECTIONS_DIR: this.extraDir }),
+      ...(this.options.idleSeconds !== undefined && { E2E_IDLE_SECONDS: String(this.options.idleSeconds) }),
       ...this.options.env,
       ...extraEnv,
     };
