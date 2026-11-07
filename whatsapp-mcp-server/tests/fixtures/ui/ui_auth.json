@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "scrypt": {
+    "n": 32768,
+    "r": 8,
+    "p": 1
+  },
+  "salt": "077769d4278a9b97173829acc78de3be",
+  "hash": "0e48752d1b2f1a77db910e71cbd21636151a33018ee0e3ff1e79a2f073f73f58"
+}

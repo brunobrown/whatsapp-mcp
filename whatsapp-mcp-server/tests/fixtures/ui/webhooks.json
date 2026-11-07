@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "endpoints": [
+    {
+      "name": "example",
+      "url": "https://example.com/hook",
+      "secret": "0123456789abcdef0123456789abcdef0123",
+      "events": [
+        "message",
+        "poll_vote"
+      ],
+      "chats": [],
+      "include_content": false,
+      "include_own": false,
+      "allow_private_network": false,
+      "persist_queue": false
+    }
+  ]
+}
