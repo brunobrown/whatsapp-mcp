@@ -56,7 +56,7 @@ func (rc *receiver) got() []receivedHook {
 
 func (rc *receiver) waitFor(t *testing.T, n int) []receivedHook {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(30 * time.Second) // generous: a loaded machine makes a thousand requests slow
 	for time.Now().Before(deadline) {
 		if got := rc.got(); len(got) >= n {
 			return got

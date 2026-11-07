@@ -251,6 +251,16 @@ func webhookSign(secret, timestamp string, body []byte) string {
 	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
+// Prefixes that carry an IPv4 address inside an IPv6 one: the embedded address could be a private one.
+var webhookEmbeddedV4 = func() []*net.IPNet {
+	var nets []*net.IPNet
+	for _, cidr := range []string{"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16"} { // NAT64, local-use NAT64, 6to4
+		_, n, _ := net.ParseCIDR(cidr)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
 // webhookIPAllowed is the destination policy for the address actually connected to.
 func webhookIPAllowed(ip net.IP, loopbackDest, allowPrivate bool) bool {
 	if v4 := ip.To4(); v4 != nil {
@@ -258,6 +268,16 @@ func webhookIPAllowed(ip net.IP, loopbackDest, allowPrivate bool) bool {
 	}
 	if loopbackDest {
 		return ip.IsLoopback()
+	}
+	if ip.To4() == nil {
+		for _, n := range webhookEmbeddedV4 {
+			if n.Contains(ip) {
+				return false
+			}
+		}
+	}
+	if v4 := ip.To4(); v4 != nil && v4[0] == 0 { // 0.0.0.0/8, "this network"
+		return false
 	}
 	if allowPrivate {
 		// private networks only: never loopback (the bridge's own API), link-local (cloud metadata) or the like
@@ -268,7 +288,7 @@ func webhookIPAllowed(ip net.IP, loopbackDest, allowPrivate bool) bool {
 		ip.IsUnspecified() || ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
 		return false
 	}
-	if v4 := ip.To4(); v4 != nil && (v4[0] == 0 || (v4[0] == 100 && v4[1]&0xc0 == 64)) { // 0.0.0.0/8; 100.64.0.0/10, carrier-grade NAT
+	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1]&0xc0 == 64 { // 100.64.0.0/10, carrier-grade NAT
 		return false
 	}
 	return true
