@@ -55,8 +55,13 @@ def resolve(environ: MutableMapping[str, str]) -> Settings:
 
 
 def remote_warning(settings: Settings) -> str:
-    return (f"The interface listens on {settings.host}, which other machines can reach. It has a password but no TLS "
+    text = (f"The interface listens on {settings.host}, which other machines can reach. It has a password but no TLS "
             "of its own: put it behind a reverse proxy that does HTTPS, or do not expose it.")
+    wildcard = settings.host.strip().lower() in ("0.0.0.0", "::")
+    if wildcard and not (settings.startup_environ.get("WHATSAPP_UI_ALLOWED_HOSTS") or "").strip():
+        text += (" This address is a wildcard, so only localhost names are served until you list the host names people "
+                 "reach it by in WHATSAPP_UI_ALLOWED_HOSTS (comma separated, `name` or `name:port`).")
+    return text
 
 
 def check_port_free(host: str, port: int) -> None:

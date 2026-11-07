@@ -106,11 +106,56 @@ def test_a_configured_remote_host_is_accepted_only_with_the_opt_in(tmp_path):
     assert client_for(app2, "http://192.168.1.20:8765").get("/api/open").status_code == 421
 
 
-def test_a_wildcard_bind_with_the_opt_in_accepts_the_name_the_operator_reaches_it_by(tmp_path):
-    wild = Settings(host="0.0.0.0", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
-    app, *_ = build(tmp_path, wild)
+def wild(allowed=None):
+    env = {"WHATSAPP_UI_ALLOW_REMOTE": "true"}
+    if allowed is not None:
+        env["WHATSAPP_UI_ALLOWED_HOSTS"] = allowed
+    return Settings(host="0.0.0.0", port=8765, remote=True, startup_environ=env)
+
+
+def test_a_wildcard_bind_accepts_no_remote_name_unless_the_operator_lists_it(tmp_path):
+    # DNS rebinding: any name resolving to this machine must not be served just because the bind is a wildcard
+    app, *_ = build(tmp_path, wild())
+
+    assert client_for(app, "http://mcp.example.net:8765").get("/api/open").status_code == 421
+    assert client_for(app, "http://127.0.0.1:8765").get("/api/open").status_code == 200
+
+
+def test_a_wildcard_bind_accepts_exactly_the_listed_names(tmp_path):
+    app, *_ = build(tmp_path, wild("mcp.example.net, Other.Example.Net"))
 
     assert client_for(app, "http://mcp.example.net:8765").get("/api/open").status_code == 200
+    assert client_for(app, "http://other.example.net:8765").get("/api/open").status_code == 200
+    assert client_for(app, "http://evil.example:8765").get("/api/open").status_code == 421
+
+
+def test_a_listed_name_is_served_on_the_bind_port_or_behind_a_proxy_without_a_port(tmp_path):
+    app, *_ = build(tmp_path, wild("mcp.example.net"))
+
+    assert client_for(app, "http://mcp.example.net").get("/api/open").status_code == 200      # proxy on 80/443
+    assert client_for(app, "http://mcp.example.net:9999").get("/api/open").status_code == 421  # a port nobody configured
+
+
+def test_a_listed_name_with_a_port_is_served_only_on_that_port(tmp_path):
+    app, *_ = build(tmp_path, wild("mcp.example.net:8443"))
+
+    assert client_for(app, "http://mcp.example.net:8443").get("/api/open").status_code == 200
+    assert client_for(app, "http://mcp.example.net:8765").get("/api/open").status_code == 421
+    assert client_for(app, "http://mcp.example.net").get("/api/open").status_code == 421
+
+
+def test_the_list_does_nothing_without_the_remote_opt_in(tmp_path):
+    closed = Settings(host="0.0.0.0", port=8765, startup_environ={"WHATSAPP_UI_ALLOWED_HOSTS": "mcp.example.net"})
+    app, *_ = build(tmp_path, closed)
+
+    assert client_for(app, "http://mcp.example.net:8765").get("/api/open").status_code == 421
+
+
+def test_a_configured_remote_host_is_refused_on_a_wrong_port(tmp_path):
+    remote = Settings(host="192.168.1.20", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
+    app, *_ = build(tmp_path, remote)
+
+    assert client_for(app, "http://192.168.1.20:9999").get("/api/open").status_code == 421
 
 
 # -- Origin, CSRF and JSON -------------------------------------------------------------------------

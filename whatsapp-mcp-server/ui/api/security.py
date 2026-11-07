@@ -38,16 +38,32 @@ def _split_host(value: str) -> Tuple[str, Optional[str]]:
     return (name, port) if sep else (value, None)
 
 
+def _listed_hosts(settings: Settings) -> Tuple[Tuple[str, Optional[str]], ...]:
+    """The names the operator allows besides the bind address: WHATSAPP_UI_ALLOWED_HOSTS, comma separated, each `name` or
+    `name:port`. Read from the environment the process started with, never from what the interface saves."""
+    raw = settings.startup_environ.get("WHATSAPP_UI_ALLOWED_HOSTS") or ""
+    return tuple(_split_host(item) for item in raw.split(",") if item.strip())
+
+
 def host_allowed(host_header: str, settings: Settings) -> bool:
+    """Whether the Host header names this server. Loopback names are served on the bind port. Anything else needs the
+    remote opt-in and must be the configured bind address on the bind port, or be listed in WHATSAPP_UI_ALLOWED_HOSTS
+    (a wildcard bind is not a licence to serve every name that resolves here: that is DNS rebinding)."""
     name, port = _split_host(host_header)
     if not name:
         return False
-    if name in _LOOPBACK_NAMES and port == str(settings.port):
+    bind_port = str(settings.port)
+    if name in _LOOPBACK_NAMES and port == bind_port:
         return True
     if not allows_remote(settings):
         return False
     configured = settings.host.strip().lower()
-    return configured in _WILDCARDS or name == configured
+    if configured not in _WILDCARDS and name == configured and port == bind_port:
+        return True
+    for listed_name, listed_port in _listed_hosts(settings):
+        if name == listed_name and (port == listed_port if listed_port is not None else port in (None, bind_port)):
+            return True
+    return False
 
 
 def _is_secure(request: Request, settings: Settings) -> bool:

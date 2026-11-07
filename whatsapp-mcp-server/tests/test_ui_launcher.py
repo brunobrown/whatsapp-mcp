@@ -214,3 +214,15 @@ def test_the_module_exits_1_with_a_message_when_the_port_is_busy():
         _, err = process.communicate(timeout=30)
 
     assert process.returncode == 1 and "already in use" in err
+
+
+def test_the_warning_for_a_wildcard_bind_says_which_host_names_are_served():
+    wildcard = launcher.Settings(host="0.0.0.0", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" in launcher.remote_warning(wildcard)
+
+    listed = launcher.Settings(host="0.0.0.0", port=8765, remote=True,
+                               startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true", "WHATSAPP_UI_ALLOWED_HOSTS": "mcp.example.net"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" not in launcher.remote_warning(listed)
+
+    named = launcher.Settings(host="192.168.1.20", port=8765, remote=True, startup_environ={"WHATSAPP_UI_ALLOW_REMOTE": "true"})
+    assert "WHATSAPP_UI_ALLOWED_HOSTS" not in launcher.remote_warning(named)
