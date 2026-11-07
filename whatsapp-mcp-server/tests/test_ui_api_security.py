@@ -217,6 +217,20 @@ def test_the_origin_of_the_page_itself_is_accepted(tmp_path):
     assert response.status_code == 200 and target.read_text() == "changed"
 
 
+def test_the_dev_proxy_headers_are_served_on_a_non_default_port(tmp_path):  # MIG-15
+    """What the Vite dev proxy forwards (Host and Origin of http://127.0.0.1:<WHATSAPP_UI_PORT>) is accepted; what the
+    browser sent to Vite (Host localhost:5173) is not, which is why the proxy rewrites both."""
+    app, sessions, _, target = build(tmp_path, Settings(host="127.0.0.1", port=9123))
+    base = "http://127.0.0.1:9123"
+    client, session = signed_in(app, sessions, base)
+    headers = {security.CSRF_HEADER: session.csrf, "Origin": base}
+
+    assert client.get("/api/data").status_code == 200
+    assert client.post("/api/data", json={}, headers=headers).status_code == 200 and target.read_text() == "changed"
+    vite = TestClient(app, base_url="http://localhost:5173")
+    assert vite.get("/api/open").status_code == 421
+
+
 def test_a_write_with_a_body_that_is_not_json_is_403(tmp_path):
     app, sessions, _, target = build(tmp_path)
     client, session = signed_in(app, sessions)
