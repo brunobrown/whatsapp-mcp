@@ -93,7 +93,8 @@ class FormFlow:
         elif self._is_file:
             self._load_file()
         else:
-            self.version, self._stored = "read-only", {}
+            facts = self.section.facts
+            self.version, self._stored = "read-only", copy.deepcopy(facts()) if facts else {}
         self._draft = copy.deepcopy(self._stored)
         self._loaded = True
         return self.view()

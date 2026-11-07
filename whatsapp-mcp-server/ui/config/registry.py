@@ -57,6 +57,8 @@ class Section:
     # turns the file's values into the form's, `encode` turns them back. The validator always sees the file shape.
     decode: Callable[[Dict[str, Any]], Dict[str, Any]] = field(default=_identity, repr=False)
     encode: Callable[[Dict[str, Any]], Dict[str, Any]] = field(default=_identity, repr=False)
+    # For a ReadOnly section: the facts to show, read each time the section is opened.
+    facts: Optional[Callable[[], Dict[str, Any]]] = field(default=None, repr=False)
 
     def __post_init__(self):
         keys = [f.key for f in self.fields]

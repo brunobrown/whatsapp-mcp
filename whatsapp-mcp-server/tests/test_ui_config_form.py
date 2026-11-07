@@ -361,3 +361,15 @@ def test_the_validator_sees_the_file_shape_when_a_draft_is_checked(tmp_path):
     flow.apply({"items": [{"name": "x", "level": 3}]})
     assert flow.validate().can_save is True
     assert seen[-1] == {"items": {"x": {"level": 3}}}
+
+
+def test_a_read_only_section_shows_the_facts_it_declares_and_cannot_be_changed():
+    reg = Registry()
+    reg.register(Section(id="facts", title="Facts", order=1, storage=ReadOnly(), fields=(Field("path", "Path", "text"),),
+                         facts=lambda: {"path": "/somewhere", "hidden": "x"}))
+    flow = FormFlow("facts", reg, ConfigStore(reg))
+    view = flow.load()
+    assert view.read_only is True and view.values == {"path": "/somewhere"}
+    flow.apply({"path": "/elsewhere"})
+    outcome = flow.save()
+    assert outcome.ok is False and flow.view().values == {"path": "/somewhere"}
