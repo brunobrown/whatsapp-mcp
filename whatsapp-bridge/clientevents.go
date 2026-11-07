@@ -17,7 +17,7 @@ func setupWebhooks(store *MessageStore, state *bridgeState, logger waLog.Logger)
 		store.webhooks = loadWebhooks(cfgDir, logger)
 	}
 	state.webhooks = store.webhooks.Status
-	return func() { store.webhooks.Close(5 * time.Second) }
+	return func() { store.webhooks.Close(webhookCloseWait) }
 }
 
 // clientEventHandler handles what the WhatsApp client reports. startIdentitySync runs in the background

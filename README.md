@@ -403,7 +403,7 @@ MCP cannot push events to an agent, so by default the agent asks (`monitor_messa
     {
       "name": "agent",
       "url": "http://127.0.0.1:9000/hook",
-      "secret": "<at least 32 random characters>",
+      "secret": "<at least 32 random bytes, e.g. openssl rand -hex 32>",
       "events": ["message", "poll_vote"],
       "chats": ["120363000000000000@g.us"],
       "include_content": false,
@@ -436,7 +436,7 @@ Deleted messages are not an event: the bridge does not process them.
 
 **Delivery** is at least once. Each attempt has a 5 s limit; a network error, 5xx, 408 or 429 is repeated after 1 s, 4 s, 16 s, 1 min and 5 min (six attempts, about 6 minutes), any other 4xx is dropped, and a redirect is **not followed**. The queue is in memory, one per endpoint, 1000 events: when it is full the oldest is dropped (`dropped` in the status). A slow endpoint does not hold up the others or the reception of messages. A restart loses what was waiting, but nothing is lost for good: messages and votes are in the database, so a receiver catches up with `monitor_messages` or `watch_poll`. A body over 64 KiB is sent with `truncated: true` and without the text.
 
-**Destinations**: `https://` to any host; `http://` only to `127.0.0.1`, `::1` and `localhost`; no user name or password in the URL; never the bridge's own API. The bridge checks the address it actually connects to: a loopback destination reaches only loopback, and every other one is refused if it resolves to loopback, a private network, link-local (cloud metadata) or multicast, unless `allow_private_network` is `true`, which lifts the private-network refusal (it also lets public addresses through, as before, but never loopback, link-local, multicast, `0.0.0.0/8` or the IPv6 forms that embed an IPv4 address: NAT64 and 6to4).
+**Destinations**: `https://` to any host; `http://` only to a loopback address (`127.0.0.0/8`, `::1`) or `localhost`; no user name or password in the URL; never the bridge's own API. The bridge checks the address it actually connects to: a loopback destination reaches only loopback, and every other one is refused if it resolves to loopback, a private network, link-local (cloud metadata) or multicast, unless `allow_private_network` is `true`, which lifts the private-network refusal (it also lets public addresses through, as before, but never loopback, link-local, multicast, `0.0.0.0/8` or the IPv6 forms that embed an IPv4 address: NAT64 and 6to4).
 
 **Watching it**: `get_webhook_status` (or `webhooks` in `/api/status`) shows, per endpoint, `delivered`, `failed`, `dropped`, `queued`, `last_error` and `last_success_at`, and, if `webhooks.json` was refused, `error`. Neither the address nor the secret is ever shown. `test_webhook(name)` sends one ping. The bridge log has a line per delivery (endpoint, host, event id, type, attempts, HTTP code), never the body, the secret or the full URL.
 

@@ -303,7 +303,11 @@ func TestFullQueueDropsTheOldestAndASlowEndpointDoesNotHoldUpAnother(t *testing.
 	release := make(chan struct{})
 	slow := newReceiver(t, func(_ int, w http.ResponseWriter, _ *http.Request) { <-release })
 	fast := newReceiver(t, nil)
-	d := dispatcherFor(t, nil, webhookEndpointConfig{URL: slow.srv.URL, Name: "slow"}, webhookEndpointConfig{URL: fast.srv.URL, Name: "fast"})
+	// the flood is made of messages, which only the slow endpoint asked for; the fast one gets a few
+	// connection events, so its own queue never overflows and the test does not depend on machine speed
+	d := dispatcherFor(t, nil,
+		webhookEndpointConfig{URL: slow.srv.URL, Name: "slow", Events: []string{"message"}},
+		webhookEndpointConfig{URL: fast.srv.URL, Name: "fast", Events: []string{"connection"}})
 	t.Cleanup(func() { close(release) })
 
 	d.Emit(msgEvent("FIRST"))
@@ -311,10 +315,13 @@ func TestFullQueueDropsTheOldestAndASlowEndpointDoesNotHoldUpAnother(t *testing.
 	for i := 0; i < webhookQueueLimit+3; i++ {
 		d.Emit(msgEvent(fmt.Sprintf("E%d", i)))
 	}
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		d.Emit(connectionWebhookEvent(fmt.Sprintf("state%d", i), now.Add(time.Duration(i)*time.Millisecond)))
+	}
 
-	st := d.Status()
 	var slowSt webhookEndpointStatus
-	for _, e := range st.Endpoints {
+	for _, e := range d.Status().Endpoints {
 		if e.Name == "slow" {
 			slowSt = e
 		}
@@ -322,8 +329,8 @@ func TestFullQueueDropsTheOldestAndASlowEndpointDoesNotHoldUpAnother(t *testing.
 	if slowSt.Queued != webhookQueueLimit || slowSt.Dropped != 3 {
 		t.Errorf("slow endpoint: queued %d, dropped %d; want %d and 3", slowSt.Queued, slowSt.Dropped, webhookQueueLimit)
 	}
-	if got := len(fast.waitFor(t, webhookQueueLimit+4)); got < webhookQueueLimit+4 {
-		t.Errorf("fast endpoint got %d events while the other was stuck, want all %d", got, webhookQueueLimit+4)
+	if got := len(fast.waitFor(t, 5)); got != 5 {
+		t.Errorf("fast endpoint got %d events while the other was stuck, want all 5", got)
 	}
 }
 
