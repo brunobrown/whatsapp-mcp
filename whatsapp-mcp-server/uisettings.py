@@ -4,12 +4,14 @@ The file only fills in a variable that is missing from the environment, so the e
 modules keep reading their variables as before. Only the variables in EDITABLE_ENV can come from the file: never a
 secret, a key, the configuration directory, a path to another file or the opt-in to a remote bind.
 """
+import atexit
 import json
 import os
 import stat
 import sys
+import tempfile
 from dataclasses import dataclass, field
-from typing import List, MutableMapping, Optional
+from typing import Dict, List, MutableMapping, Optional
 
 import localconfig
 
@@ -38,6 +40,7 @@ class Result:
     applied: List[str] = field(default_factory=list)
     ignored_keys: List[str] = field(default_factory=list)
     problem: Optional[str] = None      # why the whole file was ignored; never carries its content
+    file_env: Dict[str, str] = field(default_factory=dict)   # the editable variables the file holds, whoever won
 
 
 def path() -> str:
@@ -75,7 +78,9 @@ def apply(environ: Optional[MutableMapping[str, str]] = None) -> Result:
     for name, value in values.items():
         if name not in EDITABLE_ENV or not isinstance(value, str):
             result.ignored_keys.append(str(name))
-        elif name not in environ:
+            continue
+        result.file_env[name] = value
+        if name not in environ:
             environ[name] = value
             result.applied.append(name)
     if result.problem:
@@ -83,3 +88,36 @@ def apply(environ: Optional[MutableMapping[str, str]] = None) -> Result:
     if result.ignored_keys:
         print(f"ui_settings: ignored keys: {', '.join(sorted(result.ignored_keys))}", file=sys.stderr)
     return result
+
+
+RUNTIME_DIR_NAME = "runtime"
+
+
+def runtime_dir() -> str:
+    return os.path.join(localconfig.config_dir(), RUNTIME_DIR_NAME)
+
+
+def register_runtime(result: Result, pid: Optional[int] = None) -> Optional[str]:
+    """Leave a private note of what this server read from the file, so the interface can tell which running
+    servers still hold an older value. The note is removed when the server ends. A failure is never fatal."""
+    pid = os.getpid() if pid is None else pid
+    try:
+        folder = runtime_dir()
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+        path = os.path.join(folder, f"server-{pid}.json")
+        fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=folder)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"pid": pid, "file_env": result.file_env}, f)
+        os.replace(tmp, path)
+    except OSError:
+        return None
+    atexit.register(unregister_runtime, pid)
+    return path
+
+
+def unregister_runtime(pid: Optional[int] = None) -> None:
+    pid = os.getpid() if pid is None else pid
+    try:
+        os.unlink(os.path.join(runtime_dir(), f"server-{pid}.json"))
+    except OSError:
+        pass

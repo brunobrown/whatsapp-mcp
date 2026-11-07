@@ -147,3 +147,81 @@ def test_validate_returns_problems_with_the_field_they_belong_to():
 
 def test_read_only_storage_has_no_path_to_write():
     assert isinstance(ReadOnly(), ReadOnly) and not hasattr(ReadOnly(), "path")
+
+
+# ---- Field.check: the generic rule for one value (type, bounds, options, size, no control characters) ----
+
+def check(kind, value, **extra):
+    return Field("thing", "Thing", kind, **extra).check(value)
+
+
+def test_an_unset_value_is_always_fine():
+    for kind in ("bool", "int", "text", "list"):
+        assert check(kind, None) is None
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_a_bool_accepts_only_booleans(value):
+    assert check("bool", value) is None
+
+
+@pytest.mark.parametrize("value", ["true", 1, 0, "", []])
+def test_a_bool_refuses_anything_else(value):
+    assert check("bool", value)
+
+
+def test_an_int_respects_its_bounds_and_is_not_a_bool():
+    assert check("int", 5, bounds=(1, 10)) is None
+    assert check("int", 0, bounds=(1, 10)) and check("int", 11, bounds=(1, 10))
+    assert check("int", True) and check("int", 2.5) and check("int", "3")
+
+
+def test_a_float_refuses_nan_and_infinity_and_respects_bounds():
+    assert check("float", 2.5, bounds=(0, 60)) is None and check("float", 3, bounds=(0, 60)) is None
+    assert check("float", float("nan")) and check("float", float("inf")) and check("float", 61, bounds=(0, 60))
+    assert check("float", True)
+
+
+def test_text_has_a_size_limit_and_no_control_characters():
+    assert check("text", "hello") is None
+    assert check("text", "x" * 11, max_length=10)
+    assert check("text", "a\x00b") and check("text", "a\nb") and check("text", "a\x7fb")
+    assert check("text", 5)
+
+
+def test_a_choice_must_be_one_of_its_options():
+    assert check("choice", "a", options=("a", "b")) is None
+    assert check("choice", "c", options=("a", "b")) and check("choice", 1, options=("a", "b"))
+
+
+def test_a_multichoice_is_a_list_of_distinct_options():
+    assert check("multichoice", ["a", "b"], options=("a", "b", "c")) is None
+    assert check("multichoice", ["a", "a"], options=("a", "b")) and check("multichoice", ["z"], options=("a",))
+    assert check("multichoice", "a", options=("a",))
+
+
+def test_a_list_is_a_bounded_list_of_clean_texts():
+    assert check("list", ["a", "b"]) is None
+    assert check("list", "a") and check("list", [1]) and check("list", ["x\n"]) and check("list", ["x" * 11], max_length=10)
+    assert check("list", ["x"] * 201)
+
+
+def test_a_secret_is_a_clean_bounded_text():
+    assert check("secret", "s" * 40, secret=True) is None
+    assert check("secret", "a\nb", secret=True) and check("secret", 5, secret=True)
+
+
+def test_records_check_each_field_and_refuse_unknown_keys():
+    sub = (Field("name", "Name", "text"), Field("n", "N", "int", bounds=(1, 3)))
+    records = Field("rows", "Rows", "records", fields=sub)
+
+    assert records.check([{"name": "a", "n": 2}, {"name": "b"}]) is None
+    assert "n" in records.check([{"name": "a", "n": 9}])
+    assert "extra" in records.check([{"name": "a", "extra": 1}])
+    assert records.check({"name": "a"}) and records.check(["a"]) and records.check([{}] * 101)
+
+
+def test_an_error_message_never_repeats_the_value():
+    message = Field("thing", "Thing", "choice", options=("a",)).check("top-secret-value")
+
+    assert "top-secret-value" not in message

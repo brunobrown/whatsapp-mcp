@@ -129,3 +129,40 @@ def test_main_applies_the_file_first_and_only_when_it_is_the_program():
     assert "import uisettings" in names
     guard = next(n for n in body[:first_project_import] if isinstance(n, ast.If))
     assert "__name__" in ast.unparse(guard.test) and "uisettings.apply()" in ast.unparse(guard)
+
+
+# ---- what the server read from the file, kept for the interface to compare (CFG-08) ----
+
+def test_the_result_lists_what_the_file_holds_even_where_the_environment_wins(tmp_path):  # CFG-08
+    write(tmp_path, settings({"WHATSAPP_TIMEZONE": "America/Recife", "WHATSAPP_MCP_MODE": "read_only", "PATH": "x"}))
+
+    result = uisettings.apply({"WHATSAPP_TIMEZONE": "UTC"})
+
+    assert result.file_env == {"WHATSAPP_TIMEZONE": "America/Recife", "WHATSAPP_MCP_MODE": "read_only"}
+
+
+def test_a_running_server_leaves_a_private_note_of_what_it_read(tmp_path):  # CFG-08
+    result = uisettings.Result(file_env={"WHATSAPP_TIMEZONE": "America/Recife"})
+
+    note = uisettings.register_runtime(result, pid=4242)
+
+    assert os.path.basename(note) == "server-4242.json"
+    assert json.loads(open(note).read()) == {"pid": 4242, "file_env": {"WHATSAPP_TIMEZONE": "America/Recife"}}
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(note).st_mode) == 0o600
+        assert stat.S_IMODE(os.stat(os.path.dirname(note)).st_mode) == 0o700
+
+
+def test_the_note_is_removed_when_the_server_ends(tmp_path):
+    note = uisettings.register_runtime(uisettings.Result(), pid=4243)
+
+    uisettings.unregister_runtime(pid=4243)
+
+    assert not os.path.exists(note)
+    uisettings.unregister_runtime(pid=4243)      # a second call is harmless
+
+
+def test_a_note_that_cannot_be_written_never_stops_the_server(tmp_path, monkeypatch):
+    monkeypatch.setattr(uisettings, "runtime_dir", lambda: "/proc/definitely/not/writable")
+
+    assert uisettings.register_runtime(uisettings.Result(), pid=1) is None

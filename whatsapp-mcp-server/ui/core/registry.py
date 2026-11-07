@@ -18,6 +18,9 @@ RESTART_SCOPES = (None, "bridge", "server")
 _ID = re.compile(r"[a-z][a-z0-9_]*")
 _SECRET_LOOKING = re.compile(r"token|secret|passw|passwd|(?:^|[_\s-])pw(?:$|[_\s-])|(?:^|[_\s-])key(?:$|[_\s-])", re.I)
 _MAX_TEXT = 500
+_MAX_ITEMS = 200
+_MAX_RECORDS = 100
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,60 @@ class Field:
             raise ValueError(f"field {self.key!r}: a key is repeated among its fields")
         if self.id_key is not None and self.id_key not in keys:
             raise ValueError(f"field {self.key!r}: id_key {self.id_key!r} is not one of its fields")
+
+    def check(self, value: Any) -> Optional[str]:
+        """Why value is not acceptable for this field (in Portuguese, never repeating the value), or None."""
+        if value is None:
+            return None
+        kind = self.kind
+        if kind == "bool":
+            return None if isinstance(value, bool) else "deve ser verdadeiro ou falso"
+        if kind in ("int", "float"):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or (kind == "int" and not isinstance(value, int)):
+                return "deve ser um número inteiro" if kind == "int" else "deve ser um número"
+            if value != value or value in (float("inf"), float("-inf")):
+                return "deve ser um número finito"
+            if self.bounds and not self.bounds[0] <= value <= self.bounds[1]:
+                return f"deve estar entre {self.bounds[0]} e {self.bounds[1]}"
+            return None
+        if kind in ("text", "secret"):
+            return self._check_text(value)
+        if kind == "choice":
+            return None if isinstance(value, str) and value in self.options else f"deve ser um de: {', '.join(self.options)}"
+        if kind == "multichoice":
+            if not isinstance(value, list) or not all(isinstance(v, str) and v in self.options for v in value):
+                return f"deve ser uma lista com valores de: {', '.join(self.options)}"
+            return None if len(set(value)) == len(value) else "não pode repetir valores"
+        if kind == "list":
+            if not isinstance(value, list) or len(value) > _MAX_ITEMS:
+                return f"deve ser uma lista de até {_MAX_ITEMS} textos"
+            for item in value:
+                problem = self._check_text(item)
+                if problem:
+                    return f"item inválido: {problem}"
+            return None
+        if kind == "records":
+            if not isinstance(value, list) or len(value) > _MAX_RECORDS or not all(isinstance(r, dict) for r in value):
+                return f"deve ser uma lista de até {_MAX_RECORDS} itens"
+            known = {f.key: f for f in self.fields}
+            for record in value:
+                for key, sub in record.items():
+                    if key not in known:
+                        return f"campo desconhecido: {key}"
+                    problem = known[key].check(sub)
+                    if problem:
+                        return f"{key}: {problem}"
+            return None
+        return "tipo desconhecido"
+
+    def _check_text(self, value: Any) -> Optional[str]:
+        if not isinstance(value, str):
+            return "deve ser um texto"
+        if len(value) > self.max_length:
+            return f"deve ter no máximo {self.max_length} caracteres"
+        if _CONTROL.search(value):
+            return "não pode ter caracteres de controle"
+        return None
 
 
 @dataclass(frozen=True)

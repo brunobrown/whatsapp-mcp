@@ -1,7 +1,7 @@
 import uisettings
 
 if __name__ == "__main__":
-    uisettings.apply()   # variables saved by the web interface; before any module reads the environment
+    uisettings.register_runtime(uisettings.apply())   # variables saved by the web interface; before any module reads the environment
 
 import os
 import sys
