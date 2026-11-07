@@ -105,3 +105,14 @@ def test_the_tools_forward_to_the_functions():  # HOOK-17, HOOK-18
     with mock.patch("whatsapp.requests.post", return_value=response(200, answer)) as post:
         assert main.test_webhook("local")["status"] == 200
     assert post.call_args.kwargs["json"] == {"name": "local"}
+
+
+def test_both_calls_carry_the_bridge_token():  # HOOK-17, HOOK-18
+    headers = {"Authorization": "Bearer abc123"}
+    with mock.patch("whatsapp.localconfig.auth_headers", return_value=headers):
+        with mock.patch("whatsapp.requests.get", return_value=response(200, {"webhooks": HOOKS})) as get:
+            whatsapp.get_webhook_status()
+        with mock.patch("whatsapp.requests.post", return_value=response(200, {"success": True})) as post:
+            whatsapp.test_webhook("local")
+    assert get.call_args.kwargs["headers"] == headers
+    assert post.call_args.kwargs["headers"] == headers
