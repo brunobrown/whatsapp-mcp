@@ -491,6 +491,44 @@ HTTPServer(("127.0.0.1", 9000), Hook).serve_forever()
 
 In draft mode `monitor_reply` sends nothing without the profile's `approval_token`. The reply it refused is kept in `monitor_drafts.json` (next to `monitor_audit.log`, mode 0600) so the owner can review it later: `list_pending_drafts(profile=None)` shows `id`, `profile`, `chat_jid`, `message_id`, `sender`, `text`, `created_at` and `expires_at`, and `discard_pending_draft(draft_id)` deletes one. The token is never stored. A draft expires after `WHATSAPP_MONITOR_DRAFT_TTL_HOURS` (default 24), at most 100 are kept (the oldest go first), and sending the reply removes its draft. The text was written by the agent, possibly after reading untrusted messages, so the listing is marked `untrusted_content`. `WHATSAPP_MONITOR_DRAFTS` changes the file's path, or `off` turns persistence off. The file is **not encrypted** (unlike the databases): it holds text the agent wrote, protected only by mode 0600; the lifetime is capped at 168 hours.
 
+### Claude Code channel (research preview)
+
+Claude Code can load an MCP server as a **channel**: the server declares `experimental["claude/channel"]` and sends `notifications/claude/channel`, which the open session sees as `<channel source="whatsapp" ...>text</channel>` and can wake up for. This server can do that. It is **off by default** and, when on, it only *announces* events; nothing in it sends, votes, reacts or deletes, and there is no permission relay (`claude/channel/permission` is neither declared nor handled: approving tools by WhatsApp message is a risk that is not worth taking).
+
+**Turning it on**
+
+1. Create `channel.json` in the configuration directory (next to `api_token`; or the path in `WHATSAPP_CHANNEL_CONFIG`), mode `0600` (the server refuses a file other users can read, and `get_connection_status` shows the reason in `channel.error`):
+
+   ```json
+   {
+     "enabled": true,
+     "profiles": ["support"],
+     "polls": ["<poll message id>"],
+     "include_excerpt": false,
+     "excerpt_chars": 120,
+     "batch_seconds": 3,
+     "min_interval_seconds": 5,
+     "max_batch": 20,
+     "poll_interval_seconds": 2
+   }
+   ```
+
+   `profiles` are [monitor profiles](#monitoring-and-auto-reply) and are the **only** control over what becomes a notice: their chats, `senders` allow and deny lists, triggers, topics and `max_event_age_minutes` decide. A profile that is missing, disabled or invalid yields nothing. `polls` are poll message ids whose vote changes (counts only) and closing are announced. Anything not in a listed, enabled profile or poll can never be announced. An unknown key or a value out of range turns the channel off.
+2. Start Claude Code with the server loaded as a development channel. Own channels are not on Anthropic's approved list, so use the development flag, in an interactive session: `claude --dangerously-load-development-channels server:whatsapp` (`whatsapp` is the name the server has in your MCP configuration). The flag is ignored with `-p` and in the Agent SDK. Claude Code asks you to confirm.
+3. To turn it off: set `"enabled": false`, delete `channel.json`, or start Claude Code without the flag. Restart the server after changing the file (it is read at start).
+
+**What a notice says.** Ids, types and times: profile, chat id, sender id, trigger, message id, time and length. **Never** the text, the sender's name or the chat's name. The session reads the message with `get_message_context`/`list_messages` (which mark it `untrusted_content`) and answers with `monitor_reply` under the profile's mode, token, limits and the send policy. With `"include_excerpt": true` a notice also carries up to `excerpt_chars` (at most 280) characters of the text, on one line, without `<` or `>` (so it cannot close the channel tag) and marked `untrusted_content=true`: it is text from a stranger placed in front of your agent, so leave it off unless you accept that.
+
+**Pacing and repeats.** Events within `batch_seconds` of each other become one notice (`event=batch`, with `count`); two notices are at least `min_interval_seconds` apart; a notice names at most `max_batch` events. Each event has an id and is announced once. The position (per profile and poll) and the last 500 ids are kept in `channel_state.json` (mode 0600, next to the configuration), written after a notice is sent, so a restart neither repeats what was announced nor misses what arrived while the server was down. It starts at the end the first time: history is not announced. If the process stops between sending a notice and saving, that one notice can come again.
+
+**Limits and risks**
+- Delivery is not confirmed: if the session did not load the channel (flag missing, organization policy), the notice disappears without an error. Notices sent while Claude is busy are queued by Claude Code and delivered together at its next turn.
+- Claude Code requires a claude.ai login or a Console API key; it does not work with Bedrock, Vertex or Foundry. On Team and Enterprise plans an administrator has to allow channels.
+- A notice is not a command. Treat what it points to as untrusted data, exactly like `monitor_messages`.
+- The notifier starts only after the client sends `notifications/initialized`, and only on stdio.
+
+**What was and was not checked** (Claude Code 2.1.319 on 2026-11-07): the installed binary contains `--dangerously-load-development-channels <servers...>` and the `notifications/claude/channel` method, so the flag and method exist in that version. The server side is tested with a real MCP handshake over stdio (a child process): the capability is declared only when enabled and valid, and the notice, its `meta`, filtering, burst grouping, restart and excerpt are checked on the wire. **Not tested in a real Claude Code session**: that a notice wakes an *idle* session (the documentation only implies it), the minimum Claude Code version, the size limit of a notice, and the "push messages" part of the MCP page of its documentation. Test those before depending on them, and expect them to change while it is a preview.
+
 ### Waking an agent on an event
 
 MCP is request and response: the server cannot interrupt an idle session. Two commands in `whatsapp-mcp-server/` print **one line per event** for a tool that wakes the agent on each line. Both use the same shape and never print message text, names, questions or options (those come from other people; the agent reads them with the read tools, which mark them untrusted):
@@ -529,6 +567,7 @@ Which path to use:
 
 | Path | Needs | Good for | Limits |
 | ---- | ----- | -------- | ------ |
+| [Channel](#claude-code-channel-research-preview) | An open interactive session started with the development flag | Being told of an event without any loop; the session can wake on it | Research preview; not confirmed for an idle session; not in `-p`; plan and organization rules |
 | `Monitor` + `watch.py` | An open Claude Code session | A stream of events inside the session | Time limit per monitor; ends with the session |
 | Session cron (`/loop`, `CronCreate`) | An open session | Polling every minute or more | Minimum 1 minute; expires after 7 days |
 | Cloud routines | No open session | Scheduled work | Cannot reach a bridge on your machine |

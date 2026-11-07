@@ -1,4 +1,5 @@
 import os
+import sys
 import tomllib
 from dataclasses import fields, is_dataclass
 from datetime import datetime
@@ -10,6 +11,7 @@ import pollwatch
 import capabilities
 import drafts
 import metrics
+import channel
 import export
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
@@ -814,7 +816,7 @@ def get_connection_status() -> Dict[str, Any]:
         on now, e.g. webhooks). A client whose answer lacks these fields is talking to an older server: reconnect it.
     """
     status = whatsapp_get_connection_status()
-    return {**status, **capabilities.describe(VERSION, status)}
+    return {**status, **capabilities.describe(VERSION, status, channel.status())}
 
 @mcp.tool(annotations=READ_ONLY)
 def get_webhook_status() -> Dict[str, Any]:
@@ -843,6 +845,17 @@ def test_webhook(name: str) -> Dict[str, Any]:
     """
     return whatsapp_test_webhook(name)
 
+def run() -> None:
+    """Serve over stdio; with a valid, enabled channel.json also declare and feed the Claude Code channel."""
+    cfg = channel.load_config()
+    channel.set_status(cfg)
+    if cfg.error:
+        print(f"channel is off: {cfg.error}", file=sys.stderr)
+    if cfg.enabled:
+        channel.run_stdio(mcp, cfg)
+    else:
+        mcp.run(transport='stdio')
+
+
 if __name__ == "__main__":
-    # Initialize and run the server
-    mcp.run(transport='stdio')
+    run()
