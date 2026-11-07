@@ -236,3 +236,145 @@ func TestMaybeAutoDownloadSkipsOwnMessages(t *testing.T) { // RET-07
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+func TestCleanupClearsLocalPathWhenTheWholeDirectoryIsGone(t *testing.T) { // RET-05 (diretório ausente)
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	gone := seedDownloaded(t, store, "OLD", 90*24*time.Hour, now)
+	if err := os.RemoveAll(filepath.Dir(gone)); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "nao-existe", "arquivo.jpg") // lexically outside store/, directory also missing
+	seedDownloaded(t, store, "OUT", 90*24*time.Hour, now)
+	if err := store.SetLocalPath("OUT", "chat@g.us", outside); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := store.CleanupExpiredMedia(now, 30)
+
+	if err != nil || n != 0 {
+		t.Fatalf("CleanupExpiredMedia = (%d, %v), want (0, nil): nothing existed to delete", n, err)
+	}
+	if localPathOf(t, store, "OLD") != "" {
+		t.Error("local_path of a file whose directory is gone (inside store/) must be cleared")
+	}
+	if localPathOf(t, store, "OUT") != outside {
+		t.Error("local_path outside store/ must stay unchanged even when its directory is missing")
+	}
+}
+
+func TestCleanupCountsOnlyTheFilesItDeleted(t *testing.T) { // RET-02, RET-05, RET-06
+	store := newTestStore(t)
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	gone := seedDownloaded(t, store, "GONE", 90*24*time.Hour, now)
+	os.Remove(gone) // the file is missing, the directory stays
+	shared := seedDownloaded(t, store, "SHARED", 90*24*time.Hour, now)
+	os.WriteFile(filepath.Join(filepath.Dir(shared), "outro.txt"), []byte("x"), 0o644)
+
+	n, err := store.CleanupExpiredMedia(now, 30)
+
+	if err != nil || n != 1 {
+		t.Errorf("CleanupExpiredMedia = (%d, %v), want (1, nil): the missing file is not counted, the one in a shared directory is", n, err)
+	}
+}
+
+func TestRemoveStoreFileReportsWhatHappened(t *testing.T) { // RET-02, RET-04, RET-05, RET-06
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("store", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := storeRootDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inStore := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	write := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	file := inStore("chat", "m1", "a.jpg")
+	write(file)
+	if removed, forget := removeStoreFile(root, file); !removed || !forget || exists(file) || exists(filepath.Dir(file)) {
+		t.Errorf("file inside store/: removed=%v forget=%v, want true true, with the file and its empty directory gone", removed, forget)
+	}
+
+	shared := inStore("chat", "m2", "a.jpg")
+	write(shared)
+	write(inStore("chat", "m2", "b.jpg"))
+	if removed, forget := removeStoreFile(root, shared); !removed || !forget || !exists(inStore("chat", "m2", "b.jpg")) {
+		t.Errorf("file in a shared directory: removed=%v forget=%v, want true true and the neighbour kept", removed, forget)
+	}
+
+	if removed, forget := removeStoreFile(root, inStore("chat", "m2", "missing.jpg")); removed || !forget {
+		t.Errorf("missing file in an existing directory: removed=%v forget=%v, want false true", removed, forget)
+	}
+	if removed, forget := removeStoreFile(root, inStore("chat", "no-such-dir", "a.jpg")); removed || !forget {
+		t.Errorf("missing directory inside store/: removed=%v forget=%v, want false true", removed, forget)
+	}
+
+	outside := filepath.Join(t.TempDir(), "importante.txt")
+	write(outside)
+	if removed, forget := removeStoreFile(root, outside); removed || forget || !exists(outside) {
+		t.Errorf("existing file outside store/: removed=%v forget=%v, want false false and the file kept", removed, forget)
+	}
+	missingOutside := filepath.Join(t.TempDir(), "no-such-dir", "a.jpg")
+	if removed, forget := removeStoreFile(root, missingOutside); removed || forget {
+		t.Errorf("missing directory outside store/: removed=%v forget=%v, want false false", removed, forget)
+	}
+}
+
+func TestRemoveStoreFileLeavesAnUnresolvableDirectoryAlone(t *testing.T) { // RET-04
+	t.Chdir(t.TempDir())
+	if err := os.MkdirAll("store", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, _ := storeRootDir()
+	loop := filepath.Join(root, "loop")
+	if err := os.Symlink(loop, loop); err != nil { // a link to itself: the directory cannot be resolved
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	removed, forget := removeStoreFile(root, filepath.Join(loop, "a.jpg"))
+
+	if removed || forget {
+		t.Errorf("unresolvable directory: removed=%v forget=%v, want false false (the record is kept)", removed, forget)
+	}
+}
+
+func TestStoreItselfBeingASymlinkStillDeletesInsideIt(t *testing.T) { // RET-02, RET-04
+	t.Chdir(t.TempDir())
+	real := filepath.Join(t.TempDir(), "disco-externo")
+	if err := os.MkdirAll(filepath.Join(real, "chat", "m1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, "store"); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+	file := filepath.Join(real, "chat", "m1", "a.jpg")
+	os.WriteFile(file, []byte("x"), 0o644)
+	sibling := real + "-vizinho"
+	os.MkdirAll(sibling, 0o755)
+	neighbour := filepath.Join(sibling, "b.jpg")
+	os.WriteFile(neighbour, []byte("x"), 0o644)
+
+	root, err := storeRootDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, _ := filepath.EvalSymlinks(real); root != want {
+		t.Fatalf("storeRootDir = %q, want the resolved target %q", root, want)
+	}
+
+	if removed, forget := removeStoreFile(root, filepath.Join("store", "chat", "m1", "a.jpg")); !removed || !forget || exists(file) {
+		t.Errorf("file reached through the store/ symlink: removed=%v forget=%v, want true true and the file gone", removed, forget)
+	}
+	if removed, forget := removeStoreFile(root, neighbour); removed || forget || !exists(neighbour) {
+		t.Errorf("a directory next to the store target must stay: removed=%v forget=%v", removed, forget)
+	}
+}
