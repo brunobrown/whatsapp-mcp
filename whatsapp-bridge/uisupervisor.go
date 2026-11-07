@@ -12,7 +12,7 @@ import (
 // once per client session and would fight over the port. The child is started once and never restarted.
 
 const (
-	uiDefaultCommand = "uv run --directory ../whatsapp-mcp-server --group ui python -m ui"
+	uiDefaultCommand = "uv run --directory ../whatsapp-mcp-server python -m ui"
 	uiMaxLogLine     = 1000
 )
 

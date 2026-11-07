@@ -109,12 +109,15 @@ func TestUIOffStartsNothing(t *testing.T) { // UI-01
 	}
 }
 
-func TestUIDefaultsToOnAndToTheServerFolder(t *testing.T) {
+func TestUIDefaultCommand(t *testing.T) {
 	cfg := loadUIConfig(func(string) string { return "" }, nil)
 
 	if !cfg.Enabled || cfg.Command[0] != "uv" || strings.Join(cfg.Command, " ") !=
-		"uv run --directory ../whatsapp-mcp-server --group ui python -m ui" {
+		"uv run --directory ../whatsapp-mcp-server python -m ui" {
 		t.Fatalf("%+v", cfg)
+	}
+	if strings.Contains(strings.Join(cfg.Command, " "), "--group") {
+		t.Fatalf("the default command must not name a dependency group: %+v", cfg.Command)
 	}
 }
 
