@@ -2,7 +2,7 @@
 
 A session has a random id (the cookie), a CSRF token and an idle clock. Signing in changes both the id and the token,
 so an id seen before signing in is worthless afterwards. At most MAX_SESSIONS exist; making room drops the one that has
-been idle the longest, and a session that lapsed is gone as soon as it is looked up.
+been idle the longest (one that is not signed in goes before one that is), and a session that lapsed is gone as soon as it is looked up.
 """
 import secrets
 import time
@@ -44,7 +44,8 @@ class SessionStore:
 
     def create(self, ip: str) -> Session:
         while len(self._sessions) >= self._limit:
-            oldest = min(self._sessions.values(), key=lambda s: s.idle.remaining())
+            # a session nobody signed in goes first, so a stream of anonymous page loads cannot push the operator out
+            oldest = min(self._sessions.values(), key=lambda s: (s.authenticated, s.idle.remaining()))
             self.drop(oldest.id)
         session = Session(self, ip, IdleClock(self._idle_seconds, self._clock))
         self._sessions[session.id] = session

@@ -106,3 +106,15 @@ def test_drop_removes_a_session():
     store.drop(session.id)
 
     assert store.get(session.id) is None
+
+
+def test_a_flood_of_anonymous_sessions_drops_anonymous_ones_before_a_signed_in_session():
+    store, clock = make(idle=10_000)
+    signed = store.create("operator")
+    signed.sign_in()
+    for i in range(MAX_SESSIONS * 2):
+        clock.now += 1
+        store.create(f"anon{i}")
+
+    assert store.get(signed.id) is signed
+    assert store.count() == MAX_SESSIONS
