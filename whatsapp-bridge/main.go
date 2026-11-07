@@ -1628,6 +1628,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 	// Handler for the bridge status
 	mux.HandleFunc("/api/status", handleStatus(status, state, bridgeVersion()))
 	mux.HandleFunc("/api/webhooks/test", handleWebhookTest(messageStore))
+	mux.HandleFunc("/api/config/validate-webhooks", handleValidateWebhooks())
 
 	// Handler for sending messages
 	mux.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
