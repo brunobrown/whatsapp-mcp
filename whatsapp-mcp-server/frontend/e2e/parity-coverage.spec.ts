@@ -26,21 +26,57 @@ interface Requirement {
 }
 const manifest = JSON.parse(readFileSync(join(E2E, "parity-ids.json"), "utf8")) as { requirements: Requirement[] };
 
-/** The titles of the tests of every spec file in e2e/, read from the source with the TypeScript parser. */
-function testTitles(): string[] {
-  const titles: string[] = [];
-  for (const name of readdirSync(E2E).filter((entry) => entry.endsWith(".spec.ts"))) {
-    const file = ts.createSourceFile(name, readFileSync(join(E2E, name), "utf8"), ts.ScriptTarget.Latest, true);
+interface FoundTest {
+  title: string;
+  /** Whether the body calls expect(...) or a helper named expect*: a test that asserts nothing proves nothing. */
+  asserts: boolean;
+}
+
+/** True when the node contains a call whose callee is `expect`, `expect*` or a member chain rooted at one. */
+function callsAnExpectation(root: ts.Node): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      let callee: ts.Expression = node.expression;
+      while (ts.isPropertyAccessExpression(callee) || ts.isCallExpression(callee) || ts.isNonNullExpression(callee)) {
+        callee = callee.expression;
+      }
+      if (ts.isIdentifier(callee) && /^expect/.test(callee.text)) found = true;
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return found;
+}
+
+/** The tests of every spec file in e2e/, read from the source with the TypeScript parser. */
+function findTests(sources?: ReadonlyMap<string, string>): FoundTest[] {
+  const tests: FoundTest[] = [];
+  const entries = sources ?? new Map(readdirSync(E2E).filter((entry) => entry.endsWith(".spec.ts")).map((name) => [name, readFileSync(join(E2E, name), "utf8")]));
+  for (const [name, text] of entries) {
+    const file = ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true);
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "test") {
-        const [first] = node.arguments;
-        if (first !== undefined && (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first))) titles.push(first.text);
+        const [first, ...rest] = node.arguments;
+        if (first !== undefined && (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first))) {
+          tests.push({ title: first.text, asserts: rest.some((argument) => callsAnExpectation(argument)) });
+        }
       }
       ts.forEachChild(node, visit);
     };
     visit(file);
   }
-  return titles;
+  return tests;
+}
+
+function testTitles(): string[] {
+  return findTests().map((found) => found.title);
+}
+
+/** Titles of tests that never call an expectation. This is a static limit: it proves a test can fail, and that it ran
+ * and passed is proved by the full Playwright run (CI runs every spec with no retries), not by this test. */
+export function testsWithoutAnExpectation(tests: readonly FoundTest[]): string[] {
+  return tests.filter((found) => !found.asserts).map((found) => found.title);
 }
 
 /** The IDs with no test whose title starts with them. */
@@ -219,6 +255,7 @@ test("every requirement of interface-grafica has a parity test", () => {
   expect(manifest.requirements.every((requirement) => requirement.summary.length > 10)).toBe(true);
   const titles = testTitles();
   expect(idsWithoutATest(ids, titles)).toEqual([]);
+  expect(testsWithoutAnExpectation(findTests())).toEqual([]);
 
   // A requirement the Go supervisor settles names the Go tests, and they exist.
   const goSource = readdirSync(join(REPO, "whatsapp-bridge"))
@@ -247,4 +284,21 @@ test("the coverage check reports an ID whose test title is gone", () => {
   expect(idsWithoutATest(["AUTH-01", "AUTH-02", "AUTH-03"], titles)).toEqual(["AUTH-03"]);
   expect(idsWithoutATest(["AUTH-0"], titles)).toEqual(["AUTH-0"]);
   expect(idsWithoutATest(["AUTH-01"], ["AUTH-010 another"])).toEqual(["AUTH-01"]);
+});
+
+test("the coverage check reports a test that asserts nothing", () => {
+  const sources = new Map([
+    [
+      "probe.spec.ts",
+      [
+        'test("AUTH-01 asserts", async () => { expect(1).toBe(1); });',
+        'test("AUTH-02 asserts through a chain", async ({ page }) => { await expect(page.locator("a")).toBeVisible(); });',
+        'test("AUTH-03 helper", async () => { await expectRefused(1); });',
+        'test("AUTH-04 empty", async () => {});',
+        'test("AUTH-05 only acts", async ({ page }) => { await page.goto("/"); });',
+        'test("AUTH-06 mentions expect in a string", async () => { const x = "expect(1)"; void x; });',
+      ].join("\n"),
+    ],
+  ]);
+  expect(testsWithoutAnExpectation(findTests(sources))).toEqual(["AUTH-04 empty", "AUTH-05 only acts", "AUTH-06 mentions expect in a string"]);
 });
