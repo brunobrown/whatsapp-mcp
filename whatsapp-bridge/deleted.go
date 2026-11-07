@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,15 @@ func revokeTarget(msg *waProto.Message) (string, bool) {
 		return "", false
 	}
 	return pm.GetKey().GetID(), true
+}
+
+var errMessageDeleted = errors.New("the message was deleted for everyone")
+
+// isDeleted reports whether the stored message was deleted for everyone.
+func (store *MessageStore) isDeleted(id, chatJID string) bool {
+	var at sql.NullString
+	err := store.db.QueryRow("SELECT deleted_at FROM messages WHERE id = ? AND chat_jid = ?", id, chatJID).Scan(&at)
+	return err == nil && at.Valid && at.String != ""
 }
 
 // keepDeletedContent reports WHATSAPP_KEEP_DELETED_CONTENT=true: keep the text and the media of a message
@@ -63,7 +73,8 @@ func (store *MessageStore) MarkDeleted(id, chatJID, sender string, at time.Time,
 		args  []any
 	}{
 		{`UPDATE messages SET content = ?, media_type = '', filename = '', url = '', media_key = NULL,
-			file_sha256 = NULL, file_enc_sha256 = NULL, file_length = 0, local_path = '', mimetype = '', deleted_at = ?
+			file_sha256 = NULL, file_enc_sha256 = NULL, file_length = 0, local_path = '', mimetype = '', quoted_id = '', forwarded = 0,
+			deleted_at = ?
 			WHERE id = ? AND chat_jid = ?`, []any{deletedMarker, stamp, id, chatJID}},
 		{"DELETE FROM poll_votes WHERE poll_id = ? AND chat_jid = ?", []any{id, chatJID}},
 		{"DELETE FROM polls WHERE id = ? AND chat_jid = ?", []any{id, chatJID}},

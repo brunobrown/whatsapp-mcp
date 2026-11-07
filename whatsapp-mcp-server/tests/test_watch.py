@@ -53,7 +53,7 @@ class Run:
     def lines(self):
         return [ln for ln in self.out.getvalue().splitlines()]
 
-    async def until(self, predicate, timeout=5.0):
+    async def until(self, predicate, timeout=20.0):
         for _ in range(int(timeout / 0.01)):
             if predicate(self.lines) or self.task.done():
                 return

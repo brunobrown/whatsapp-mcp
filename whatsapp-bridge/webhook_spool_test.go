@@ -191,3 +191,82 @@ func TestPersistQueueIsAcceptedByTheConfigFile(t *testing.T) { // DURQ-07
 		t.Errorf("cfg = %+v, err = %v", cfg, err)
 	}
 }
+
+func TestABrokenLineInTheMiddleDoesNotHideTheLinesAfterIt(t *testing.T) { // DURQ-05
+	dir := t.TempDir()
+	path := spoolPath(dir, "agent")
+	now := time.Now()
+	s, _, err := openWebhookSpool(path, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.append(recordOf(messageEvent("BEFORE", now)))
+	s.file.WriteString("{\"type\":\"message\",\"key\":\"cut off\n") // a damaged line with its own newline
+	s.append(recordOf(messageEvent("AFTER", now)))
+	s.close()
+
+	_, pending, err := openWebhookSpool(path, now)
+
+	if err != nil || len(pending) != 2 || pending[0].Key != "chat@g.us|BEFORE" || pending[1].Key != "chat@g.us|AFTER" {
+		t.Errorf("pending = %v (%v), want BEFORE and AFTER", pending, err)
+	}
+}
+
+func TestMoreThanTheQueueLimitAtStartKeepsTheNewest(t *testing.T) { // DURQ-05
+	dir := t.TempDir()
+	path := spoolPath(dir, "agent")
+	now := time.Now()
+	s, _, _ := openWebhookSpool(path, now)
+	total := webhookQueueLimit + 25
+	for i := 0; i < total; i++ {
+		s.lines = 0 // keep the test about reading, not compaction
+		s.append(recordOf(messageEvent(time.Duration(i).String(), now)))
+	}
+	s.close()
+
+	_, pending, _ := openWebhookSpool(path, now)
+
+	want := webhookQueueLimit + 1 // the queue plus the event that may have been in flight
+	if len(pending) != want || pending[0].Key != "chat@g.us|"+time.Duration(total-want).String() ||
+		pending[len(pending)-1].Key != "chat@g.us|"+time.Duration(total-1).String() {
+		t.Errorf("kept %d, first %q, last %q; want the newest %d", len(pending), pending[0].Key, pending[len(pending)-1].Key, want)
+	}
+}
+
+func TestAnOverflowDropAndACompactionNeverLoseTheEventInFlight(t *testing.T) { // DURQ-02, DURQ-06
+	dir := t.TempDir()
+	release := make(chan struct{})
+	stuck := newReceiver(t, func(n int, w http.ResponseWriter, r *http.Request) { <-release; w.WriteHeader(204) })
+	d := durableDispatcher(t, dir, stuck.srv.URL)
+	defer close(release)
+	now := time.Now()
+	total := webhookQueueLimit + webhookSpoolSlack + 200 // enough to overflow the queue and to force a compaction
+	d.Emit(messageEvent(time.Duration(0).String(), now))
+	stuck.waitFor(t, 1) // the first event is in flight and stays there
+	for i := 1; i < total; i++ {
+		d.Emit(messageEvent(time.Duration(i).String(), now))
+	}
+	d.Close(10 * time.Millisecond)
+
+	_, pending, err := openWebhookSpool(spoolPath(dir, "agent"), time.Now())
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]bool{}
+	for _, p := range pending {
+		keys[p.Key] = true
+	}
+	if !keys["chat@g.us|"+time.Duration(0).String()] {
+		t.Error("the event in flight when the spool was compacted was lost")
+	}
+	if keys["chat@g.us|"+time.Duration(1).String()] {
+		t.Error("an event dropped because the queue was full came back after a restart")
+	}
+	if !keys["chat@g.us|"+time.Duration(total-1).String()] {
+		t.Error("the newest event was lost")
+	}
+	if len(pending) > webhookQueueLimit+1 {
+		t.Errorf("recovered %d events, more than the queue holds", len(pending))
+	}
+}

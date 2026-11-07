@@ -12,7 +12,9 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -52,9 +54,35 @@ def _now(now: Optional[datetime]) -> datetime:
     return now or datetime.now(timezone.utc)
 
 
+@contextmanager
+def _file_lock():
+    """Also take a lock file, so two server processes (two MCP clients) do not lose each other's update."""
+    fd = None
+    try:
+        import fcntl
+        fd = os.open(path() + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        if fd is not None:
+            os.close(fd)
+            fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 def _load(now: datetime) -> List[dict]:
-    """The drafts that have not expired. A missing or damaged file is an empty list."""
+    """The drafts that have not expired. A missing, damaged or world-readable file is an empty list."""
     if not enabled():
+        return []
+    try:
+        mode = os.stat(path()).st_mode & 0o777
+        if sys.platform != "win32" and mode & 0o077:
+            logger.warning("%s can be read by other users (mode %04o); ignoring it. Restrict it with chmod 600", path(), mode)
+            return []
+    except OSError:
         return []
     try:
         with open(path(), encoding="utf-8") as f:
@@ -92,7 +120,7 @@ def save(profile: str, chat_jid: str, message_id: str, sender: str, text: str, n
     ident = draft_id(profile, chat_jid, message_id)
     entry = {"id": ident, "profile": profile, "chat_jid": chat_jid, "message_id": message_id, "sender": sender,
              "text": text, "created_at": when.isoformat(), "expires_at": (when + ttl()).isoformat()}
-    with _lock:
+    with _lock, _file_lock():
         try:
             _store([e for e in _load(when) if e.get("id") != ident] + [entry])
         except OSError as e:
@@ -104,7 +132,7 @@ def save(profile: str, chat_jid: str, message_id: str, sender: str, text: str, n
 def remove(ident: str, now: Optional[datetime] = None) -> bool:
     """Drop one draft. True when there was one."""
     when = _now(now)
-    with _lock:
+    with _lock, _file_lock():
         entries = _load(when)
         left = [e for e in entries if e.get("id") != ident]
         if len(left) == len(entries):

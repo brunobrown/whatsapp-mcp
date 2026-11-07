@@ -17,3 +17,4 @@ monitor_audit.log.lock
 # The encrypted file the bridge wrote for the cross-language test (the repository ignores *.db elsewhere)
 !tests/fixtures/*.db
 monitor_drafts.json
+monitor_drafts.json.lock

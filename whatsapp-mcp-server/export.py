@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -201,7 +202,7 @@ def _write_private(path: str, data: dict, overwrite: bool) -> None:
     os.chmod(directory, 0o700)
     if not overwrite and os.path.lexists(path):
         raise FileExistsError(path)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    tmp = f"{path}.{secrets.token_hex(6)}.tmp"      # never the name of a leftover from an earlier crash
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(tmp, flags, 0o600)
     try:

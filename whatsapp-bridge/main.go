@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -66,7 +67,7 @@ func newMessageStore(cfg dbConfig) (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate&_journal_mode=WAL&_synchronous=NORMAL", cfg)
+	db, err := openDatabase("store/"+messagesDBName, messagesDBName, "_foreign_keys=on&_busy_timeout=5000&_txlock=immediate&_journal_mode=WAL&_synchronous=NORMAL&_secure_delete=true", cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -227,6 +228,12 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		return nil
 	}
 
+	// A message its author deleted for everyone stays deleted: a second delivery (history sync, an offline
+	// replay) must not bring the erased text or media back.
+	if store.isDeleted(id, chatJID) {
+		return errMessageDeleted
+	}
+
 	// An upsert instead of INSERT OR REPLACE: storing a message again (echo, history sync)
 	// must not wipe its local_path.
 	_, err := store.db.Exec(
@@ -247,7 +254,7 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 // whether it was updated. Only the original sender may edit a message, so an
 // edit naming someone else's message ID leaves it untouched.
 func (store *MessageStore) UpdateMessageContent(id, chatJID, sender, content string) (bool, error) {
-	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND sender = ?", content, id, chatJID, sender)
+	res, err := store.db.Exec("UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ? AND sender = ? AND COALESCE(deleted_at, '') = ''", content, id, chatJID, sender)
 	if err != nil {
 		return false, err
 	}
@@ -257,7 +264,7 @@ func (store *MessageStore) UpdateMessageContent(id, chatJID, sender, content str
 
 // SetLocalPath records where the media of a message was saved.
 func (store *MessageStore) SetLocalPath(id, chatJID, path string) error {
-	_, err := store.db.Exec("UPDATE messages SET local_path = ? WHERE id = ? AND chat_jid = ?", path, id, chatJID)
+	_, err := store.db.Exec("UPDATE messages SET local_path = ? WHERE id = ? AND chat_jid = ? AND COALESCE(deleted_at, '') = ''", path, id, chatJID)
 	return err
 }
 
@@ -343,6 +350,9 @@ func extractMessageMeta(msg *waProto.Message) MessageMeta {
 // SetMessageMeta records the metadata of a stored message. Empty values never replace stored
 // ones, so a message that arrives again without metadata keeps what it had.
 func (store *MessageStore) SetMessageMeta(id, chatJID string, meta MessageMeta) error {
+	if store.isDeleted(id, chatJID) {
+		return nil
+	}
 	_, err := store.db.Exec(
 		`UPDATE messages SET
 			mimetype = COALESCE(NULLIF(?, ''), mimetype),
@@ -861,6 +871,10 @@ func handleMessageWith(decrypt decryptors, own string, client *whatsmeow.Client,
 		fileEncSHA256,
 		fileLength,
 	)
+	if errors.Is(err, errMessageDeleted) {
+		logger.Infof("Ignoring a new delivery of a message that was deleted for everyone")
+		return
+	}
 	if err == nil {
 		if metaErr := messageStore.SetMessageMeta(msg.Info.ID, chatJID, extractMessageMeta(msg.Message)); metaErr != nil {
 			logger.Warnf("Failed to store metadata of %s: %v", msg.Info.ID, metaErr)

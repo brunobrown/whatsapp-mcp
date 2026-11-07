@@ -81,8 +81,9 @@ func openWebhookSpool(path string, now time.Time) (*webhookSpool, []webhookEvent
 				pending = append(pending, evt)
 			}
 		}
-		if len(pending) > webhookQueueLimit {
-			pending = pending[len(pending)-webhookQueueLimit:]
+		// the queue plus the event that was in flight when the bridge stopped
+		if len(pending) > webhookQueueLimit+1 {
+			pending = pending[len(pending)-(webhookQueueLimit+1):]
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, nil, err

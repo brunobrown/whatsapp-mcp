@@ -74,6 +74,9 @@ type PollVote struct {
 // updates the poll and keeps its votes, but only for its author: anyone else sending a poll with
 // the ID of an existing one must not rewrite its question or options.
 func (store *MessageStore) StorePoll(p Poll) (bool, error) {
+	if store.isDeleted(p.ID, p.ChatJID) { // a deleted poll does not come back with a second delivery
+		return false, nil
+	}
 	options, err := json.Marshal(p.Options)
 	if err != nil {
 		return false, err
@@ -121,6 +124,9 @@ func (store *MessageStore) GetPoll(id, chatJID string) (Poll, bool, error) {
 // StorePollVote records the choice of voter, which replaces the one before it only when it is newer.
 // It reports whether the vote was stored. An empty hashes list retracts the vote.
 func (store *MessageStore) StorePollVote(pollID, chatJID, voter string, hashes []string, at time.Time) (bool, error) {
+	if store.isDeleted(pollID, chatJID) {
+		return false, nil
+	}
 	if hashes == nil {
 		hashes = []string{}
 	}
