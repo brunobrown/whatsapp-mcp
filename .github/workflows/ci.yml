@@ -54,9 +54,5 @@ jobs:
           cache-dependency-glob: whatsapp-mcp-server/uv.lock
       - name: Install
         run: uv sync --locked
-      - name: Test (the server and the interface core, without Flet)
+      - name: Test
         run: uv run pytest -q
-      - name: Install (with the web interface)
-        run: uv sync --locked --group ui
-      - name: Test (with the web interface)
-        run: uv run --group ui pytest -q

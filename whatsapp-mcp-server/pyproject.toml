@@ -14,14 +14,5 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-]
-# The web interface (python -m ui). The server itself does not need Flet.
-ui = [
-    "flet>=1.1,<1.2",
-    "flet-web>=1.1,<1.2",
-    "flet-notifications>=1.1,<1.2",
-]
-# Drives the interface in a browser (tests/e2e, WHATSAPP_UI_E2E=1).
-ui-e2e = [
-    "playwright>=1.49",
+    "pytest-cov>=6.0",
 ]
