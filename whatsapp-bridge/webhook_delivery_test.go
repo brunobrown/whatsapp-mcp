@@ -143,15 +143,11 @@ func TestEventIsPostedWithTheFieldsAndAValidSignature(t *testing.T) { // HOOK-03
 	}
 }
 
-func TestSignatureMatchesAKnownVector(t *testing.T) { // HOOK-04
-	// HMAC-SHA256("key", "1.{}") computed with an independent tool (openssl).
-	got := webhookSign("key", "1", []byte("{}"))
-	want := "sha256=5f23d2a0ca2ee1bda2ba0eb7d6cd0f7a1ddb3f8b8b7e1bb6e6b0cf6a4c3d3c0a"
-	if got != want {
-		t.Logf("computed %s", got)
-	}
-	if !strings.HasPrefix(got, "sha256=") || len(got) != len("sha256=")+64 {
-		t.Errorf("signature = %q, want sha256= and 64 hex digits", got)
+func TestSignatureMatchesAnIndependentImplementation(t *testing.T) { // HOOK-04
+	// HMAC-SHA256("key", "1.{}") computed by Python's hmac module, the same code the README's receiver uses.
+	const want = "sha256=1ba6b8171186efc613e8bcc0cbdab2748f24984d7c5a84faa2637afa0e40d224"
+	if got := webhookSign("key", "1", []byte("{}")); got != want {
+		t.Errorf("signature = %s, want %s", got, want)
 	}
 }
 
