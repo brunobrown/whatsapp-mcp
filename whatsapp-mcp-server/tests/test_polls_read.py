@@ -46,7 +46,7 @@ def conn(tmp_path, monkeypatch):
 def add_poll(conn, id="P1", chat=A, question="Almoço?", options=("Sim", "Não", "Talvez"), selectable=0,
              author="alice", add_option=0, hide=0, minute=0, from_me=0):
     conn.execute("INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES (?,?,?,?,?,?)",
-                 (id, chat, author, "[enquete] " + question, f"2026-11-06 10:{minute:02d}:00+00:00", from_me))
+                 (id, chat, author, "[poll] " + question, f"2026-11-06 10:{minute:02d}:00+00:00", from_me))
     conn.execute("INSERT INTO polls VALUES (?,?,?,?,?,?,?,?)",
                  (id, chat, author, question, json.dumps(list(options)), selectable, add_option, hide))
     conn.commit()

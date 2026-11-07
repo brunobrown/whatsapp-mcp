@@ -38,7 +38,7 @@ def world(tmp_path, monkeypatch):
         INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES
             ('M1', '{GROUP}', '5511999990000', 'oi', '2026-11-06 10:00:00+00:00', 0),
             ('MINE', '{GROUP}', '5511900000000', 'meu', '2026-11-06 10:01:00+00:00', 1),
-            ('P1', '{GROUP}', '5511999990000', '[enquete] Q', '2026-11-06 10:02:00+00:00', 0),
+            ('P1', '{GROUP}', '5511999990000', '[poll] Q', '2026-11-06 10:02:00+00:00', 0),
             ('D1', '{DM}', '5511999990000', 'oi maria', '2026-11-06 09:00:00+00:00', 0);
         INSERT INTO polls VALUES ('P1', '{GROUP}', '5511999990000', 'Q', '["Sim","Não"]', 0, 0, 0);
     """)

@@ -34,7 +34,7 @@ def db(tmp_path, monkeypatch):
     conn.executemany("INSERT INTO chats VALUES (?, ?, NULL)", [(GROUP, "Teste"), (BLOCKED, "Cliente")])
     conn.executemany(
         "INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me) VALUES (?, ?, ?, ?, '2026-11-06 10:00:00', ?)",
-        [("POLL1", GROUP, "alice", "[enquete] Almoço?", 0), ("MYPOLL", GROUP, "551100000001", "[enquete] Nossa", 1),
+        [("POLL1", GROUP, "alice", "[poll] Almoço?", 0), ("MYPOLL", GROUP, "551100000001", "[poll] Nossa", 1),
          ("TXT", GROUP, "alice", "oi", 0), ("MINE", GROUP, "551100000001", "meu texto", 1)])
     conn.executemany("INSERT INTO polls VALUES (?, ?, ?, ?, ?, ?, 0, 0)",
                      [("POLL1", GROUP, "alice", "Almoço?", json.dumps(["Sim", "Não", "Talvez"]), 0),

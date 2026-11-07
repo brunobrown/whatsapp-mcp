@@ -36,7 +36,7 @@ def make_db(tmp_path, monkeypatch):
             PRIMARY KEY (poll_id, chat_jid, voter));
         INSERT INTO chats VALUES ('a@g.us', 'Projeto', NULL);
         INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me)
-            VALUES ('P1', 'a@g.us', 'alice', '[enquete] Q', '2026-11-06 10:00:00+00:00', 0);
+            VALUES ('P1', 'a@g.us', 'alice', '[poll] Q', '2026-11-06 10:00:00+00:00', 0);
         INSERT INTO polls VALUES ('P1', 'a@g.us', 'alice', 'Q', '["Sim","Não"]', 0, 0, 0);
     """)
     conn.commit()

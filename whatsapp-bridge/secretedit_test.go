@@ -115,7 +115,7 @@ func addOption(name string) *waE2E.Message {
 
 func pollWithOptions(t *testing.T, store *MessageStore, allowAdd bool, options ...string) {
 	t.Helper()
-	seedText(t, store, "POLL1", "5511999990000", "[enquete] Almoço?", false)
+	seedText(t, store, "POLL1", "5511999990000", "[poll] Almoço?", false)
 	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: "5511999990000", Question: "Almoço?",
 		Options: options, AllowAddOption: allowAdd}); err != nil {
 		t.Fatal(err)
@@ -194,8 +194,8 @@ func TestPollQuestionEditedByItsAuthor(t *testing.T) { // ED-03
 	if poll.Question != "Almoço hoje?" {
 		t.Errorf("question = %q, want the edited one", poll.Question)
 	}
-	if got := readRow(t, store, "POLL1").content; got != "[enquete] Almoço hoje?" {
-		t.Errorf("message content = %q, want [enquete] Almoço hoje?", got)
+	if got := readRow(t, store, "POLL1").content; got != "[poll] Almoço hoje?" {
+		t.Errorf("message content = %q, want [poll] Almoço hoje?", got)
 	}
 	if len(poll.Options) != 2 {
 		t.Errorf("options = %v, want them untouched", poll.Options)
@@ -216,7 +216,7 @@ func TestPollQuestionEditedBySomeoneElseOrWithoutOneChangesNothing(t *testing.T)
 		recordSecretEdit(store, "", decryptedAs(c.inner), secretEvent(c.sender, "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_EDIT, "POLL1")), waLog.Noop)
 
 		poll, _, _ := store.GetPoll("POLL1", "chat@g.us")
-		if poll.Question != "Almoço?" || readRow(t, store, "POLL1").content != "[enquete] Almoço?" {
+		if poll.Question != "Almoço?" || readRow(t, store, "POLL1").content != "[poll] Almoço?" {
 			t.Errorf("%s: question %q, content %q, want the original", name, poll.Question, readRow(t, store, "POLL1").content)
 		}
 	}

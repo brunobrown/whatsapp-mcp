@@ -165,7 +165,7 @@ func (store *MessageStore) PollVotes(pollID, chatJID string) ([]PollVote, error)
 
 // pollContentPrefix marks the stored text of a poll message, so list_messages and the monitor
 // show the poll as what it is.
-const pollContentPrefix = "[enquete] "
+const pollContentPrefix = "[poll] "
 
 // pollCreationOf returns the poll creation inside msg. WhatsApp sends it in different fields
 // depending on the client and on how the poll accepts answers.

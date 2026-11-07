@@ -433,7 +433,7 @@ def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[st
     """Read the current result of a poll the bridge has seen (sent by you or received).
 
     Args:
-        message_id: The message_id of the poll (from send_poll, list_polls or list_messages: polls show as "[enquete] <question>")
+        message_id: The message_id of the poll (from send_poll, list_polls or list_messages: polls show as "[poll] <question>")
         chat_jid: Optional chat JID, for when the same ID exists in more than one chat
 
     Returns:

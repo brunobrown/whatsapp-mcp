@@ -237,8 +237,8 @@ func TestReceivedPollIsStoredWithOptionsInOrder(t *testing.T) { // RX-01
 }
 
 func TestPollMessageTextIsTheQuestionWithMarker(t *testing.T) { // RX-01, SEND-07
-	if got := extractTextContent(creationMessage("Almoço?", []string{"Sim", "Não"}, 0)); got != "[enquete] Almoço?" {
-		t.Errorf("content = %q, want %q", got, "[enquete] Almoço?")
+	if got := extractTextContent(creationMessage("Almoço?", []string{"Sim", "Não"}, 0)); got != "[poll] Almoço?" {
+		t.Errorf("content = %q, want %q", got, "[poll] Almoço?")
 	}
 }
 
@@ -370,8 +370,8 @@ func TestSendPollBuildsTheMessageAndRecordsIt(t *testing.T) { // SEND-02, SEND-0
 		t.Errorf("stored poll = %+v (found %v)", poll, found)
 	}
 	row := readRow(t, store, "SENT1")
-	if row.content != "[enquete] Almoço?" || !row.isFromMe || row.sender != "5511900000000" {
-		t.Errorf("stored message = %+v, want [enquete] Almoço?, ours", row)
+	if row.content != "[poll] Almoço?" || !row.isFromMe || row.sender != "5511900000000" {
+		t.Errorf("stored message = %+v, want [poll] Almoço?, ours", row)
 	}
 }
 
@@ -711,8 +711,8 @@ func TestHandleMessageStoresAPollMessageAndRefusesAForgedOne(t *testing.T) { // 
 	handleMessage(nil, store, forged, waLog.Noop)
 	handleMessage(nil, store, text, waLog.Noop)
 
-	if row := readRow(t, store, "POLL1"); row.content != "[enquete] Original" {
-		t.Errorf("message content = %q, want [enquete] Original (the forged duplicate must not overwrite it)", row.content)
+	if row := readRow(t, store, "POLL1"); row.content != "[poll] Original" {
+		t.Errorf("message content = %q, want [poll] Original (the forged duplicate must not overwrite it)", row.content)
 	}
 	if poll, found, _ := store.GetPoll("POLL1", "chat@g.us"); !found || poll.Question != "Original" {
 		t.Errorf("poll = %+v (found %v), want Original", poll, found)
@@ -768,8 +768,8 @@ func TestPollCreationIsReadFromEveryFieldWhatsAppUses(t *testing.T) { // RX-01
 		if !ok || poll.Question != "Q" || !reflect.DeepEqual(poll.Options, []string{"A", "B"}) || poll.SelectableCount != 1 {
 			t.Errorf("%s: pollFromMessage = %+v (ok %v), want question Q, options A B, selectable 1", name, poll, ok)
 		}
-		if got := extractTextContent(msg); got != "[enquete] Q" {
-			t.Errorf("%s: content = %q, want [enquete] Q", name, got)
+		if got := extractTextContent(msg); got != "[poll] Q" {
+			t.Errorf("%s: content = %q, want [poll] Q", name, got)
 		}
 	}
 }
