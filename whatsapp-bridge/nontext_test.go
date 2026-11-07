@@ -126,3 +126,19 @@ func TestHandleMessageLogsAnUnknownKindWithoutItsContent(t *testing.T) { // NT-0
 		t.Error("a message with no text must still not be stored")
 	}
 }
+
+func TestDroppedFieldsStillNamesKindsThatCouldCarryText(t *testing.T) { // NT-05
+	// an empty text or image message is not a known silent kind: it must be named, so a gap can be found
+	for name, c := range map[string]struct {
+		msg  *waE2E.Message
+		want string
+	}{
+		"empty extended text": {&waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{}}, "extendedTextMessage"},
+		"empty image":         {&waE2E.Message{ImageMessage: &waE2E.ImageMessage{}}, "imageMessage"},
+		"empty document":      {&waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{}}, "documentMessage"},
+	} {
+		if got := droppedFields(c.msg); !reflect.DeepEqual(got, []string{c.want}) {
+			t.Errorf("%s: droppedFields = %v, want [%s]", name, got, c.want)
+		}
+	}
+}

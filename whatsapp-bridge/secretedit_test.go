@@ -246,3 +246,32 @@ func TestHandleMessageAppliesAnEncryptedEditAndDoesNotStoreTheEnvelope(t *testin
 		t.Error("the envelope itself must not be stored as a message")
 	}
 }
+
+func TestEditFromThisAccountCannotRewriteSomeoneElsesMessage(t *testing.T) { // ED-01
+	store := newTestStore(t)
+	seedText(t, store, "THEIRS", "5511999990000", "their text", false) // not ours
+	evt := secretEvent("99887766@lid", "ENV1", envelope(waE2E.SecretEncryptedMessage_MESSAGE_EDIT, "THEIRS"))
+	evt.Info.IsFromMe = true
+
+	recordSecretEdit(store, "5511900000000", decryptedAs(&waE2E.Message{Conversation: proto.String("overwritten")}), evt, waLog.Noop)
+
+	if got := readRow(t, store, "THEIRS").content; got != "their text" {
+		t.Errorf("content = %q: an edit from our own account must not rewrite a message we did not send", got)
+	}
+}
+
+func TestPollQuestionEditedFromThisAccountUsesItsOwnUser(t *testing.T) { // ED-03
+	store := newTestStore(t)
+	seedText(t, store, "POLL1", "5511900000000", "[poll] Lunch?", true)
+	if _, err := store.StorePoll(Poll{ID: "POLL1", ChatJID: "chat@g.us", Author: "5511900000000", Question: "Lunch?", Options: []string{"Yes", "No"}}); err != nil {
+		t.Fatal(err)
+	}
+	evt := secretEvent("99887766@lid", "ENV1", envelope(waE2E.SecretEncryptedMessage_POLL_EDIT, "POLL1")) // our phone, addressed by LID
+	evt.Info.IsFromMe = true
+
+	recordSecretEdit(store, "5511900000000", decryptedAs(editedPoll("Lunch today?")), evt, waLog.Noop)
+
+	if poll, _, _ := store.GetPoll("POLL1", "chat@g.us"); poll.Question != "Lunch today?" {
+		t.Errorf("question = %q, want our edit applied even though the sender came as a LID", poll.Question)
+	}
+}

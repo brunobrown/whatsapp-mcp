@@ -245,7 +245,7 @@ def test_text_size_limit(conn, sent):  # RESP-05
     assert len(real_sends(sent)) == 1
 
 
-@pytest.mark.parametrize("kwargs", [{"message_id": ""}, {"message_id": "  "}, {"chat_jid": ""}, {"chat_jid": "Grupo 1"},
+@pytest.mark.parametrize("kwargs", [{"message_id": ""}, {"message_id": "  "}, {"chat_jid": ""}, {"chat_jid": "Group 1"},
                                     {"chat_jid": "abc@example.net"}])
 def test_invalid_ids(conn, sent, kwargs):  # RESP-05
     seed(conn)
