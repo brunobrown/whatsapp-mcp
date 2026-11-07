@@ -95,6 +95,20 @@ describe("wide screens (600 px and more)", () => {
     expect(within(within(nav).getByRole("link", { name: /Send policy/ })).queryByText("Restart needed")).toBeNull();
   });
 
+  it("shows the marker the server reports even when nothing was saved in this page (after a reload)", async () => {
+    server.use(
+      http.get("*/api/sections", () =>
+        HttpResponse.json(sections.map((entry) => ({ ...entry, pending: entry.id === "media" }))),
+      ),
+    );
+    open("/s/media");
+    const nav = await listed();
+    expect(useUiStore.getState().restart).toEqual([]);
+    expect(within(within(nav).getByRole("link", { name: /Media downloads/ })).getByText("Restart needed")).toBeInTheDocument();
+    expect(within(within(nav).getByRole("link", { name: /Send policy/ })).queryByText("Restart needed")).toBeNull();
+    expect(screen.getAllByText("Restart needed")).toHaveLength(2);
+  });
+
   it("shows the marker in the header of the open section too", async () => {
     useUiStore.getState().addRestart(["bridge"]);
     open("/s/media");

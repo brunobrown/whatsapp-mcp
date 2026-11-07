@@ -48,6 +48,8 @@ export interface SectionSummary {
   kind: "section" | "page";
   description: string;
   restart: RestartScope | null;
+  /** A value saved here waits for a restart; the server knows it, so the mark survives a reload. */
+  pending: boolean;
 }
 
 export type FieldKind = "bool" | "int" | "float" | "text" | "choice" | "multichoice" | "secret" | "list" | "records";

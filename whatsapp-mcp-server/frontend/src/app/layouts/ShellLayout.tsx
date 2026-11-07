@@ -162,7 +162,7 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
               <li key={entry.id} className="border-b border-line">
                 <SectionLink
                   entry={entry}
-                  pending={entry.restart !== null && restart.includes(entry.restart)}
+                  pending={entry.pending || (entry.restart !== null && restart.includes(entry.restart))}
                   onOpen={onOpen}
                 />
               </li>
@@ -177,7 +177,7 @@ function ListPane({ onOpen }: { onOpen: () => void }) {
 function DetailPane({ active, showBack, onBack }: { active: SectionSummary | undefined; showBack: boolean; onBack: () => void }) {
   const t = useT();
   const restart = useUiStore((state) => state.restart);
-  const pending = active?.restart != null && restart.includes(active.restart);
+  const pending = active !== undefined && (active.pending || (active.restart !== null && restart.includes(active.restart)));
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 sm:px-4">

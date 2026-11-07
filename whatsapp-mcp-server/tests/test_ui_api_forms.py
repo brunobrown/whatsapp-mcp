@@ -113,8 +113,19 @@ def test_the_listing_has_the_sections_and_the_pages_in_menu_order(rig):
     assert [e["id"] for e in listing][:3] == ["status", "send_policy", "monitor"]
     assert [e["id"] for e in listing][-2:] == ["activity", "account"]
     assert {e["kind"] for e in listing} == {"section", "page"}
-    assert all(set(e) == {"id", "title", "icon", "order", "kind", "description", "restart"} for e in listing)
+    assert all(set(e) == {"id", "title", "icon", "order", "kind", "description", "restart", "pending"} for e in listing)
     assert "ui_auth" not in [e["id"] for e in listing]
+
+
+def test_the_listing_marks_the_sections_whose_saved_change_waits_for_a_restart(rig):
+    _, service = rig
+    assert [e["id"] for e in service.listing() if e["pending"]] == []
+
+    edit(service, "media", {"media_retention_days": "10"})
+
+    marked = {e["id"]: e["pending"] for e in service.listing()}
+    assert marked["media"] is True
+    assert [name for name, pending in marked.items() if pending] == ["media"]       # the privacy section shares the scope
 
 
 # -- raw text and saving ---------------------------------------------------------------------------

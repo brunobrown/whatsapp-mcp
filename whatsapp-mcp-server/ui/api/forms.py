@@ -36,10 +36,17 @@ class FormService:
     def __init__(self, services: Services):
         self._services = services
 
+    def _pending(self, section) -> bool:
+        """Whether a value saved in this section waits for a restart to apply: the menu shows it after a reload."""
+        waiting = self._services.env.pending().get(section.restart or "", [])
+        return any(f.env_var in waiting for f in section.fields if f.env_var)
+
     def listing(self) -> List[Dict[str, Any]]:
         sections = [{"id": s.id, "title": s.title, "icon": s.icon, "order": s.order, "kind": "section",
-                     "description": s.description, "restart": s.restart} for s in self._services.registry.sections()]
-        return sorted([*sections, *(dict(p) for p in PAGES)], key=lambda e: (e["order"], e["id"]))
+                     "description": s.description, "restart": s.restart, "pending": self._pending(s)}
+                    for s in self._services.registry.sections()]
+        pages = [{**p, "pending": False} for p in PAGES]
+        return sorted([*sections, *pages], key=lambda e: (e["order"], e["id"]))
 
     def has(self, section_id: str) -> bool:
         return any(s.id == section_id for s in self._services.registry.sections())
