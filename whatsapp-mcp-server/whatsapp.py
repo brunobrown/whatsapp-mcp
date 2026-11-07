@@ -1109,13 +1109,21 @@ def send_audio_message(recipient: str, media_path: str, override_token: Optional
         return SendResult(False, f"Media file not found: {media_path}")
 
     def send(target: send_policy.Target) -> SendResult:
-        path = media_path
+        path, converted = media_path, False
         if not path.endswith(".ogg"):
             try:
                 path = audio.convert_to_opus_ogg_temp(path)
+                converted = True
             except Exception as e:
                 return SendResult(False, f"Error converting file to opus ogg. You likely need to install ffmpeg: {str(e)}")
-        return _post_send({"recipient": target.recipient, "media_path": path})
+        try:
+            return _post_send({"recipient": target.recipient, "media_path": path})
+        finally:
+            if converted:  # only the temporary copy; the user's own file is never touched
+                try:
+                    os.unlink(path)
+                except OSError:
+                    logger.warning("Could not remove the converted audio %s", path)
 
     return _guarded_send("audio", recipient, os.path.getsize(media_path), override_token, send)
 
