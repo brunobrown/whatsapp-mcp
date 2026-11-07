@@ -68,4 +68,4 @@ def test_read_tools_return_the_dictionaries_of_the_module(tmp_path, monkeypatch)
     make_db(tmp_path, monkeypatch)
     assert main.get_poll_results("NOPE")["error_code"] == "POLL_NOT_FOUND"
     assert main.list_polls(GROUP) == {"success": True, "chat_jid": GROUP, "polls": [], "total": 0,
-                                      "page": 0, "limit": 20, "has_more": False}
+                                      "page": 0, "limit": 20, "has_more": False, "untrusted_content": True}
