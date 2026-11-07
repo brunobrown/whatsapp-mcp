@@ -118,13 +118,13 @@ This application consists of two main components:
 ### Data Storage
 
 - All message history is stored in an encrypted SQLite database (SQLCipher) within the `whatsapp-bridge/store/` directory; see [Security of your data](#security-of-your-data)
-- The database maintains tables for chats, messages, `polls`, `poll_votes` and `contacts_identity` (who is behind each phone number and LID, with address-book and push names)
+- The database maintains tables for chats, messages, `polls`, `poll_votes`, `reactions` and `contacts_identity` (who is behind each phone number and LID, with address-book and push names)
 - Messages are indexed for efficient searching and retrieval
 - Downloaded media lives under `whatsapp-bridge/store/<chat>/<message id>/`
 
 #### Database changes
 
-The bridge upgrades `store/messages.db` by itself when it starts, only by adding to it (`ALTER TABLE … ADD COLUMN`, `CREATE … IF NOT EXISTS`); nothing is recreated or dropped, and existing messages are kept. Added over time: `messages.local_path`, `messages.mimetype`, `messages.forwarded`, `messages.quoted_id`, the `contacts_identity`, `polls` and `poll_votes` tables and the `idx_messages_chat_ts` index. The MCP server opens the database read-only and still works, with those fields empty, if the bridge has not upgraded it yet. Back up `store/messages.db` before the first start with a new version if you want a way back.
+The bridge upgrades `store/messages.db` by itself when it starts, only by adding to it (`ALTER TABLE … ADD COLUMN`, `CREATE … IF NOT EXISTS`); nothing is recreated or dropped, and existing messages are kept. Added over time: `messages.local_path`, `messages.mimetype`, `messages.forwarded`, `messages.quoted_id`, the `contacts_identity`, `polls`, `poll_votes` and `reactions` tables and the `idx_messages_chat_ts` index. The MCP server opens the database read-only and still works, with those fields empty, if the bridge has not upgraded it yet. Back up `store/messages.db` before the first start with a new version if you want a way back.
 
 ## Usage
 
@@ -132,7 +132,9 @@ Once connected, you can interact with your WhatsApp contacts through Claude, lev
 
 ### MCP Tools
 
-Claude can access the following 24 tools to interact with WhatsApp.
+Claude can access the following 26 tools to interact with WhatsApp.
+
+Every tool declares what it does through MCP tool annotations: the readers are marked read-only, the senders write but do not destroy, `delete_message` is marked destructive and the downloads write local files, so a client can ask for confirmation before the ones that reach other people. The server also tells the client, in its instructions, that the text of messages, captions, names and polls is written by other people and is untrusted data, not instructions; the structured readers that carry that text (`get_message_thread`, `get_poll_results`, `list_polls`, `get_message_reactions`) add `untrusted_content=true` to a successful answer.
 
 **Reading**
 
@@ -145,6 +147,7 @@ Claude can access the following 24 tools to interact with WhatsApp.
 - **get_last_interaction**: Get the most recent message with a contact
 - **get_message_context**: Retrieve context around a specific message, both sides in chronological order. Takes an optional `chat_jid` for when the same message ID exists in more than one chat.
 - **get_message_thread**: Read messages with their replies linked: the whole chain around one message, or a window of a chat. See [Reading replies](#reading-replies).
+- **get_message_reactions**: The reactions that stand on a message: who reacted, with which emoji, and the count of each. See [Reactions](#reactions).
 - **get_poll_results**: The question, options, percentages and (unless anonymous) voters of a poll. See [Polls](#polls).
 - **list_polls**: The polls of a chat, newest first, with the votes of each option. See [Polls](#polls).
 - **get_group_participants**: List the participants of a group with name, phone number, LID and admin status
@@ -153,8 +156,9 @@ Claude can access the following 24 tools to interact with WhatsApp.
 
 - **send_message**: Send a text message to a phone number, JID or group. Supports real mentions, replying to a message and a dry run. Subject to the [send policy](#send-policy).
 - **send_file**: Send a file (image, video, raw audio, document). Subject to the send policy.
-- **send_audio_message**: Send an audio file as a WhatsApp voice message (needs an .ogg Opus file, or ffmpeg to convert). Subject to the send policy.
+- **send_audio_message**: Send an audio file as a WhatsApp voice message (needs an .ogg Opus file, or ffmpeg to convert; the converted temporary copy is deleted after sending, your original is never touched). Subject to the send policy.
 - **send_poll**: Create a poll (2 to 12 options, single or multiple answers, optional anonymous poll and added options). Supports a dry run and is subject to the send policy. See [Polls](#polls).
+- **react_to_message**: React to a message with an emoji, change the reaction or take it back. Dry run and send policy as above. See [Reactions](#reactions).
 - **vote_poll**: Vote in a poll, change the vote or retract it. Dry run and send policy as above.
 - **delete_message**: Delete for everyone a message you sent (text, file or poll). Dry run and send policy as above.
 
@@ -172,6 +176,11 @@ Claude can access the following 24 tools to interact with WhatsApp.
 **Diagnostics**
 
 - **get_connection_status**: Is the bridge running and connected to WhatsApp? Returns the number, uptime, the time of the last event and message, pending media retries. See [Checking the bridge](#checking-the-bridge).
+
+### What else the bridge understands
+
+- **Locations, contacts and stickers** are stored as short bracketed text so a chat does not look empty: `[location: <name> (<lat>, <lon>)]` (or `[location: <lat>, <lon>]`), `[live location: …]`, `[contact: <name>]`, `[contacts: <name>, <name>]` and `[sticker]`. A message that still produces neither text nor media is not stored, and the bridge logs one line with the names of its fields (never its content) so a missing kind can be found.
+- **Edits that arrive encrypted** (WhatsApp wraps them in an encrypted envelope) are decrypted and applied: the text of an edited message is replaced, but only when the editor is the original sender; an option a participant adds to a poll is appended (only if the poll allows it, the option is new and the poll has fewer than 12), so votes for it are counted under its text; and an edited poll question replaces the old one, only when the author edited it. What cannot be decrypted is logged and changes nothing. The envelope itself is never stored as a message. The content of an encrypted poll edit comes from the library and has not been seen live.
 
 ### Reading messages
 
@@ -258,10 +267,10 @@ The server cannot judge what a reply *says*. Topic and tone live in `instruction
 Give the agent a name and anyone can call it by typing it, in a group or in a direct chat, without using WhatsApp's own mention:
 
 ```text
-@assistant qual é o próximo item da lista de tarefas?
+@assistant what is the next item on the task list?
 ```
 
-- The name matches as a whole word, in any case: `@Assistant, me ajuda` calls it; `@assistantx`, `a@assistant` (an e-mail) and `@assistant2` do not. The event carries `command` (`"qual é o próximo item da lista de tarefas?"`), so the agent goes straight to the question.
+- The name matches as a whole word, in any case: `@Assistant, can you help?` calls it; `@assistantx`, `a@assistant` (an e-mail) and `@assistant2` do not. The event carries `command` (`"what is the next item on the task list?"`), so the agent goes straight to the question.
 - Someone who **replies to a message the agent sent** calls it too (`agent_reply`), and so does a real mention of the account (`mention`) or a reply to one of your messages (`reply`), if the profile has `targets`. The follow-up goes through the same filters (`topics` included, so a short "thanks" is filtered if you set `topics`).
 - In `auto` mode, `auto_chats` lets everyone in a group call the agent and be answered without a token; the other chats stay in draft. Everyone in that group can try to manipulate the agent by text: keep the limits low and read the audit log.
 - To call the agent **yourself**, from your own phone, set `"allow_own_alias": true`. Only your messages that contain the name count, and a reply the monitor itself sent never does, even if it contains the name (the monitor recognises its replies by the ids in `monitor_audit.log`, and waits for a reply that is still being recorded). In `auto` mode your own messages are answered without a token. Two cautions: everything *you* send with the name in it calls the agent, including a message the agent itself sent through plain `send_message` (the monitor only recognises replies sent with `monitor_reply`), so tell the agent to answer with `monitor_reply` and not to write its own name; and if `monitor_audit.log` cannot be read, your own messages and replies to the agent stop firing (fail closed).
@@ -308,9 +317,20 @@ By default the server can send to anyone. To restrict it, copy `whatsapp-mcp-ser
 - `mode`: `denylist` (default: send to anyone not denied) or `allowlist` (send only to what is in `allow`). `deny` always wins.
 - Entries are a **JID** (`…@g.us`, `…@s.whatsapp.net`, `…@lid`), a **phone number** or a **chat name** (exact, any case). Prefer JIDs: a name is not a stable identifier, since anyone with admin rights in a group can rename it. For a direct chat, a phone entry and a LID entry match the same person when the contact directory (`contacts_identity`) knows both ids; list both if you are not sure it does. Groups match by JID only.
 - The destination is resolved to one canonical JID before the policy is checked, and that same JID is what the bridge is told to use. A name that matches no chat or several is refused (`RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`); text that is not a phone, a JID or a name is `RECIPIENT_INVALID`.
-- A blocked send returns `success=false`, `error_code=SEND_BLOCKED_BY_POLICY` and sends nothing. `send_message`, `send_file`, `send_audio_message`, `send_poll`, `vote_poll` and `delete_message` take `override_token` to release one send; it must match the file. **The token is a speed bump, not a security boundary:** anyone who can read `send_policy.json` can read it, and the agent can be asked to read it.
+- A blocked send returns `success=false`, `error_code=SEND_BLOCKED_BY_POLICY` and sends nothing. `send_message`, `send_file`, `send_audio_message`, `send_poll`, `vote_poll`, `react_to_message` and `delete_message` take `override_token` to release one send; it must match the file. **The token is a speed bump, not a security boundary:** anyone who can read `send_policy.json` can read it, and the agent can be asked to read it.
 - The file is read on every send, so edits apply at once. If it is invalid, or the chat list cannot be read to check name rules, every send is blocked (`SEND_BLOCKED_BY_POLICY` or `DIRECTORY_UNAVAILABLE`) and the token does not release them.
 - Every attempt (sent, blocked, failed) is appended to `send_audit.log` (JSON lines, mode 0600, git-ignored): time, kind, recipient, chat, size, result, rule, whether the token was used. Never the message text or the token.
+
+### Reactions
+
+```text
+react_to_message(chat_jid="<group JID>", message_id="<message ID>", emoji="👍")
+get_message_reactions(message_id="<message ID>")
+```
+
+- **Reacting**: `emoji` is up to 16 characters without spaces (enough for the longest emoji sequences); an empty string takes your reaction back, and a new reaction replaces your previous one. The message must be one the bridge has stored (`MESSAGE_NOT_FOUND` otherwise), and anything that is not a valid emoji is `INVALID_EMOJI`; in both cases nothing is sent. `dry_run=true` returns the preview (chat, message text and emoji). The send policy and the audit log apply as for `send_message` (kind `reaction`, never the text).
+- **Reading**: `get_message_reactions` returns `reactions` (`reactor`, `reactor_name`, `emoji`, `timestamp`, oldest first), `counts` per emoji and `total`. Each person counts once, with their latest reaction; one taken back counts for nothing. Only reactions the bridge received while it was running, and the ones you sent, are known. Errors: `MESSAGE_NOT_FOUND`, `AMBIGUOUS_MESSAGE` (the same ID in several chats: give `chat_jid`).
+- A reaction is not a message of the chat: it is kept in its own table and never shows up in `list_messages` or triggers the monitor.
 
 ### Polls
 
@@ -321,11 +341,11 @@ vote_poll(chat_jid="<group JID>", message_id="<poll message ID>", options=["Sush
 ```
 
 - **Creating**: `question` has 1 to 255 characters and `options` 2 to 12 of 1 to 100 characters; two options that differ only in case count as the same. Anything else is refused with `INVALID_POLL` and nothing is sent. `allow_multiple` is `true` by default, like the app; `false` limits each person to one option. `allow_add_option=true` lets participants add options and `hide_voter_names=true` makes the poll anonymous; both are sent in the message, and whether the app honours them depends on the WhatsApp client. `dry_run=true` returns the preview and sends nothing. The send policy and the audit log apply as for `send_message` (kind `poll`; the audit log never holds the question or the options).
-- **What is stored**: the bridge saves every poll it sees (sent or received) and the votes it can decrypt, and a poll appears in `list_messages` and `get_message_thread` as `[poll] <question>`. WhatsApp encrypts votes with a secret that only the devices that saw the poll have, so **votes are counted only for polls the bridge saw while it was running**: a poll from before the bridge, or from the history sync, appears in `list_messages` but is not found by `get_poll_results`, `list_polls` or `vote_poll`. Only the author of a poll can change it: a poll that reuses the ID of someone else's is ignored.
-- **Reading**: `get_poll_results` returns `question`, `allow_multiple`, `allow_add_option`, `anonymous`, `created_at`, `created_by`, `total_voters` and `options` (in creation order, each with `text`, `votes`, `percent` of `total_voters` and `voters`). Each person counts once, with their latest vote; a retracted vote counts for nothing; with several options chosen the percentages add up to more than 100. In an anonymous poll `voters` is empty and the counts stay. `unknown_votes` counts people who chose an option added after the poll was created, whose text the bridge does not know. `list_polls(chat_jid, limit=20, page=0)` returns `total`, `has_more` and, for each poll, `message_id`, `question`, `created_at`, `total_voters` and the votes of each option. Errors: `POLL_NOT_FOUND`, `AMBIGUOUS_MESSAGE` (the same ID in several chats: give `chat_jid`), `INVALID_ARGUMENT`.
+- **What is stored**: the bridge saves every poll it sees (sent or received) and the votes it can decrypt, and a poll appears in `list_messages` and `get_message_thread` as `[poll] <question>`. WhatsApp encrypts votes with a secret that only the devices that saw the poll have, so **votes are counted only for polls the bridge saw while it was running**: a poll from before the bridge, or from the history sync, appears in `list_messages` but is not found by `get_poll_results`, `list_polls` or `vote_poll`. Only the author of a poll can change it: a poll that reuses the ID of someone else's is ignored. Options that participants add and question edits that arrive encrypted are applied as described in [What else the bridge understands](#what-else-the-bridge-understands). Messages already stored before the prefix changed keep their old text.
+- **Reading**: `get_poll_results` returns `question`, `allow_multiple`, `allow_add_option`, `anonymous`, `created_at`, `created_by`, `total_voters` and `options` (in creation order, each with `text`, `votes`, `percent` of `total_voters` and `voters`). Each person counts once, with their latest vote; a retracted vote counts for nothing; with several options chosen the percentages add up to more than 100. In an anonymous poll `voters` is empty and the counts stay. `unknown_votes` counts people who chose an option whose text the bridge does not know (an option added before the bridge saw the poll's add-option update); once the option is known its votes move to it. `list_polls(chat_jid, limit=20, page=0)` returns `total`, `has_more` and, for each poll, `message_id`, `question`, `created_at`, `total_voters` and the votes of each option. Errors: `POLL_NOT_FOUND`, `AMBIGUOUS_MESSAGE` (the same ID in several chats: give `chat_jid`), `INVALID_ARGUMENT`.
 - **Voting**: `options` are the texts of the options, in any case, and the vote replaces the previous one; an empty list retracts it. A single-answer poll takes one option. An option the poll does not have, a repeated one or too many options is `INVALID_VOTE`; a poll the bridge never saw is `POLL_NOT_FOUND`; nothing is sent in either case. Voting needs the poll's secret, so it works only for polls the bridge saw.
 - **Deleting**: `delete_message(chat_jid, message_id)` deletes for everyone a message sent by this account (a text, a file or a poll) and removes it, a poll's votes and its downloaded file (only when the file lies inside `store/`) from your side only after WhatsApp accepted it. Someone else's message is `NOT_OWN_MESSAGE` and an unknown one `MESSAGE_NOT_FOUND`. It cannot be undone; use `dry_run=true` to see which message it is.
-- **Not supported**: quiz polls (WhatsApp offers them only in Channels), polls with images, an end time, editing the question of a poll, adding an option from here, deleting someone else's message as a group admin, and polls in Channels and Communities.
+- **Not supported**: quiz polls (WhatsApp offers them only in Channels), polls with images, an end time, editing the question of a poll or adding an option from here (the bridge only applies the ones it receives), deleting someone else's message as a group admin, and polls in Channels and Communities.
 
 ### Media Handling Features
 
@@ -409,6 +429,7 @@ The bridge also needs to be **restarted after updating it** for new behaviour to
 ## Error codes
 
 Monitoring: `MONITOR_CONFIG_INVALID`, `PROFILE_NOT_FOUND`, `PROFILE_DISABLED`, `OWN_ACCOUNT_UNKNOWN`, `NOT_A_TRIGGER`, `APPROVAL_REQUIRED`, `RATE_LIMITED`, `RATE_LIMIT_UNVERIFIABLE`, `INVALID_ARGUMENT`.
+Reactions: `INVALID_EMOJI`, `MESSAGE_NOT_FOUND`, `AMBIGUOUS_MESSAGE`, `INVALID_ARGUMENT`.
 Polls: `INVALID_POLL`, `INVALID_VOTE`, `POLL_NOT_FOUND`, `AMBIGUOUS_MESSAGE`, `MESSAGE_NOT_FOUND`, `NOT_OWN_MESSAGE`, `INVALID_ARGUMENT`.
 Sending: `SEND_BLOCKED_BY_POLICY`, `RECIPIENT_NOT_FOUND`, `RECIPIENT_AMBIGUOUS`, `RECIPIENT_INVALID`, `DIRECTORY_UNAVAILABLE`, `INVALID_MENTION`, `REPLY_TARGET_NOT_FOUND`.
 Downloading: `LINK_EXPIRED_PHONE_OFFLINE`, `MEDIA_NOT_FOUND`, `BRIDGE_UNREACHABLE`, `BRIDGE_UNAUTHORIZED`, `DOWNLOAD_TIMEOUT`, `SKIPPED_TOO_LARGE`, `NOT_ATTEMPTED` (items of a batch that stopped), `INVALID_ARGUMENT`, `UNKNOWN`.
@@ -474,6 +495,8 @@ Permissions and `umask` do not apply (they rely on your user profile's access ru
 3. The Go accesses the WhatsApp API and keeps the SQLite database up to date
 4. Data flows back through the chain to Claude
 5. When sending messages, the request flows from Claude through the MCP server to the Go bridge and to WhatsApp
+
+The MCP server runs on the `mcp` Python SDK 2.x (`MCPServer`); the SDK checks what each tool returns against the type it declares, and the tests call every tool through the server to keep it that way. The bridge uses a recent `whatsmeow`. A GitHub Actions workflow (`.github/workflows/ci.yml`) runs `go vet` and `go test -race` for the bridge (with encrypted and plain databases) and `pytest` for the server on every push to `main` and pull request.
 
 ## Troubleshooting
 
