@@ -47,6 +47,13 @@ export const en = {
   "shell.signOut": "Sign out",
   "shell.pendingRestart": "Restart needed",
   "shell.loadError": "The sections could not be loaded.",
+  "auth.loading": "Checking your session",
+  "auth.login.title": "Sign in",
+  "auth.login.intro": "Enter the interface password to manage your settings.",
+  "auth.password": "Password",
+  "auth.login.submit": "Sign in",
+  "auth.waitButton": "Wait {seconds} s",
+  "auth.broken.title": "Sign-in is unavailable",
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
 } as const;

@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import type { RouterHistory } from "@tanstack/react-router";
 import { ShellLayout } from "@/app/layouts/ShellLayout";
+import { AuthPage } from "@/features/auth/AuthPage";
 import { ErrorState } from "@/components/feedback/feedback";
 import { buttonVariants } from "@/components/ui/button";
 import { useT } from "@/i18n/t";
@@ -59,10 +60,10 @@ const rootRoute = createRootRoute({
   errorComponent: RouteError,
 });
 
-/** Replaced by the sign-in and first-password pages in their own tasks. */
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
+  component: AuthPage,
   beforeLoad: async () => {
     const session = await currentSession();
     if (session.state === "authenticated") throw redirect({ to: "/" });
