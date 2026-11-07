@@ -1628,6 +1628,7 @@ func newRESTMux(client *whatsmeow.Client, messageStore *MessageStore, status con
 	// Handler for the bridge status
 	mux.HandleFunc("/api/status", handleStatus(status, state, bridgeVersion()))
 	mux.HandleFunc("/api/webhooks/test", handleWebhookTest(messageStore))
+	mux.HandleFunc("/api/config/validate-webhooks", handleValidateWebhooks())
 
 	// Handler for sending messages
 	mux.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
@@ -1785,6 +1786,10 @@ func main() {
 		defer logFile.Close()
 		defer stop()
 	}
+	// Variables the web interface saved fill the ones the environment lacks; what the package read
+	// before main ran is read again with them.
+	startupEnv := os.Environ() // what the web interface is started with: before the file is applied
+	applyStartupSettings(func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
 	state := newBridgeState(time.Now)
 
 	// Set up logger
@@ -1941,6 +1946,9 @@ func main() {
 	}
 	logger.Infof("The REST API token is in %s", filepath.Join(apiConfigDir, apiTokenFile))
 	startRESTServer(client, messageStore, state, defaultRESTPort, apiToken, logger)
+	// The web interface is a child of the bridge: it starts with it and ends with it, and a failure of
+	// the interface never stops the bridge.
+	webUI := startUIFromEnvironment(startupEnv, os.Getenv, func(format string, args ...any) { fmt.Printf(format+"\n", args...) })
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
@@ -1952,6 +1960,7 @@ func main() {
 	<-exitChan
 
 	fmt.Println("Disconnecting...")
+	webUI.stop(5 * time.Second)
 	// Disconnect client
 	client.Disconnect()
 }

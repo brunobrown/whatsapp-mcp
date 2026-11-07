@@ -31,3 +31,9 @@ def test_a_new_push_to_a_pull_request_cancels_the_run_it_replaces_but_pushes_to_
     # cancelling is conditional: only for pull_request events, so a merged commit on main or dev is checked to the end
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
     assert "cancel-in-progress: true" not in text
+
+
+def test_ci_proves_the_core_needs_no_flet_and_then_runs_everything_with_it():  # EXT-02
+    text = read()
+
+    assert text.index("uv run pytest -q") < text.index("uv sync --locked --group ui") < text.index("uv run --group ui pytest -q")

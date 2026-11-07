@@ -6,6 +6,8 @@ Type=simple
 WorkingDirectory=@DIR@
 ExecStart=@DIR@/bin/whatsapp-bridge
 Environment=WHATSAPP_CONFIG_DIR=@CONFIG@
+# The web interface: the unit cannot write the Python environment, so it runs the one made beforehand by `uv sync --group ui`.
+Environment="WHATSAPP_UI_COMMAND=/usr/bin/env PYTHONPATH=@SERVER@ @SERVER@/.venv/bin/python -m ui"
 Restart=on-failure
 RestartSec=5
 

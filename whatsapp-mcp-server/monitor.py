@@ -234,6 +234,18 @@ def _parse_profile(name: str, raw) -> Profile:
     return profile
 
 
+def parse_profiles(raw) -> Tuple[Dict[str, Profile], Optional[str]]:
+    """Validate an already parsed file: (profiles by name, None), or ({}, the problem). Reads no file."""
+    try:
+        if not isinstance(raw, dict) or set(raw) - {"profiles"}:
+            raise _Invalid('the file must be an object with only a "profiles" key')
+        if not isinstance(raw.get("profiles", {}), dict):
+            raise _Invalid('"profiles" must be an object')
+        return {name: _parse_profile(name, body) for name, body in raw.get("profiles", {}).items()}, None
+    except _Invalid as e:
+        return {}, str(e)
+
+
 def load_profiles() -> Tuple[Dict[str, Profile], Optional[str]]:
     """(profiles by name, problem). No file means no profiles; a file that does not validate means a problem."""
     filemode.warn_if_open(CONFIG_PATH)   # the approval token must not be readable by other users
@@ -248,14 +260,7 @@ def load_profiles() -> Tuple[Dict[str, Profile], Optional[str]]:
         raw = json.loads(text)
     except ValueError as e:
         return {}, f"the file is not valid JSON ({e})"
-    try:
-        if not isinstance(raw, dict) or set(raw) - {"profiles"}:
-            raise _Invalid('the file must be an object with only a "profiles" key')
-        if not isinstance(raw.get("profiles", {}), dict):
-            raise _Invalid('"profiles" must be an object')
-        return {name: _parse_profile(name, body) for name, body in raw.get("profiles", {}).items()}, None
-    except _Invalid as e:
-        return {}, str(e)
+    return parse_profiles(raw)
 
 
 def error(code: str, message: str, **extra) -> dict:

@@ -544,3 +544,36 @@ def test_a_placeholder_override_token_never_releases_a_blocked_send(db, post, pl
 
     assert out["success"] is False and out["error_code"] == send_policy.BLOCKED
     post.assert_not_called()
+
+
+# --- parse_policy: the validation alone, from a dict (the UI validates before it writes; CFG-02) ---
+
+def test_parse_policy_accepts_a_valid_policy_unchanged():
+    data = {"mode": "allowlist", "allow": ["Project Alpha", TECH], "deny": [], "override_token": "x"}
+
+    assert send_policy.parse_policy(data) == (data, None)
+
+
+def test_parse_policy_defaults_need_no_keys():
+    assert send_policy.parse_policy({}) == ({}, None)
+
+
+@pytest.mark.parametrize("data, problem", [
+    ([], "the policy file must contain a JSON object"),
+    ("text", "the policy file must contain a JSON object"),
+    ({"mode": "both"}, '"mode" must be one of allowlist, denylist'),
+    ({"allow": "Project Alpha"}, '"allow" must be a list of texts'),
+    ({"deny": ["ok", 3]}, '"deny" must be a list of texts'),
+    ({"allow": ["a@b@c"]}, '"allow" entry \'a@b@c\' is not a valid JID'),
+    ({"override_token": 7}, '"override_token" must be a text'),
+])
+def test_parse_policy_refuses_what_the_file_loader_refuses(data, problem):
+    assert send_policy.parse_policy(data) == (None, problem)
+
+
+def test_load_reads_the_file_and_returns_what_parse_policy_returns(tmp_path, monkeypatch):
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"mode": "nope"}), encoding="utf-8")
+    monkeypatch.setattr(send_policy, "POLICY_PATH", str(path))
+
+    assert send_policy._load() == send_policy.parse_policy({"mode": "nope"})
