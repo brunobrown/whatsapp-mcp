@@ -22,7 +22,8 @@ def test_the_five_tools_are_registered_with_their_parameters():  # SEND-01, RES-
     schemas = tool_schemas()
     expected = {
         "send_poll": ({"recipient", "question", "options", "allow_multiple", "allow_add_option", "hide_voter_names",
-                       "override_token", "dry_run"}, {"recipient", "question", "options"}),
+                       "override_token", "dry_run", "quiz_answer", "closes_in_minutes"},
+                      {"recipient", "question", "options"}),
         "get_poll_results": ({"message_id", "chat_jid"}, {"message_id"}),
         "list_polls": ({"chat_jid", "limit", "page"}, {"chat_jid"}),
         "vote_poll": ({"chat_jid", "message_id", "options", "override_token", "dry_run"}, {"chat_jid", "message_id", "options"}),

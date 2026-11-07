@@ -415,7 +415,9 @@ def send_poll(
     allow_add_option: bool = False,
     hide_voter_names: bool = False,
     override_token: Optional[str] = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    quiz_answer: Optional[str] = None,
+    closes_in_minutes: Optional[int] = None
 ) -> Dict[str, Any]:
     """Create a WhatsApp poll in a chat or group.
 
@@ -429,6 +431,9 @@ def send_poll(
         hide_voter_names: True makes the poll anonymous: get_poll_results then counts votes without naming voters (default False)
         override_token: Optional token (set by the user in send_policy.json) to release one send the send policy blocks
         dry_run: Returns the preview (question, options, flags, resolved chat) and sends nothing. The send policy still applies
+        quiz_answer: Makes the poll a quiz: the text of the option that is the right answer (any case). A quiz takes one answer
+                 (allow_multiple is ignored) and cannot be combined with allow_add_option
+        closes_in_minutes: The poll closes after this many minutes (a whole number, 1 to 10080)
 
     Returns:
         success, message and, when sent, message_id, timestamp and chat_jid (the message_id is what get_poll_results,
@@ -437,7 +442,8 @@ def send_poll(
         RECIPIENT_NOT_FOUND or RECIPIENT_AMBIGUOUS, BRIDGE_UNAUTHORIZED
     """
     return send_response(whatsapp_send_poll(recipient, question, options, allow_multiple, allow_add_option,
-                                            hide_voter_names, override_token, dry_run))
+                                            hide_voter_names, override_token, dry_run, quiz_answer,
+                                            closes_in_minutes))
 
 @mcp.tool(annotations=READ_ONLY)
 def get_poll_results(message_id: str, chat_jid: Optional[str] = None) -> Dict[str, Any]:

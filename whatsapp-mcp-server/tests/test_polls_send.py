@@ -265,3 +265,63 @@ def test_a_delete_is_audited_by_kind_without_the_text(db, post):  # DEL-04
 
     [line] = audit_lines()
     assert line["kind"] == "delete" and line["result"] == "sent" and "my text" not in json.dumps(line)
+
+
+def test_quiz_answer_is_posted_and_makes_the_poll_single_answer(db, post):  # QUIZ-01, QUIZ-03
+    out = whatsapp.send_poll("Test", "Capital?", ["Brasília", "Rio"], quiz_answer="brasília")
+    assert out.success is True
+    assert sent(post)["quiz_answer"] == "Brasília"
+    assert sent(post)["allow_multiple"] is False
+
+
+@pytest.mark.parametrize("answer", ["Sao Paulo", "", "  ", 3, ["A"]])
+def test_a_quiz_answer_that_is_not_an_option_is_refused(db, post, answer):  # QUIZ-02
+    out = whatsapp.send_poll(GROUP, "Q", ["A", "B"], quiz_answer=answer)
+    assert out.success is False and out.error_code == "INVALID_POLL"
+    post.assert_not_called()
+
+
+def test_a_quiz_that_lets_people_add_options_is_refused(db, post):  # QUIZ-02
+    out = whatsapp.send_poll(GROUP, "Q", ["A", "B"], quiz_answer="A", allow_add_option=True)
+    assert out.error_code == "INVALID_POLL"
+    post.assert_not_called()
+
+
+def test_a_quiz_dry_run_shows_single_answer_and_the_answer(db, post):  # QUIZ-03
+    out = whatsapp.send_poll(GROUP, "Q", ["A", "B"], allow_multiple=True, quiz_answer="b", dry_run=True)
+    assert out.preview["allow_multiple"] is False and out.preview["quiz_answer"] == "B"
+    post.assert_not_called()
+
+
+@pytest.mark.parametrize("minutes", [1, 30, 10080])
+def test_closes_in_minutes_is_posted(db, post, minutes):  # END-01
+    assert whatsapp.send_poll(GROUP, "Q", ["A", "B"], closes_in_minutes=minutes).success is True
+    assert sent(post)["closes_in_minutes"] == minutes
+
+
+@pytest.mark.parametrize("minutes", [0, -5, 10081, 1.5, "30", True, []])
+def test_a_bad_deadline_is_refused(db, post, minutes):  # END-02
+    out = whatsapp.send_poll(GROUP, "Q", ["A", "B"], closes_in_minutes=minutes)
+    assert out.success is False and out.error_code == "INVALID_POLL"
+    post.assert_not_called()
+
+
+def test_dry_run_shows_the_deadline(db, post):  # END-03
+    out = whatsapp.send_poll(GROUP, "Q", ["A", "B"], closes_in_minutes=60, dry_run=True)
+    assert out.preview["closes_in_minutes"] == 60 and "quiz_answer" not in out.preview
+    post.assert_not_called()
+
+
+def test_without_quiz_or_deadline_the_body_and_preview_have_no_new_keys(db, post):  # END-03, COMPAT-01
+    whatsapp.send_poll(GROUP, "Q", ["A", "B"])
+    assert "quiz_answer" not in sent(post) and "closes_in_minutes" not in sent(post)
+    preview = whatsapp.send_poll(GROUP, "Q", ["A", "B"], dry_run=True).preview
+    assert "quiz_answer" not in preview and "closes_in_minutes" not in preview
+
+
+def test_the_tool_takes_quiz_answer_and_closes_in_minutes(db, post):  # QUIZ-01, END-01
+    import asyncio
+    import main
+    schema = {t.name: t.input_schema for t in asyncio.run(main.mcp.list_tools())}["send_poll"]
+    assert {"quiz_answer", "closes_in_minutes"} <= set(schema["properties"])
+    assert not {"quiz_answer", "closes_in_minutes"} & set(schema["required"])
