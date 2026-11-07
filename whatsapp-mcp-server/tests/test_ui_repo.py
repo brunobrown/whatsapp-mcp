@@ -51,7 +51,11 @@ def test_lock_and_pyproject_list_no_flet():  # MIG-09
 def test_old_ui_packages_are_gone():  # MIG-22
     for name in ("core", "app", "assets"):
         assert not (SERVER / "ui" / name).exists(), f"ui/{name} must not exist"
-    assert tracked("whatsapp-mcp-server/ui/core", "whatsapp-mcp-server/ui/app", "whatsapp-mcp-server/ui/assets") == []
+    assert tracked("whatsapp-mcp-server/ui/core", "whatsapp-mcp-server/ui/app", "whatsapp-mcp-server/ui/assets", others=True) == []
+    # the old toolkit's own tests and end-to-end folder are gone, tracked or not
+    assert sorted(p.name for p in (SERVER / "tests").glob("test_ui_app_*")) == []
+    assert not (SERVER / "tests" / "e2e").exists(), "tests/e2e must not exist"
+    assert tracked("whatsapp-mcp-server/tests/e2e", "whatsapp-mcp-server/tests/test_ui_app_*", others=True) == []
     # the old toolkit's tests are gone too: nothing under tests/ imports or names it (the scan above covers the text)
     for test in (SERVER / "tests").glob("test_ui_*.py"):
         assert not re.search(r"^\s*(import|from)\s+" + "fl" + r"et\b", test.read_text(encoding="utf-8"), re.M), test.name
