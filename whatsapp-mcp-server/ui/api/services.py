@@ -5,8 +5,8 @@ ui_settings.json filled in what was missing), so the interface can tell a variab
 the file.
 """
 import os
-from dataclasses import dataclass
-from typing import Callable, Mapping, Optional
+from dataclasses import dataclass, field
+from typing import Callable, Dict, Mapping, Optional
 
 from ui.config.envlayer import EnvLayer
 from ui.config.registry import Registry
@@ -14,6 +14,21 @@ from ui.config.store import ConfigStore
 from ui.security.auth import AuthStore
 from ui.security.signin import SignInFlow
 from ui.security.throttle import IDLE_LIMIT_SECONDS, Throttle
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Where the interface listens. `startup_environ` is the environment as the process was started, before
+    ui_settings.json filled in what was missing."""
+    host: str
+    port: int
+    remote: bool = False
+    startup_environ: Dict[str, str] = field(default_factory=dict, compare=False, repr=False)
+
+    @property
+    def url(self) -> str:
+        host = f"[{self.host}]" if ":" in self.host else self.host
+        return f"http://{host}:{self.port}"
 
 
 @dataclass
