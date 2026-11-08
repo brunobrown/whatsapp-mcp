@@ -72,6 +72,7 @@ export interface FieldSchema {
   readonly: boolean;
   risk: string | null;
   risk_when: unknown[];
+  group?: string;
 }
 
 export type Origin = "default" | "file" | "environment";

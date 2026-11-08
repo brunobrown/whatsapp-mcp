@@ -164,3 +164,12 @@ def test_problem_carries_the_field_and_the_reason():
     p = Problem("mode", "must be one of: a")
     assert p.key == "mode" and p.message == "must be one of: a"
     assert Problem(None, "general").key is None
+
+
+def test_a_field_group_is_validated_and_defaults_to_empty():
+    """UXP-15: the group label is optional, empty by default and at most 40 characters."""
+    assert make("text").group == ""
+    assert make("text", group="Timing").group == "Timing"
+    assert make("text", group="x" * 40).group == "x" * 40
+    with pytest.raises(ValueError):
+        make("text", group="x" * 41)

@@ -5,7 +5,8 @@ import os
 import pytest
 
 import monitor
-from ui.api.forms import FormService
+from ui.api.forms import FormService, field_schema
+from ui.config.fields import Field
 from ui.api.routes_sections import section_routes
 from ui.sections import webhooks as webhooks_section
 from ui.security.bridge import WebhookCheck
@@ -48,6 +49,17 @@ def test_the_menu_lists_sections_and_pages(rig):
     assert ids[0] == "status" and "send_policy" in ids and "database" in ids and ids[-1] == "account"
     assert {e["kind"] for e in listing} == {"section", "page"}
     assert "ui_auth" not in ids and "ui_settings" not in ids
+
+
+def test_the_section_schema_carries_the_group_of_each_field():
+    """UXP-15: field_schema emits the group label, and an empty string when the field has none."""
+    grouped = field_schema(Field("batch", "Batch", "int", group="Timing"))
+    plain = field_schema(Field("name", "Name", "text"))
+    nested = field_schema(Field("rows", "Rows", "records", fields=(Field("a", "A", "text", group="Inner"),)))
+
+    assert grouped["group"] == "Timing"
+    assert plain["group"] == ""
+    assert nested["fields"][0]["group"] == "Inner"
 
 
 def test_section_schema_carries_defaults_origin_lock_and_restart():

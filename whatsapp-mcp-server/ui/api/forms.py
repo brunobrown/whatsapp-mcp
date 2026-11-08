@@ -28,7 +28,7 @@ def field_schema(f: Field) -> Dict[str, Any]:
         "env_var": f.env_var, "options": list(f.options), "bounds": list(f.bounds) if f.bounds else None,
         "max_length": f.max_length, "max_items": f.max_items, "multiline": f.multiline,
         "fields": [field_schema(sub) for sub in f.fields], "id_key": f.id_key, "readonly": f.readonly,
-        "risk": f.risk, "risk_when": list(f.risk_when),
+        "risk": f.risk, "risk_when": list(f.risk_when), "group": f.group,
     }
 
 
