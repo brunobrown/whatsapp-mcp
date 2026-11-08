@@ -353,6 +353,20 @@ test("UXP-25 a successful save hides the bar and shows Saved once as a toast", a
     // Not a second time while the bar is gone and nothing else happens.
     await expect.poll(async () => toasts.count(), { timeout: 2500, intervals: [250] }).toBe(1);
     expect((json(fresh, "send_policy.json") as { allow: string[] }).allow[0]).toBe("Saved once");
+    // The toast floats above the bar: saving again at once, the Save button is not under it.
+    await page.getByRole("textbox", { name: "Allow, item 1" }).fill("Saved twice");
+    await expect(saveButton(page)).toBeVisible();
+    const buttonBox = await saveButton(page).boundingBox();
+    // The toast slides in; once it rests its bottom edge is above the bar.
+    await expect
+      .poll(async () => {
+        const box = await page.locator("[data-sonner-toast]").first().boundingBox();
+        return box === null ? 9999 : box.y + box.height;
+      })
+      .toBeLessThanOrEqual((buttonBox?.y ?? 0) + 1);
+    await saveButton(page).click();
+    await expect(page.locator("[data-save-bar]")).toHaveCount(0);
+    expect((json(fresh, "send_policy.json") as { allow: string[] }).allow[0]).toBe("Saved twice");
   });
 });
 

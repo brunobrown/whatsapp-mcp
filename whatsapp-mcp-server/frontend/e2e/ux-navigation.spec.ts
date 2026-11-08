@@ -762,6 +762,8 @@ test("UXP-45 choosing an entry, Escape, Close menu and a tap on the overlay each
     for (const [name, close] of closers) {
       await open.click();
       await expect(drawer).toBeVisible();
+      // Let the slide-in finish: a tap lands on the overlay the way an operator's does, not on a panel in motion.
+      await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
       await close();
       await expect(drawer, name).toHaveCount(0);
       await expect(open, `focus after ${name}`).toBeFocused();
