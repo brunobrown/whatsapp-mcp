@@ -11,6 +11,7 @@ import { useT } from "@/i18n/t";
 import type { FieldSchema, SectionView } from "@/types/api";
 import { groupFields } from "./groupFields";
 import { SaveBar } from "./SaveBar";
+import { SectionHeaderActions } from "./SectionHeaderActions";
 import { InSlot } from "./slots";
 import { useLeaveGuard } from "./useLeaveGuard";
 import { useSaveShortcut } from "./useSaveShortcut";
@@ -38,7 +39,6 @@ function Notes({ view }: { view: SectionView }) {
   const t = useT();
   return (
     <div className="flex flex-col gap-3">
-      {view.description ? <p className="m-0 text-muted">{view.description}</p> : null}
       {view.restart ? <p className="m-0 text-sm text-muted">{t(`section.restartNote.${view.restart}`)}</p> : null}
       {view.status === "error" && view.banner ? (
         <Banner kind="error" title={t("section.problem.title")}>
@@ -241,19 +241,17 @@ function LoadedForm({ section, view }: { section: ReturnType<typeof useSection>;
           ))}
         </div>
 
-        {readOnly ? null : (
-          <div className="mt-4">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setAskRestore(true);
-              }}
-            >
-              {t("section.restoreAll")}
-            </Button>
-          </div>
-        )}
       </form>
+
+      {readOnly ? null : (
+        <InSlot slot="actions">
+          <SectionHeaderActions
+            onRestoreDefaults={() => {
+              setAskRestore(true);
+            }}
+          />
+        </InSlot>
+      )}
 
       {readOnly || !dirty ? null : (
         <InSlot slot="bar">

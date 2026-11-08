@@ -247,7 +247,8 @@ test("CFG-07 restoring a default asks first and removes the saved value only whe
     const rest = Object.fromEntries(Object.entries(reference).filter(([key]) => key !== "mode"));
     expect(json(fresh, "send_policy.json")).toEqual(rest);
     // The whole section: the same, for every saved value.
-    await page.getByRole("button", { name: "Restore defaults" }).click();
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Restore defaults" }).click();
     await expect(page.getByRole("alertdialog")).toContainText("Restore the defaults of this section?");
     await confirm(page, "Restore defaults");
     expect(json(fresh, "send_policy.json")).toEqual(rest);

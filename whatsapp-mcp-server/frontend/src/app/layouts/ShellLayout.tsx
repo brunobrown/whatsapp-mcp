@@ -69,8 +69,9 @@ function DetailPane({ active, drawer, pathname }: { active: SectionSummary | und
   useLayoutEffect(() => {
     if (content.current) content.current.scrollTop = 0;
   }, [pathname]);
+  const [actions, setActions] = useState<HTMLElement | null>(null);
   const [bar, setBar] = useState<HTMLElement | null>(null);
-  const slots = useMemo(() => ({ actions: null, bar }), [bar]);
+  const slots = useMemo(() => ({ actions, bar }), [actions, bar]);
   const restartSections = useUiStore((state) => state.restartSections);
   const pending = active !== undefined && (active.pending || restartSections.includes(active.id));
   return (
@@ -78,8 +79,18 @@ function DetailPane({ active, drawer, pathname }: { active: SectionSummary | und
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 sm:px-4">
         {drawer ? <MenuDrawer /> : null}
-        <h1 className="m-0 min-w-0 flex-1 truncate text-lg font-semibold">{active?.title ?? t("app.settings")}</h1>
+        <div className="min-w-0 flex-1 leading-tight">
+          <h1 className="m-0 truncate text-lg font-semibold" title={active?.title}>
+            {active?.title ?? t("app.settings")}
+          </h1>
+          {active?.description ? (
+            <p className="m-0 truncate text-sm text-muted" title={active.description}>
+              {active.description}
+            </p>
+          ) : null}
+        </div>
         {pending ? <Badge variant="warning">{t("shell.pendingRestart")}</Badge> : null}
+        <div ref={setActions} className="flex shrink-0 items-center empty:hidden" />
       </header>
       <main
         id="content"

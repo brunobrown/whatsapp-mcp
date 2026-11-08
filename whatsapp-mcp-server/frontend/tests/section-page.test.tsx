@@ -46,7 +46,7 @@ function section(overrides: Partial<SectionView> = {}): SectionView {
 
 const okOutcome: SaveOutcome = { ok: true, unchanged: false, conflict: false, needs_confirmation: false, errors: {}, general: [], restarts: ["bridge"] };
 const listing = [
-  { id: "s", title: "Test section", icon: "shield", order: 10, kind: "section", description: "", restart: "bridge" },
+  { id: "s", title: "Test section", icon: "shield", order: 10, kind: "section", description: "What this section does.", restart: "bridge" },
 ];
 
 let viewport: ReturnType<typeof mockViewport>;
@@ -201,7 +201,7 @@ describe("loading and failing", () => {
 describe("the form built from the schema", () => {
   it("shows every field of the schema with the description and the restart note", async () => {
     await mount();
-    expect(screen.getByText("What this section does.")).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("What this section does.")).toBeInTheDocument();
     expect(screen.getByText("Changes here apply after the bridge restarts.")).toBeInTheDocument();
     expect(field("Name")).toHaveValue("alpha");
     expect(field("Limit")).toHaveValue("5");
@@ -246,6 +246,7 @@ describe("read-only sections", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restore defaults" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(field("Name")).toHaveAttribute("readonly");
     expect(field("Name")).toHaveValue("alpha");
   });
@@ -409,7 +410,8 @@ describe("saving", () => {
 describe("restore defaults", () => {
   it("asks first; on confirm it restores saved fields, skips locked ones and says which", async () => {
     await mount();
-    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restore defaults" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Every saved value of Test section goes back to its default.");
     await userEvent.click(within(dialog).getByRole("button", { name: "Restore defaults" }));
@@ -429,7 +431,8 @@ describe("restore defaults", () => {
 
   it("changes nothing when the operator cancels", async () => {
     await mount();
-    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restore defaults" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
     expect(field("Name")).toHaveValue("alpha");
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
