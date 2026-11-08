@@ -62,7 +62,7 @@ export function MenuDrawer() {
             <p className="m-0 truncate text-lg font-semibold">{t("app.name")}</p>
             <p className="m-0 truncate text-sm text-muted">{t("app.settings")}</p>
           </div>
-          <MenuTools />
+          <MenuTools tooltip={false} />
           <SheetClose asChild>
             <Button variant="ghost" size="icon" aria-label={t("menu.close")}>
               <X aria-hidden="true" />

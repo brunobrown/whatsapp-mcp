@@ -104,7 +104,8 @@ test("MIG-17 the accent is the green of the #00a884 family, both themes exist an
   await harness.current.signIn(page);
   await page.addStyleTag({ content: NO_MOTION });
   await page.emulateMedia({ colorScheme: "dark" });
-  const cycler = (name: string) => page.getByRole("button", { name: `Theme: ${name}. Change it.` });
+  // The button is named by the theme a press switches to: System -> Light -> Dark -> System.
+  const cycler = (current: string) => page.getByRole("button", { name: `Switch to ${{ System: "Light", Light: "Dark", Dark: "System" }[current] ?? ""} theme` });
   await cycler("System").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   expect(await rgb(page, "body", "backgroundColor")).toEqual([240, 242, 245]);
@@ -231,9 +232,9 @@ test("MIG-18 axe finds no serious violation and no contrast failure in either th
   found.push(...(await scanBoth(page, "remove dialog")));
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Restore the default of Mode" }).waitFor();
-  await page.getByRole("button", { name: /^Theme: / }).click();
+  await page.getByRole("button", { name: /^Switch to \w+ theme$/ }).click();
   found.push(...(await scanBoth(page, "forced light")));
-  await page.getByRole("button", { name: /^Theme: / }).click();
+  await page.getByRole("button", { name: /^Switch to \w+ theme$/ }).click();
   found.push(...(await scanBoth(page, "forced dark")));
 
   expect(found.map((finding) => `${finding.where}: ${finding.rule} (${finding.impact}): ${finding.nodes}`)).toEqual([]);

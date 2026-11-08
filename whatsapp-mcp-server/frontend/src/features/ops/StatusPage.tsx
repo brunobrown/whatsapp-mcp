@@ -12,6 +12,7 @@ import { raiseNotice } from "@/lib/notices";
 import { useOpsCounters, useOpsStatus } from "@/services/services";
 import type { BridgeStatus, OpsCounters, Unavailable } from "@/types/api";
 import { Cell, DataTable } from "./DataTable";
+import { CopyButton } from "./CopyButton";
 import { Freshness } from "./Freshness";
 import { Moment } from "./Moment";
 
@@ -52,11 +53,14 @@ function Facts({ children }: { children: ReactNode }) {
   return <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">{children}</dl>;
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+function Fact({ label, children, copy }: { label: string; children: ReactNode; copy?: string | undefined }) {
   return (
     <div className="min-w-0">
       <dt className="text-sm text-muted">{label}</dt>
-      <dd className="m-0 font-medium break-words">{children}</dd>
+      <dd className="m-0 flex items-center gap-1 font-medium">
+        <span className="min-w-0 break-words">{children}</span>
+        {copy ? <CopyButton value={copy} what={label.toLowerCase()} /> : null}
+      </dd>
     </div>
   );
 }
@@ -83,8 +87,8 @@ function Connection({ status }: { status: BridgeStatus }) {
         </Badge>
       </p>
       <Facts>
-        <Fact label={t("status.phone")}>{status.phone || t("format.missing")}</Fact>
-        <Fact label={t("status.version")}>{status.version || t("format.missing")}</Fact>
+        <Fact label={t("status.phone")} copy={status.phone}>{status.phone || t("format.missing")}</Fact>
+        <Fact label={t("status.version")} copy={status.version}>{status.version || t("format.missing")}</Fact>
         <Fact label={t("status.uptime")}>{formatDuration(status.uptime_seconds)}</Fact>
         <Fact label={t("status.startedAt")}><Moment value={status.started_at} /></Fact>
         <Fact label={t("status.lastEvent")}><Moment value={status.last_event_at} /></Fact>

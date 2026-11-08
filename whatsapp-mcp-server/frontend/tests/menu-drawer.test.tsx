@@ -88,7 +88,7 @@ describe("menu drawer", () => {
     expect(within(drawer).getAllByRole("link")).toHaveLength(sections.length);
     expect(within(drawer).getByRole("button", { name: "Close menu" })).toBeInTheDocument();
     expect(within(drawer).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-    expect(within(drawer).getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+    expect(within(drawer).getByRole("button", { name: /^Switch to \w+ theme$/ })).toBeInTheDocument();
     expect(drawer).toContainElement(document.activeElement as HTMLElement);
     // The panel is limited to 320 px and 85% of the width.
     expect(drawer.className).toContain("w-[min(320px,85vw)]");

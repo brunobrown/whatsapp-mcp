@@ -10,6 +10,8 @@ import type { Notice } from "@/stores/ui";
 type Tone = "success" | "warning" | "error";
 const TONES: Record<NoticeKind, Tone> = {
   saved: "success",
+  copied: "success",
+  copyFailed: "error",
   sessionWarning: "warning",
   saveFailed: "error",
   bridgeUnavailable: "warning",

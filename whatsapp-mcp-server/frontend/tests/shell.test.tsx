@@ -138,7 +138,7 @@ describe("wide screens (600 px and more)", () => {
     const panel = screen.getByRole("complementary", { name: "Settings menu" });
     expect(within(panel).getByRole("navigation", { name: "Sections" })).toBe(nav);
     expect(within(panel).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /^Switch to \w+ theme$/ })).toBeInTheDocument();
     expect(within(panel).getByText("WhatsApp MCP")).toBeInTheDocument();
   });
 
@@ -227,10 +227,22 @@ describe("states and header actions", () => {
     open("/status");
     await listed();
     expect(useUiStore.getState().theme).toBe("system");
-    await userEvent.click(screen.getByRole("button", { name: /^Theme: System/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Light theme" }));
     expect(useUiStore.getState().theme).toBe("light");
-    await userEvent.click(screen.getByRole("button", { name: /^Theme: Light/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Dark theme" }));
     expect(useUiStore.getState().theme).toBe("dark");
+  });
+
+  it("UXP-32 the theme button is named by the theme it switches to and shows that name as a tooltip", async () => {
+    open("/status");
+    await listed();
+    const button = screen.getByRole("button", { name: "Switch to Light theme" });
+    await userEvent.hover(button);
+    expect((await screen.findAllByText("Switch to Light theme")).length).toBeGreaterThan(0);
+    await userEvent.click(button);
+    expect(screen.getByRole("button", { name: "Switch to Dark theme" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Switch to Dark theme" }));
+    expect(screen.getByRole("button", { name: "Switch to System theme" })).toBeInTheDocument();
   });
 
   it("signs out: calls DELETE /session and lands on /login", async () => {
@@ -322,7 +334,7 @@ describe("menu collapse", () => {
     await listed();
     const panel = screen.getByRole("complementary", { name: "Settings menu" });
     expect(within(panel).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /^Switch to \w+ theme$/ })).toBeInTheDocument();
   });
 
   it("UXP-03 defaults by width and the stored choice", async () => {

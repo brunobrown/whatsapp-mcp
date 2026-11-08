@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppProviders } from "../src/app/providers";
 import { createAppRouter } from "../src/app/router";
 import { queryClient } from "../src/lib/queryClient";
@@ -57,6 +57,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  Reflect.deleteProperty(navigator, "clipboard");
   act(() => {
     toast.dismiss();
   });
@@ -230,5 +231,28 @@ describe("status page", () => {
     expect(moment).toHaveAttribute("title", "2026-01-02 03:04:05 UTC");
     const window = (await screen.findByText(/^Counted since/)).querySelector("time") as HTMLElement;
     expect(window).toHaveAttribute("datetime", "2026-01-02T03:04:05.000Z");
+  });
+
+  it("UXP-31 copy shows Copied: the phone and the bridge version are copied, each time", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    serve({ status: { connected: true, phone: "15550100001", version: "1.2.3" } });
+    openStatus();
+    await userEvent.click(await screen.findByRole("button", { name: "Copy phone" }));
+    expect(writeText).toHaveBeenLastCalledWith("15550100001");
+    expect(await screen.findAllByText("Copied")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Copy bridge version" }));
+    expect(writeText).toHaveBeenLastCalledWith("1.2.3");
+    await waitFor(() => {
+      expect(screen.getAllByText("Copied").length).toBeGreaterThan(1);
+    });
+  });
+
+  it("UXP-31 offers no copy button for a value the bridge did not give", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    await screen.findByText("Connected");
+    expect(screen.queryByRole("button", { name: "Copy phone" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy bridge version" })).not.toBeInTheDocument();
   });
 });

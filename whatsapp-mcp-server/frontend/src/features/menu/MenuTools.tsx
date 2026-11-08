@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { useT } from "@/i18n/t";
 import { sessionService } from "@/services/services";
 import { useUiStore } from "@/stores/ui";
@@ -16,23 +17,32 @@ const THEME_ICONS: Record<Theme, LucideIcon> = {
   dark: Moon,
 };
 
-function ThemeButton() {
+function ThemeButton({ tooltip }: { tooltip: boolean }) {
   const t = useT();
   const theme = useUiStore((state) => state.theme);
   const setTheme = useUiStore((state) => state.setTheme);
   const Icon = THEME_ICONS[theme];
   const next = THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length] ?? "system";
-  return (
+  // The button shows the theme in use and is named by the one a press switches to; the tooltip says the same.
+  const label = t("shell.theme", { name: t(`shell.theme.${next}`) });
+  const button = (
     <Button
       variant="ghost"
       size="icon"
-      aria-label={t("shell.theme", { name: t(`shell.theme.${theme}`) })}
+      aria-label={label}
       onClick={() => {
         setTheme(next);
       }}
     >
       <Icon aria-hidden="true" />
     </Button>
+  );
+  return tooltip ? (
+    <Tooltip label={label} side="bottom">
+      {button}
+    </Tooltip>
+  ) : (
+    button
   );
 }
 
@@ -74,13 +84,17 @@ function SignOutButton() {
   );
 }
 
-/** The theme and sign-out buttons: in the menu header, in the rail footer and in the drawer header. */
-export function MenuTools() {
+/**
+ * The theme and sign-out buttons: in the menu header, in the rail footer and in the drawer header. The drawer sets
+ * `tooltip` to false: focus lands on its first button when it opens, and a tooltip opened by that focus would take
+ * the first Escape that should close the drawer.
+ */
+export function MenuTools({ tooltip = true }: { tooltip?: boolean }) {
   return (
-    <>
-      <ThemeButton />
+    <TooltipProvider>
+      <ThemeButton tooltip={tooltip} />
       <SignOutButton />
-    </>
+    </TooltipProvider>
   );
 }
 
