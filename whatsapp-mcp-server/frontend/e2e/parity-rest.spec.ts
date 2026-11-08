@@ -156,8 +156,9 @@ test("OPS-01 the status page shows the bridge's state, uptime and events, and sa
   await expect(page.getByText("Paired with a phone")).toBeVisible();
   await expect(page.getByText("2 h 5 min")).toBeVisible();
   await expect(page.getByText("0.0.0-test")).toBeVisible();
-  await expect(page.getByText("Jan 2, 2026, 05:00 UTC")).toBeVisible();
-  await expect(page.getByRole("region", { name: "Webhook endpoints" })).toContainText("hook-a");
+  // Moments are relative text; the exact UTC time is in the title.
+  await expect(page.locator('time[title="2026-01-02 05:00:00 UTC"]').first()).toBeVisible();
+  await expect(page.getByRole("table", { name: "Webhook endpoints" })).toContainText("hook-a");
 
   bridge.mode = "disconnected";
   await page.goto(`${url}/status`);
@@ -223,7 +224,9 @@ test("OPS-02 counters, pending drafts and both audit logs show without message t
     for (const body of bodies) expect(body).not.toContain(text);
     // Nothing on the page sends, approves or discards, and the API has no such route.
     const content = page.getByRole("main");
-    await expect(content.getByRole("button")).toHaveCount(0);
+    // The one control is Refresh, which reads the lists again.
+    await expect(content.getByRole("button")).toHaveCount(1);
+    await expect(content.getByRole("button", { name: "Refresh" })).toBeVisible();
     await expect(content.getByRole("link")).toHaveCount(0);
     const session = (await (await page.request.get(`${fresh.url}/api/session`)).json()) as { csrf: string };
     for (const route of ["/api/ops/drafts", "/api/ops/audit/send", "/api/ops/status", "/api/send", "/api/drafts/d_new/approve", "/api/drafts/d_new"]) {
