@@ -94,6 +94,16 @@ describe("menu drawer", () => {
     expect(drawer.className).toContain("w-[min(320px,85vw)]");
   });
 
+  it("UXP-43 the drawer header leaves room for its three 44 px buttons in a 153 px drawer (180 px of layout at 200% zoom)", async () => {
+    // Brand text, theme, sign out and close: three buttons of 44 px need 132 px, so the header keeps no gap between them
+    // and puts its left margin on the brand text, which can shrink to nothing.
+    const { drawer } = await opened();
+    const header = drawer.querySelector("[data-drawer-header]");
+    expect(header).not.toBeNull();
+    expect(header?.className).not.toMatch(/\bgap-|\bpl-/);
+    expect(header?.firstElementChild).toHaveClass("min-w-0", "flex-1", "pl-4");
+  });
+
   it("UXP-44 focus stays in the drawer while Tab goes around it", async () => {
     const { drawer } = await opened();
     for (let step = 0; step < 16; step += 1) {

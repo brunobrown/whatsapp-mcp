@@ -57,8 +57,8 @@ export function MenuDrawer() {
         </Button>
       </SheetTrigger>
       <SheetContent label={t("menu.drawer")} onOpenChange={setOpen}>
-        <div className="flex h-16 shrink-0 items-center gap-1 border-b border-line bg-surface pr-2 pl-4">
-          <div className="min-w-0 flex-1 leading-tight">
+        <div data-drawer-header className="flex h-16 shrink-0 items-center border-b border-line bg-surface pr-1">
+          <div className="min-w-0 flex-1 pl-4 leading-tight">
             <p className="m-0 truncate text-lg font-semibold">{t("app.name")}</p>
             <p className="m-0 truncate text-sm text-muted">{t("app.settings")}</p>
           </div>
