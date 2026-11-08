@@ -98,7 +98,7 @@ function DetailPane({ active, drawer, pathname }: { active: SectionSummary | und
         tabIndex={-1}
         className="relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
       >
-        <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-6 sm:py-6">
+        <div className="mx-auto w-full max-w-3xl px-[16px] py-5 sm:px-6 sm:py-6">
           <Outlet />
         </div>
       </main>
@@ -127,7 +127,7 @@ export function ShellLayout() {
   const mode = resolveMenu(desktop ? MENU_EXPANDED_FROM : wide ? MENU_BESIDE_FROM : 0, menu);
 
   return (
-    <div data-testid="shell" data-menu={mode} className="relative flex h-dvh w-full overflow-hidden bg-surface">
+    <div data-testid="shell" data-menu={mode} className="relative flex h-dvh w-full overflow-hidden bg-surface pt-(--safe-top) pr-(--safe-right) pb-(--safe-bottom) pl-(--safe-left)">
       <a
         href="#content"
         className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-control focus:bg-panel focus:px-3 focus:py-2"

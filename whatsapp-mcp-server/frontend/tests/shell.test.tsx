@@ -389,6 +389,16 @@ describe("menu collapse", () => {
   });
 });
 
+describe("phone edges", () => {
+  it("UXP-37 UXP-40 the content keeps 16 px gutters (not 1 rem, which is 15 px here) and the shell keeps clear of the device's safe areas on all four sides", async () => {
+    viewport = mockViewport(360);
+    open("/s/media");
+    await screen.findByRole("heading", { level: 1, name: "Media downloads" });
+    expect(screen.getByTestId("shell")).toHaveClass("pt-(--safe-top)", "pr-(--safe-right)", "pb-(--safe-bottom)", "pl-(--safe-left)");
+    expect(screen.getByRole("main").firstElementChild).toHaveClass("px-[16px]");
+  });
+});
+
 describe("one scroller", () => {
   /** jsdom lays nothing out, so the element gets a scrollTop that holds what is written to it. */
   function scrollable(el: Element, top: number): void {
