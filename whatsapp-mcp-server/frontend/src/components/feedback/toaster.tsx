@@ -20,6 +20,10 @@ const TONES: Record<NoticeKind, Tone> = {
   sessionEnded: "error",
 };
 
+/** How far above the bottom edge the toasts float, in px: over the save bar's height on a desktop and on a phone. */
+export const SAVE_BAR_CLEARANCE = 88;
+export const SAVE_BAR_CLEARANCE_PHONE = 136;
+
 const sonnerTheme: CSSProperties = {
   "--normal-bg": "var(--panel)",
   "--normal-text": "var(--ink)",
@@ -84,6 +88,9 @@ export function Toaster() {
     <Sonner
       theme={theme}
       position="bottom-right"
+      // Clear of the save bar, which sits at the bottom edge (two rows high on a phone): a toast never covers Save.
+      offset={{ bottom: SAVE_BAR_CLEARANCE }}
+      mobileOffset={{ bottom: SAVE_BAR_CLEARANCE_PHONE }}
       closeButton
       customAriaLabel={t("toast.region")}
       toastOptions={{ closeButtonAriaLabel: t("common.close") }}
