@@ -165,6 +165,8 @@ async function scanBoth(page: Page, where: string): Promise<Finding[]> {
 }
 
 test("MIG-18 axe finds no serious violation and no contrast failure in either theme on every page and in the states that add colors", async ({ page }) => {
+  // Two themes on every page take about 31 s here; the default 30 s limit is too tight for the scan, not for the app.
+  test.setTimeout(120_000);
   const found: Finding[] = [];
   harness.current.seedActivity({
     drafts: [{ id: "d_1", profile: "assistant", chat_jid: "120363000000000001@g.us", sender: "15550100001", created_at: "2026-01-02T01:00:00+00:00", expires_at: "2099-01-01T00:00:00+00:00" }],
