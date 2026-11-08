@@ -1,13 +1,14 @@
 import type { Browser, CDPSession, Locator, Page } from "@playwright/test";
 import { expect, test, withHarness } from "./support/fixtures";
 import { field, openSection } from "./support/sections";
-import { blockStorage, documentScrolls, longDescription, longTitle, menuNav, menuReady, panel, shell, uxHarness, widthOf } from "./support/ux";
+import { blockStorage, documentScrolls, longDescription, longTitle, menuNav, menuReady, panel, phoneOf, PHONE, shell, uxHarness, widthOf } from "./support/ux";
 
 // UXP-01..13, 34, 42 and 44..48 of the ui-ux-polish spec: the collapsible menu, the one-scroller shell and the phone
 // drawer. The interface has two extension sections (one with a very long title), sixteen monitor profiles and 45 rows
 // in each log, so the menu, the lists and the tables all have something to scroll.
 
 const harness = uxHarness();
+const phonePage = (browser: Browser, size = PHONE) => phoneOf(browser, harness.current, size);
 
 interface Entry {
   id: string;
@@ -21,16 +22,6 @@ async function sectionsOf(page: Page): Promise<Entry[]> {
   const answer = await page.request.get(`${harness.current.url}/api/sections`);
   expect(answer.ok()).toBe(true);
   return (await answer.json()) as Entry[];
-}
-
-const PHONE = { width: 390, height: 844 };
-
-/** A phone: touch, the layout viewport of a handset. */
-async function phonePage(browser: Browser, size = PHONE) {
-  const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true });
-  const page = await context.newPage();
-  await harness.current.signIn(page);
-  return { context, page };
 }
 
 test("UXP-01 the Collapse menu button makes a 72 px rail with one icon per section, Expand menu brings the 320 px menu back, by mouse and by keyboard", async ({ page }) => {

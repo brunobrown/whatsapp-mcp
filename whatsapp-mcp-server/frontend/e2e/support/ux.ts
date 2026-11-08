@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test as base, expect } from "@playwright/test";
-import type { Locator, Page } from "@playwright/test";
+import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
 import { Harness } from "./harness";
 
 // Shared set-up of ux-navigation.spec.ts and ux-layout.spec.ts: one interface with an extension section, a long
@@ -145,4 +145,38 @@ export async function blockStorage(page: Page): Promise<void> {
 /** Lets the sections finish loading: the menu has its entries. */
 export async function menuReady(page: Page): Promise<void> {
   await expect(page.locator("nav[aria-label='Sections'] a, [role=dialog] nav a").first()).toBeAttached();
+}
+
+export const PHONE = { width: 390, height: 844 };
+
+/** A phone: its own context with touch and the layout viewport of a handset, signed in. */
+export async function phoneOf(browser: Browser, harness: Harness, size = PHONE): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true });
+  const page = await context.newPage();
+  await harness.signIn(page);
+  return { context, page };
+}
+
+/**
+ * Controls whose hit area is smaller than 44 by 44 px. Hidden ones do not count: an element that is not drawn, is
+ * 1 px (the skip link, a visually hidden input), is transparent or sits inside an aria-hidden or inert subtree.
+ */
+export async function smallTargets(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const selector =
+      "button, a[href], summary, select, input[type=checkbox], input[type=radio], [role=button], [role=switch], [role=radio], [role=checkbox], [role=menuitem], [role=tab], [role=link]";
+    const found: string[] = [];
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
+      const style = getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) continue;
+      if (element.closest("[aria-hidden=true], [hidden], [inert]") !== null) continue;
+      const box = element.getBoundingClientRect();
+      if (box.width <= 1 || box.height <= 1) continue;
+      if (box.width < 43.5 || box.height < 43.5) {
+        const name = element.getAttribute("aria-label") ?? element.textContent;
+        found.push(`${element.tagName.toLowerCase()}[${element.getAttribute("role") ?? ""}] "${name.trim().slice(0, 30)}" ${String(Math.round(box.width * 10) / 10)}x${String(Math.round(box.height * 10) / 10)}`);
+      }
+    }
+    return found;
+  });
 }
