@@ -1,9 +1,13 @@
 import { Menu, X } from "lucide-react";
-import { useState } from "react";
+import { useRouter } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetClose, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useT } from "@/i18n/t";
+import { useUiStore } from "@/stores/ui";
+import type { SectionSummary } from "@/types/api";
 import { MenuBody } from "./MenuBody";
+import { pathOf } from "./model";
 import { MenuTools } from "./MenuTools";
 
 /**
@@ -12,7 +16,39 @@ import { MenuTools } from "./MenuTools";
  */
 export function MenuDrawer() {
   const t = useT();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const stopWaiting = useRef<() => void>(() => undefined);
+  useEffect(() => () => {
+    stopWaiting.current();
+  }, []);
+
+  // With unsaved edits the leave guard asks first; the drawer stays until the question is answered, whichever way.
+  const choose = (entry: SectionSummary) => {
+    stopWaiting.current();
+    if (!useUiStore.getState().draftDirty || pathOf(entry) === router.state.location.pathname) {
+      setOpen(false);
+      return;
+    }
+    let asked = useUiStore.getState().leaveAsking;
+    const close = () => {
+      stopWaiting.current();
+      setOpen(false);
+    };
+    const unsubscribeStore = useUiStore.subscribe((state) => {
+      if (state.leaveAsking) asked = true;
+      else if (asked) close();
+    });
+    // A move that the guard let through (nothing was asked) also ends the wait.
+    const unsubscribeRouter = router.subscribe("onResolved", () => {
+      if (!useUiStore.getState().leaveAsking) close();
+    });
+    stopWaiting.current = () => {
+      unsubscribeStore();
+      unsubscribeRouter();
+      stopWaiting.current = () => undefined;
+    };
+  };
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
@@ -33,12 +69,7 @@ export function MenuDrawer() {
             </Button>
           </SheetClose>
         </div>
-        <MenuBody
-          mode="expanded"
-          onNavigate={() => {
-            setOpen(false);
-          }}
-        />
+        <MenuBody mode="expanded" onNavigate={choose} />
       </SheetContent>
     </Sheet>
   );

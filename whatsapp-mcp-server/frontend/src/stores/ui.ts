@@ -72,6 +72,9 @@ interface UiState {
   /** Whether the open section holds edits that were not saved; signing out asks before dropping them. */
   draftDirty: boolean;
   setDraftDirty: (dirty: boolean) => void;
+  /** Whether the leave guard is asking the operator about unsaved edits right now. */
+  leaveAsking: boolean;
+  setLeaveAsking: (asking: boolean) => void;
   notices: Notice[];
   setTheme: (theme: Theme) => void;
   setMenu: (menu: MenuPreference) => void;
@@ -104,6 +107,10 @@ export const useUiStore = create<UiState>()(
       setDraftDirty: (draftDirty) => {
         set({ draftDirty });
       },
+      leaveAsking: false,
+      setLeaveAsking: (leaveAsking) => {
+        set({ leaveAsking });
+      },
       notices: [],
       setTheme: (theme) => {
         set({ theme });
@@ -118,7 +125,7 @@ export const useUiStore = create<UiState>()(
         }));
       },
       resetSession: () => {
-        set({ restart: [], restartSections: [], draftDirty: false });
+        set({ restart: [], restartSections: [], draftDirty: false, leaveAsking: false });
       },
       pushNotice: (notice) => {
         set((state) => ({

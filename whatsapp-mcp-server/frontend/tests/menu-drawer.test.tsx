@@ -201,3 +201,79 @@ describe("menu drawer", () => {
     });
   });
 });
+
+describe("menu drawer and unsaved edits", () => {
+  const name = {
+    key: "name", label: "Name", kind: "text", default: "", help: "", secret: false, env_var: null, options: [], bounds: null,
+    max_length: 1000, max_items: 200, multiline: false, fields: [], id_key: null, readonly: false, risk: null, risk_when: [],
+  };
+  const view = (id: string, title: string) => ({
+    id, title, description: "", restart: null, status: "ready", banner: null, warnings: [], version: "v1", read_only: false,
+    fields: [name], values: { name: `${id}-value` }, state: { name: { origin: "file", locked: false, pending: null } },
+  });
+
+  beforeEach(() => {
+    server.use(
+      http.get("*/api/sections/send_policy", () => HttpResponse.json(view("send_policy", "Send policy"))),
+      http.get("*/api/sections/monitor", () => HttpResponse.json(view("monitor", "Monitor profiles"))),
+      http.post("*/api/sections/send_policy/validate", () => HttpResponse.json({ errors: {}, general: [], can_save: true })),
+    );
+  });
+
+  /** A real edit of the open section, then the drawer opened over it and another entry chosen. */
+  async function chooseMonitorWithAnEdit() {
+    const router = open("/s/send_policy");
+    await userEvent.type(await screen.findByLabelText("Name"), "!");
+    const opener = screen.getByRole("button", { name: "Open menu" });
+    await userEvent.click(opener);
+    const drawer = await screen.findByRole("dialog", { name: "Sections menu" });
+    await userEvent.click(within(drawer).getByRole("link", { name: /Monitor profiles/ }));
+    return { router, opener, drawer };
+  }
+
+  it("UXP-48 the drawer asks before leaving unsaved edits and stays open under the question", async () => {
+    const { router, drawer } = await chooseMonitorWithAnEdit();
+    const dialog = await screen.findByRole("alertdialog", { name: "Leave without saving?" });
+    expect(dialog).toHaveTextContent("You have changes in Send policy that are not saved.");
+    expect(router.state.location.pathname).toBe("/s/send_policy");
+    expect(drawer).toBeInTheDocument();
+  });
+
+  it("UXP-48 staying keeps the section and the edit, and the drawer closes after the answer", async () => {
+    const { router, opener } = await chooseMonitorWithAnEdit();
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Stay" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Sections menu" })).toBeNull();
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(router.state.location.pathname).toBe("/s/send_policy");
+    expect(screen.getByLabelText("Name")).toHaveValue("send_policy-value!");
+    expect(opener).toHaveFocus();
+  });
+
+  it("UXP-48 leaving opens the chosen section clean and the drawer closes after the answer", async () => {
+    const { router } = await chooseMonitorWithAnEdit();
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard and leave" }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/s/monitor");
+    });
+    expect(await screen.findByRole("heading", { level: 1, name: "Monitor profiles" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Sections menu" })).toBeNull();
+    });
+    expect(await screen.findByLabelText("Name")).toHaveValue("monitor-value");
+  });
+
+  it("UXP-48 choosing the section that is already open does not ask and closes the drawer", async () => {
+    open("/s/send_policy");
+    await userEvent.type(await screen.findByLabelText("Name"), "!");
+    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+    const drawer = await screen.findByRole("dialog", { name: "Sections menu" });
+    await userEvent.click(within(drawer).getByRole("link", { name: /Send policy/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Sections menu" })).toBeNull();
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByLabelText("Name")).toHaveValue("send_policy-value!");
+  });
+});

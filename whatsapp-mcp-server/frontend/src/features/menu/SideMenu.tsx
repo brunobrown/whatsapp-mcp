@@ -17,7 +17,7 @@ export interface SideMenuProps {
   /** Whether a restart waits for the entry's section. */
   isPending: (entry: SectionSummary) => boolean;
   /** Called after an entry was chosen, e.g. to close the drawer. */
-  onNavigate?: () => void;
+  onNavigate?: (entry: SectionSummary) => void;
 }
 
 const ROW =
@@ -32,7 +32,7 @@ function Entry({
   entry: SectionSummary;
   mode: SideMenuMode;
   pending: boolean;
-  onNavigate?: () => void;
+  onNavigate?: (entry: SectionSummary) => void;
 }) {
   const t = useT();
   const Icon = ICONS[entry.icon] ?? FALLBACK_ICON;
@@ -50,7 +50,7 @@ function Entry({
     </span>
   );
   const click = () => {
-    onNavigate?.();
+    onNavigate?.(entry);
   };
   const link = rail ? (
     <Link
