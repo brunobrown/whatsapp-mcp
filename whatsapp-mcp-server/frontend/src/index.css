@@ -144,6 +144,45 @@
   }
 }
 
+/*
+ * The save bar on a phone: fixed to the bottom of the screen, above the on-screen keyboard (--keyboard-offset, set by
+ * the bar from visualViewport) and the home indicator, buttons side by side and 44 px tall. The spacer keeps the end of
+ * the content clear of it.
+ */
+[data-save-bar-spacer] {
+  display: none;
+}
+
+@media (max-width: 599.98px) {
+  [data-save-bar] {
+    position: fixed;
+    right: 0;
+    bottom: var(--keyboard-offset, 0px);
+    left: 0;
+    z-index: 40;
+    flex-wrap: wrap;
+    padding-top: 0.75rem;
+    padding-right: var(--edge-right);
+    padding-bottom: max(0.75rem, var(--safe-bottom));
+    padding-left: var(--edge-left);
+  }
+
+  [data-save-bar] > p {
+    flex-basis: 100%;
+  }
+
+  [data-save-bar] > button {
+    flex: 1 1 0;
+    /* --min-target is 2.75rem, which is 41 px at the 15 px root: the bar states the 44 px itself. */
+    min-height: max(var(--min-target), 44px);
+  }
+
+  [data-save-bar-spacer] {
+    display: block;
+    height: calc(5.5rem + max(0.75rem, var(--safe-bottom)));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
@@ -174,5 +175,58 @@ describe("save bar", () => {
       expect(bar()).toBeNull();
     });
     expect(document.activeElement).toBe(document.getElementById("content"));
+  });
+});
+
+describe("save bar on a phone", () => {
+  const css = readFileSync("src/index.css", "utf8");
+  const phone = (): string => {
+    const start = css.indexOf("@media (max-width: 599.98px) {\n  [data-save-bar]");
+    expect(start).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("@media (prefers-reduced-motion", start));
+  };
+
+  it("UXP-39 the bar is fixed at the bottom with side-by-side 44 px buttons under 600", () => {
+    const rules = phone();
+    // Fixed to the bottom edge, above the keyboard and the home indicator.
+    expect(rules).toMatch(/\[data-save-bar\] \{[^}]*position: fixed;[^}]*bottom: var\(--keyboard-offset, 0px\);/s);
+    expect(rules).toMatch(/\[data-save-bar\] \{[^}]*padding-bottom: max\(0\.75rem, var\(--safe-bottom\)\);/s);
+    // The status line takes its own row and the two buttons share the next one at the target height.
+    expect(rules).toMatch(/\[data-save-bar\] > p \{[^}]*flex-basis: 100%;/s);
+    expect(rules).toMatch(/\[data-save-bar\] > button \{[^}]*flex: 1 1 0;[^}]*min-height: max\(var\(--min-target\), 44px\);/s);
+    expect(css).toMatch(/--min-target: 2\.75rem;/);
+    // Above 600 px the spacer is not needed.
+    expect(css).toMatch(/\[data-save-bar-spacer\] \{\s*display: none;/);
+  });
+
+  it("UXP-39 the buttons of the bar are direct children of it, after the status line", async () => {
+    await mount();
+    await userEvent.type(name(), "!");
+    const children = Array.from(bar()?.children ?? []).map((child) => child.tagName);
+    expect(children).toEqual(["P", "BUTTON", "BUTTON"]);
+    expect(document.querySelector("[data-save-bar-spacer]")).not.toBeNull();
+  });
+
+  it("UXP-39 the bar rises above the on-screen keyboard and drops back when it goes", async () => {
+    const viewport = Object.assign(new EventTarget(), { height: 800, offsetTop: 0 });
+    vi.stubGlobal("visualViewport", viewport);
+    vi.stubGlobal("innerHeight", 800);
+    const offset = (): string => document.documentElement.style.getPropertyValue("--keyboard-offset");
+    await mount();
+    await userEvent.type(name(), "!");
+    expect(offset()).toBe("0px");
+    viewport.height = 500;
+    act(() => {
+      viewport.dispatchEvent(new Event("resize"));
+    });
+    expect(offset()).toBe("300px");
+    viewport.height = 800;
+    act(() => {
+      viewport.dispatchEvent(new Event("resize"));
+    });
+    expect(offset()).toBe("0px");
+    // Without the bar there is nothing to lift, and the variable is gone.
+    await userEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    expect(offset()).toBe("");
   });
 });
