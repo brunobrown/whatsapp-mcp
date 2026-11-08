@@ -156,8 +156,9 @@ test("OPS-01 the status page shows the bridge's state, uptime and events, and sa
   await expect(page.getByText("Paired with a phone")).toBeVisible();
   await expect(page.getByText("2 h 5 min")).toBeVisible();
   await expect(page.getByText("0.0.0-test")).toBeVisible();
-  await expect(page.getByText("Jan 2, 2026, 05:00 UTC")).toBeVisible();
-  await expect(page.getByRole("region", { name: "Webhook endpoints" })).toContainText("hook-a");
+  // Moments are relative text; the exact UTC time is in the title.
+  await expect(page.locator('time[title="2026-01-02 05:00:00 UTC"]').first()).toBeVisible();
+  await expect(page.getByRole("table", { name: "Webhook endpoints" })).toContainText("hook-a");
 
   bridge.mode = "disconnected";
   await page.goto(`${url}/status`);
@@ -223,7 +224,9 @@ test("OPS-02 counters, pending drafts and both audit logs show without message t
     for (const body of bodies) expect(body).not.toContain(text);
     // Nothing on the page sends, approves or discards, and the API has no such route.
     const content = page.getByRole("main");
-    await expect(content.getByRole("button")).toHaveCount(0);
+    // The one control is Refresh, which reads the lists again.
+    await expect(content.getByRole("button")).toHaveCount(1);
+    await expect(content.getByRole("button", { name: "Refresh" })).toBeVisible();
     await expect(content.getByRole("link")).toHaveCount(0);
     const session = (await (await page.request.get(`${fresh.url}/api/session`)).json()) as { csrf: string };
     for (const route of ["/api/ops/drafts", "/api/ops/audit/send", "/api/ops/status", "/api/send", "/api/drafts/d_new/approve", "/api/drafts/d_new"]) {
@@ -309,15 +312,17 @@ test("UX-01 the layout adapts to 360, 768 and 1280 px with the menu beside the p
           await expect(nav).toBeVisible();
           await expect(page.getByRole("main")).toBeVisible();
         } else {
-          // One pane at a time: the list first, the page after a choice, and a way back.
+          // One pane: the section fills the screen; the menu is the drawer behind "Open menu".
+          await expect(nav).toHaveCount(0);
+          await expect(page.getByRole("main")).toBeVisible();
+          await page.getByRole("button", { name: "Open menu" }).click();
           await expect(nav).toBeVisible();
-          await expect(page.getByRole("main")).toHaveCount(0);
           await nav.getByRole("link").first().click();
           await expect(page.getByRole("main")).toBeVisible();
           await expect(nav).toHaveCount(0);
-          await expect(page.getByRole("button", { name: "Back to the sections" })).toBeVisible();
+          await expect(page.getByRole("button", { name: "Open menu" })).toBeVisible();
           await page.goto(`${fresh.url}${path}`);
-          await expect(nav).toBeVisible();
+          await page.getByRole("button", { name: "Open menu" }).click();
           await page.getByRole("navigation", { name: "Sections" }).locator(`a[href="${path}"]`).click();
           await expect(page.getByRole("main")).toBeVisible();
         }
@@ -440,7 +445,7 @@ test("UX-04 each result shows beside the control, and a global event shows once 
   await withHarness({ seed: ["send_policy.json"] }, async (fresh) => {
     await fresh.signIn(page);
     await openSection(page, fresh, "send_policy");
-    // Saved: the note beside the button and one notification; a second save inside a minute does not repeat it.
+    // Saved: one notification (the save bar goes away); a second save inside a minute does not repeat it.
     await field(page, "deny").getByRole("button", { name: "Add item" }).click();
     await page.getByRole("textbox", { name: "Deny, item 2" }).fill("First");
     await save(page);

@@ -11,6 +11,15 @@ describe("Button", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
   });
 
+  it("UXP-43 is never wider than its container: a long label wraps instead of running off a 180 px screen", () => {
+    // At 200% zoom on a 360 px phone the page is 180 px wide. A label that cannot wrap made a button wider than its
+    // container, and the content box (which hides sideways overflow) cut it off.
+    render(<Button>Restore the default of a setting with a long name</Button>);
+    const button = screen.getByRole("button");
+    expect(button).toHaveClass("max-w-full");
+    expect(button).not.toHaveClass("whitespace-nowrap");
+  });
+
   it("does not submit a form unless it says so", async () => {
     const onSubmit = vi.fn((event: React.SubmitEvent) => {
       event.preventDefault();

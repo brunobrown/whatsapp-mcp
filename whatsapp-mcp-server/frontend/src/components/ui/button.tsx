@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 export const buttonVariants = cva(
   [
     "inline-flex min-h-(--min-target) shrink-0 cursor-pointer items-center justify-center gap-2 rounded-control",
-    "px-4 text-[0.9375rem] font-medium whitespace-nowrap select-none",
+    "max-w-full px-4 py-1.5 text-center text-[0.9375rem] font-medium select-none",
     "transition-colors duration-150",
     "aria-disabled:cursor-progress aria-disabled:opacity-70 disabled:cursor-not-allowed disabled:opacity-50",
     "[&_svg]:pointer-events-none [&_svg]:size-[1.125rem] [&_svg]:shrink-0",

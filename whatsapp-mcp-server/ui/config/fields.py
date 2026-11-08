@@ -12,6 +12,7 @@ from typing import Any, Optional, Tuple
 KINDS = ("bool", "int", "float", "text", "choice", "multichoice", "secret", "list", "records")
 DEFAULT_MAX_LENGTH = 1000
 DEFAULT_MAX_ITEMS = 200
+MAX_GROUP_LENGTH = 40
 # A key with one of these words in it holds a secret; "key" alone is too common to count.
 _SECRET_WORDS = {"token", "secret", "password", "passwd", "passphrase", "credential", "credentials", "apikey"}
 _SECRET_PAIRS = {("api", "key"), ("private", "key"), ("secret", "key")}
@@ -52,12 +53,15 @@ class Field:
     readonly: bool = False
     risk: Optional[str] = None
     risk_when: Tuple[Any, ...] = ()
+    group: str = ""
 
     def __post_init__(self):
         if self.kind not in KINDS:
             raise ValueError(f"field {self.key!r}: unknown kind {self.kind!r}")
         if looks_secret(self.key) and self.kind != "secret":
             raise ValueError(f"field {self.key!r} is named like a secret and must be declared with kind 'secret'")
+        if len(self.group) > MAX_GROUP_LENGTH:
+            raise ValueError(f"field {self.key!r}: group is longer than {MAX_GROUP_LENGTH} characters")
         if self.kind == "secret" and self.default is not None:
             raise ValueError(f"field {self.key!r}: a secret has no default")
         if self.bounds is not None and self.bounds[0] > self.bounds[1]:

@@ -83,6 +83,17 @@ describe("toasts", () => {
     expect(await screen.findByText("Your session ends in 2 min because of inactivity.")).toBeInTheDocument();
   });
 
+  it("floats above the save bar, so a toast never covers the Save button", async () => {
+    render(<Toaster />);
+    act(() => {
+      useUiStore.getState().pushNotice({ key: "saved", text: "Changes saved.", at: 1 });
+    });
+    await screen.findByText("Changes saved.");
+    const region = document.querySelector("[data-sonner-toaster]") as HTMLElement;
+    expect(region.style.getPropertyValue("--offset-bottom")).toBe("88px");
+    expect(region.style.getPropertyValue("--mobile-offset-bottom")).toBe("136px");
+  });
+
   it("names the notification region from the catalog", async () => {
     stubNotification("denied");
     const { notify } = setup();

@@ -46,7 +46,7 @@ function section(overrides: Partial<SectionView> = {}): SectionView {
 
 const okOutcome: SaveOutcome = { ok: true, unchanged: false, conflict: false, needs_confirmation: false, errors: {}, general: [], restarts: ["bridge"] };
 const listing = [
-  { id: "s", title: "Test section", icon: "shield", order: 10, kind: "section", description: "", restart: "bridge" },
+  { id: "s", title: "Test section", icon: "shield", order: 10, kind: "section", description: "What this section does.", restart: "bridge" },
 ];
 
 let viewport: ReturnType<typeof mockViewport>;
@@ -90,6 +90,82 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("cards", () => {
+  it("UXP-14 titled cards: the form is one titled card per group, fields without a group in General", async () => {
+    current = section({
+      fields: [
+        f({ key: "name", label: "Name" }),
+        f({ key: "limit", label: "Limit", kind: "int", group: "Timing" }),
+        f({ key: "mode", label: "Mode", group: "Timing" }),
+      ],
+      values: { name: "alpha", limit: 5, mode: "x" },
+      state: {},
+    });
+    await mount();
+    const general = screen.getByRole("region", { name: "General" });
+    const timing = screen.getByRole("region", { name: "Timing" });
+    expect(within(general).getByLabelText("Name")).toBeInTheDocument();
+    expect(within(general).queryByLabelText("Limit")).toBeNull();
+    expect(within(timing).getByLabelText("Limit")).toBeInTheDocument();
+    expect(within(timing).getByLabelText("Mode")).toBeInTheDocument();
+    expect(within(timing).getByRole("heading", { level: 2, name: "Timing" })).toBeInTheDocument();
+  });
+
+  it("UXP-14 a section with no labels keeps a single card", async () => {
+    await mount();
+    expect(within(screen.getByRole("main")).getAllByRole("heading", { level: 2 })).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
+  });
+
+  it("UXP-16 a records or list field is its own card", async () => {
+    current = section({
+      fields: [f({ key: "name", label: "Name" }), f({ key: "targets", label: "Targets", kind: "list" })],
+      values: { name: "alpha", targets: ["one"] },
+      state: {},
+    });
+    await mount();
+    const card = screen.getByRole("region", { name: "Targets" });
+    expect(within(card).getByRole("heading", { level: 2, name: "Targets" })).toBeInTheDocument();
+    expect(within(card).getByLabelText("Targets, item 1")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "General" })).queryByLabelText("Targets, item 1")).toBeNull();
+  });
+});
+
+describe("card error marker", () => {
+  it("UXP-19 a card with an invalid field is marked and the summary link still focuses the field", async () => {
+    current = section({
+      fields: [
+        f({ key: "name", label: "Name" }),
+        f({ key: "limit", label: "Limit", kind: "int", group: "Timing" }),
+      ],
+      values: { name: "alpha", limit: 5 },
+      state: {},
+    });
+    server.use(
+      http.post("*/api/sections/s/validate", () =>
+        HttpResponse.json({ errors: { limit: "must be a whole number" }, general: [], can_save: false }),
+      ),
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json({ ...okOutcome, ok: false, restarts: [], errors: { limit: "must be a whole number" }, general: [] }, { status: 422 }),
+      ),
+    );
+    await mount();
+    expect(within(screen.getByRole("region", { name: /^General/ })).queryByText("needs attention")).toBeNull();
+    await userEvent.type(field("Limit"), "z");
+    const timing = await screen.findByRole("region", { name: /^Timing/ });
+    await waitFor(() => {
+      expect(within(timing).getByText("needs attention")).toBeInTheDocument();
+    });
+    expect(timing.querySelector("[data-needs-attention] svg")).not.toBeNull();
+    expect(within(timing).getByRole("heading", { level: 2 })).toHaveTextContent("Timing");
+    expect(within(screen.getByRole("region", { name: /^General/ })).queryByText("needs attention")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const summary = await screen.findByRole("alert");
+    await userEvent.click(within(summary).getByRole("button", { name: "Go to Limit" }));
+    expect(field("Limit")).toHaveFocus();
+  });
+});
+
 describe("loading and failing", () => {
   it("shows a skeleton while the section loads", async () => {
     server.use(http.get("*/api/sections/s", async () => {
@@ -125,7 +201,7 @@ describe("loading and failing", () => {
 describe("the form built from the schema", () => {
   it("shows every field of the schema with the description and the restart note", async () => {
     await mount();
-    expect(screen.getByText("What this section does.")).toBeInTheDocument();
+    expect(within(screen.getByRole("banner")).getByText("What this section does.")).toBeInTheDocument();
     expect(screen.getByText("Changes here apply after the bridge restarts.")).toBeInTheDocument();
     expect(field("Name")).toHaveValue("alpha");
     expect(field("Limit")).toHaveValue("5");
@@ -170,24 +246,25 @@ describe("read-only sections", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Restore defaults" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
     expect(field("Name")).toHaveAttribute("readonly");
     expect(field("Name")).toHaveValue("alpha");
   });
 });
 
 describe("saving", () => {
-  it("keeps Save and Discard off until something changes", async () => {
+  it("keeps Save and Discard away until something changes", async () => {
     await mount();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
     await userEvent.type(field("Name"), "!");
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(field("Name")).toHaveValue("alpha");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
-  it("saves the changes, confirms next to the buttons and records the restart", async () => {
+  it("saves the changes, confirms with a notice and records the restart", async () => {
     await mount();
     await userEvent.clear(field("Name"));
     await userEvent.type(field("Name"), "beta");
@@ -195,7 +272,7 @@ describe("saving", () => {
     await waitFor(() => {
       expect(puts).toEqual([{ version: "v1", changes: { name: "beta" }, restore: [] }]);
     });
-    expect(await screen.findByText("Changes saved.", { selector: "p" })).toBeInTheDocument();
+    expect(await screen.findByText("Changes saved.")).toBeInTheDocument();
     expect(useUiStore.getState().restart).toEqual(["bridge"]);
   });
 
@@ -333,7 +410,8 @@ describe("saving", () => {
 describe("restore defaults", () => {
   it("asks first; on confirm it restores saved fields, skips locked ones and says which", async () => {
     await mount();
-    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restore defaults" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Every saved value of Test section goes back to its default.");
     await userEvent.click(within(dialog).getByRole("button", { name: "Restore defaults" }));
@@ -353,10 +431,11 @@ describe("restore defaults", () => {
 
   it("changes nothing when the operator cancels", async () => {
     await mount();
-    await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Restore defaults" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
     expect(field("Name")).toHaveValue("alpha");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("restores one field after its own confirmation", async () => {

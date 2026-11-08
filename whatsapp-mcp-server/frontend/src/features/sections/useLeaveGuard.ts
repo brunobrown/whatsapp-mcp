@@ -1,4 +1,6 @@
 import { useBlocker } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { useUiStore } from "@/stores/ui";
 
 /** The page the session ends on. Losing the session must never wait for an answer about a draft. */
 const SIGN_IN_PATH = "/login";
@@ -15,8 +17,16 @@ export function useLeaveGuard(dirty: boolean): { open: boolean; stay: () => void
     disabled: !dirty,
     withResolver: true,
   });
+  const open = blocker.status === "blocked";
+  // The menu drawer waits for the answer before it closes, so it needs to know when the question is on screen.
+  useEffect(() => {
+    useUiStore.getState().setLeaveAsking(open);
+    return () => {
+      useUiStore.getState().setLeaveAsking(false);
+    };
+  }, [open]);
   return {
-    open: blocker.status === "blocked",
+    open,
     stay: () => {
       blocker.reset?.();
     },

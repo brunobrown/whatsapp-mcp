@@ -34,6 +34,10 @@ export function Banner({ kind, title, className, children, ...props }: BannerPro
 }
 
 export interface EmptyStateProps {
+  /** A decorative icon above the title. */
+  icon?: LucideIcon;
+  /** Heading level of the title. */
+  level?: 2 | 3 | 4;
   title: ReactNode;
   description?: ReactNode;
   /** The next step, such as an Add button. */
@@ -41,10 +45,12 @@ export interface EmptyStateProps {
   className?: string;
 }
 
-export function EmptyState({ title, description, children, className }: EmptyStateProps) {
+export function EmptyState({ icon: Icon, level = 2, title, description, children, className }: EmptyStateProps) {
+  const Heading = `h${String(level)}` as "h2" | "h3" | "h4";
   return (
     <div className={cn("flex flex-col items-start gap-1 py-8", className)}>
-      <h2 className="m-0 text-base font-semibold">{title}</h2>
+      {Icon ? <Icon aria-hidden="true" className="mb-1 size-8 text-muted" /> : null}
+      <Heading className="m-0 text-base font-semibold">{title}</Heading>
       {description ? <p className="m-0 max-w-prose text-muted">{description}</p> : null}
       {children ? <div className="mt-3">{children}</div> : null}
     </div>

@@ -6,6 +6,8 @@ import type { Notice } from "@/stores/ui";
 /** Each global notice kind and the catalog key of its fixed sentence. */
 const NOTICE_TEXTS = {
   saved: "notice.saved",
+  copied: "notice.copied",
+  copyFailed: "notice.copyFailed",
   saveFailed: "notice.saveFailed",
   bridgeUnavailable: "notice.bridgeUnavailable",
   refused: "notice.refused",
@@ -42,6 +44,14 @@ export function raiseNotice(kind: NoticeKind, params?: NoticeParams, now: number
   useUiStore.getState().pushNotice({ key: kind, text: noticeText(kind, params), at: now });
   const queue = useUiStore.getState().notices;
   return queue[queue.length - 1] ?? null;
+}
+
+/**
+ * Queues a notice that answers something the operator just did, so it is never held back as a repeat: each copy
+ * says Copied, even two in a row.
+ */
+export function showNotice(kind: NoticeKind, params?: NoticeParams, now: number = Date.now()): void {
+  useUiStore.getState().pushNotice({ key: kind, text: noticeText(kind, params), at: now });
 }
 
 /** Forgets what was shown; for tests. */

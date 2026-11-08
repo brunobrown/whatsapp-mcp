@@ -3,14 +3,18 @@ import { useEffect } from "react";
 import type { ReactNode } from "react";
 import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { en } from "@/i18n/en";
 import type { TextKey } from "@/i18n/t";
 import { useT } from "@/i18n/t";
-import { formatCount, formatDuration, formatMoment } from "@/lib/format";
+import { formatCount, formatDuration } from "@/lib/format";
 import { raiseNotice } from "@/lib/notices";
 import { useOpsCounters, useOpsStatus } from "@/services/services";
 import type { BridgeStatus, OpsCounters, Unavailable } from "@/types/api";
 import { Cell, DataTable } from "./DataTable";
+import { CopyButton } from "./CopyButton";
+import { Freshness } from "./Freshness";
+import { Moment } from "./Moment";
 
 function isUnavailable(value: object): value is Unavailable {
   return "unavailable" in value;
@@ -25,11 +29,12 @@ function useExplain(): (reason: Unavailable) => string {
   };
 }
 
-function UnavailableNotice({ reason }: { reason: Unavailable }) {
+/** `titled` is false in the Counters card, so the page names the bridge's trouble once. */
+function UnavailableNotice({ reason, titled = true }: { reason: Unavailable; titled?: boolean }) {
   const t = useT();
   const explain = useExplain();
   return (
-    <Banner kind="warning" title={t("status.unavailable.title")}>
+    <Banner kind="warning" {...(titled && { title: t("status.unavailable.title") })}>
       {explain(reason)}
     </Banner>
   );
@@ -48,11 +53,14 @@ function Facts({ children }: { children: ReactNode }) {
   return <dl className="m-0 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">{children}</dl>;
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+function Fact({ label, children, copy }: { label: string; children: ReactNode; copy?: string | undefined }) {
   return (
     <div className="min-w-0">
       <dt className="text-sm text-muted">{label}</dt>
-      <dd className="m-0 font-medium break-words">{children}</dd>
+      <dd className="m-0 flex items-center gap-1 font-medium">
+        <span className="min-w-0 break-words">{children}</span>
+        {copy ? <CopyButton value={copy} what={label.toLowerCase()} /> : null}
+      </dd>
     </div>
   );
 }
@@ -79,55 +87,21 @@ function Connection({ status }: { status: BridgeStatus }) {
         </Badge>
       </p>
       <Facts>
-        <Fact label={t("status.phone")}>{status.phone || t("format.missing")}</Fact>
-        <Fact label={t("status.version")}>{status.version || t("format.missing")}</Fact>
+        <Fact label={t("status.phone")} copy={status.phone}>{status.phone || t("format.missing")}</Fact>
+        <Fact label={t("status.version")} copy={status.version}>{status.version || t("format.missing")}</Fact>
         <Fact label={t("status.uptime")}>{formatDuration(status.uptime_seconds)}</Fact>
-        <Fact label={t("status.startedAt")}>{formatMoment(status.started_at)}</Fact>
-        <Fact label={t("status.lastEvent")}>{formatMoment(status.last_event_at)}</Fact>
-        <Fact label={t("status.lastMessage")}>{formatMoment(status.last_message_at)}</Fact>
-        <Fact label={t("status.lastConnected")}>{formatMoment(status.last_connected_at)}</Fact>
-        <Fact label={t("status.lastDisconnected")}>{formatMoment(status.last_disconnected_at)}</Fact>
+        <Fact label={t("status.startedAt")}><Moment value={status.started_at} /></Fact>
+        <Fact label={t("status.lastEvent")}><Moment value={status.last_event_at} /></Fact>
+        <Fact label={t("status.lastMessage")}><Moment value={status.last_message_at} /></Fact>
+        <Fact label={t("status.lastConnected")}><Moment value={status.last_connected_at} /></Fact>
+        <Fact label={t("status.lastDisconnected")}><Moment value={status.last_disconnected_at} /></Fact>
         <Fact label={t("status.mediaRetries")}>{formatCount(status.pending_media_retries)}</Fact>
-        <Fact label={t("status.webhooks")}>
-          {status.webhooks === undefined
-            ? t("format.missing")
-            : status.webhooks.enabled
-              ? t("status.webhooks.on")
-              : t("status.webhooks.off")}
-        </Fact>
       </Facts>
-      {status.webhooks?.error ? <Banner kind="warning">{status.webhooks.error}</Banner> : null}
-      {status.webhooks && status.webhooks.endpoints.length > 0 ? (
-        <DataTable
-          label={t("status.webhooks.endpoints")}
-          columns={[
-            t("status.endpoint.name"),
-            t("status.endpoint.delivered"),
-            t("status.endpoint.failed"),
-            t("status.endpoint.dropped"),
-            t("status.endpoint.queued"),
-            t("status.endpoint.lastSuccess"),
-            t("status.endpoint.lastError"),
-          ]}
-        >
-          {status.webhooks.endpoints.map((endpoint, index) => (
-            <tr key={`${endpoint.name ?? ""}-${String(index)}`}>
-              <Cell>{endpoint.name || t("format.missing")}</Cell>
-              <Cell>{formatCount(endpoint.delivered)}</Cell>
-              <Cell>{formatCount(endpoint.failed)}</Cell>
-              <Cell>{formatCount(endpoint.dropped)}</Cell>
-              <Cell>{formatCount(endpoint.queued)}</Cell>
-              <Cell>{formatMoment(endpoint.last_success_at)}</Cell>
-              <Cell className="whitespace-normal">{endpoint.last_error || t("format.missing")}</Cell>
-            </tr>
-          ))}
-        </DataTable>
-      ) : null}
     </div>
   );
 }
 
-function ConnectionSection() {
+function ConnectionCard() {
   const t = useT();
   const query = useOpsStatus();
   const gone = query.data !== undefined && isUnavailable(query.data);
@@ -137,7 +111,7 @@ function ConnectionSection() {
   }, [gone]);
   let body: ReactNode;
   if (query.isPending) body = <Loading label={t("status.loading")} />;
-  else if (query.isError)
+  else if (query.isError && query.data === undefined)
     body = (
       <ErrorState
         title={t("status.loadError")}
@@ -159,12 +133,66 @@ function ConnectionSection() {
     );
   } else body = <Connection status={query.data.status} />;
   return (
-    <section className="flex flex-col gap-3">
-      <h2 id="status-connection" className="m-0 text-base font-semibold">
-        {t("status.connection")}
-      </h2>
-      {body}
-    </section>
+    <Card>
+      <CardHeader title={t("status.connection")} />
+      <CardBody>{body}</CardBody>
+    </Card>
+  );
+}
+
+function Webhooks({ webhooks }: { webhooks: NonNullable<BridgeStatus["webhooks"]> }) {
+  const t = useT();
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="m-0">
+        <Badge variant={webhooks.enabled ? "accent" : "neutral"} className="px-3 py-1 text-sm">
+          {webhooks.enabled ? t("status.webhooks.on") : t("status.webhooks.off")}
+        </Badge>
+      </p>
+      {webhooks.error ? <Banner kind="warning">{webhooks.error}</Banner> : null}
+      {webhooks.endpoints.length > 0 ? (
+        <DataTable
+          label={t("status.webhooks.endpoints")}
+          columns={[
+            t("status.endpoint.name"),
+            t("status.endpoint.delivered"),
+            t("status.endpoint.failed"),
+            t("status.endpoint.dropped"),
+            t("status.endpoint.queued"),
+            t("status.endpoint.lastSuccess"),
+            t("status.endpoint.lastError"),
+          ]}
+        >
+          {webhooks.endpoints.map((endpoint, index) => (
+            <tr key={`${endpoint.name ?? ""}-${String(index)}`}>
+              <Cell>{endpoint.name || t("format.missing")}</Cell>
+              <Cell>{formatCount(endpoint.delivered)}</Cell>
+              <Cell>{formatCount(endpoint.failed)}</Cell>
+              <Cell>{formatCount(endpoint.dropped)}</Cell>
+              <Cell>{formatCount(endpoint.queued)}</Cell>
+              <Cell><Moment value={endpoint.last_success_at} /></Cell>
+              <Cell className="whitespace-normal">{endpoint.last_error || t("format.missing")}</Cell>
+            </tr>
+          ))}
+        </DataTable>
+      ) : null}
+    </div>
+  );
+}
+
+function WebhooksCard() {
+  const t = useT();
+  const query = useOpsStatus();
+  let body: ReactNode;
+  if (query.isPending) body = <Loading label={t("status.loading")} />;
+  else if (query.data === undefined || isUnavailable(query.data)) body = <p className="m-0 text-muted">{t("status.webhooks.unknown")}</p>;
+  else if (query.data.status.webhooks === undefined) body = <p className="m-0 text-muted">{t("format.missing")}</p>;
+  else body = <Webhooks webhooks={query.data.status.webhooks} />;
+  return (
+    <Card>
+      <CardHeader title={t("status.webhooks")} />
+      <CardBody>{body}</CardBody>
+    </Card>
   );
 }
 
@@ -187,7 +215,7 @@ function Counters({ counters }: { counters: OpsCounters }) {
   const errors = Object.entries(counters.monitor_replies.error_codes);
   return (
     <div className="flex flex-col gap-4">
-      <p className="m-0 text-sm text-muted">{t("status.counters.window", { since: formatMoment(counters.since) })}</p>
+      <p className="m-0 text-sm text-muted">{t("status.counters.window")} <Moment value={counters.since} /></p>
       <dl className="m-0 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t("status.counters.received")} value={counters.messages?.received} />
         <Stat label={t("status.counters.fromThisAccount")} value={counters.messages?.from_this_account} />
@@ -236,12 +264,12 @@ function Counters({ counters }: { counters: OpsCounters }) {
   );
 }
 
-function CountersSection() {
+function CountersCard({ className }: { className?: string }) {
   const t = useT();
   const query = useOpsCounters();
   let body: ReactNode;
   if (query.isPending) body = <Loading label={t("status.loading")} />;
-  else if (query.isError)
+  else if (query.isError && query.data === undefined)
     body = (
       <ErrorState
         title={t("status.loadError")}
@@ -251,24 +279,28 @@ function CountersSection() {
         }}
       />
     );
-  else if (isUnavailable(query.data)) body = <UnavailableNotice reason={query.data} />;
+  else if (isUnavailable(query.data)) body = <UnavailableNotice reason={query.data} titled={false} />;
   else body = <Counters counters={query.data} />;
   return (
-    <section className="flex flex-col gap-3">
-      <h2 id="status-counters" className="m-0 text-base font-semibold">
-        {t("status.counters")}
-      </h2>
-      {body}
-    </section>
+    <Card {...(className !== undefined && { className })}>
+      <CardHeader title={t("status.counters")} />
+      <CardBody>{body}</CardBody>
+    </Card>
   );
 }
 
 /** The bridge's state and the counters, refreshed by the hooks while the tab is visible. */
 export function StatusPage() {
+  const status = useOpsStatus();
+  const counters = useOpsCounters();
   return (
-    <div className="flex flex-col gap-8">
-      <ConnectionSection />
-      <CountersSection />
+    <div className="flex flex-col gap-4">
+      <Freshness queries={[status, counters]} />
+      <div className="grid grid-cols-1 items-start gap-4 min-[1100px]:grid-cols-2">
+        <ConnectionCard />
+        <WebhooksCard />
+        <CountersCard className="min-[1100px]:col-span-2" />
+      </div>
     </div>
   );
 }
