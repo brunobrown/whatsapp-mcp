@@ -27,12 +27,12 @@ describe("ui store: theme", () => {
     expect(useUiStore.getState().theme).toBe("dark");
   });
 
-  it("stores nothing but the theme", () => {
+  it("stores nothing but the theme and the menu choice", () => {
     useUiStore.getState().setTheme("light");
     useUiStore.getState().addRestart(["bridge"]);
     useUiStore.getState().setMobilePane("detail");
     const stored = JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) ?? "{}") as { state: Record<string, unknown> };
-    expect(Object.keys(stored.state)).toEqual(["theme"]);
+    expect(Object.keys(stored.state).sort()).toEqual(["menu", "theme"]);
   });
 
   it("keeps working when localStorage refuses writes", () => {
