@@ -4,18 +4,29 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ScrollRegion } from "../src/components/ui/scroll-region";
 
 /** jsdom has no layout: report the sizes a browser would. */
-function layout(scrollHeight: number, clientHeight: number): void {
+function layout(scrollHeight: number, clientHeight: number, scrollWidth = clientHeight, clientWidth = clientHeight): void {
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => scrollHeight });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(HTMLElement.prototype, "scrollWidth", { configurable: true, get: () => scrollWidth });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", { configurable: true, get: () => clientWidth });
 }
 
 afterEach(() => {
   Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
   Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+  Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
 });
 
 function scrollTo(element: HTMLElement, top: number): void {
   element.scrollTop = top;
+  act(() => {
+    fireEvent.scroll(element);
+  });
+}
+
+function scrollSideways(element: HTMLElement, left: number): void {
+  element.scrollLeft = left;
   act(() => {
     fireEvent.scroll(element);
   });
@@ -49,6 +60,38 @@ describe("ScrollRegion", () => {
     expect(region).toHaveAttribute("data-bottom", "false");
     expect(document.querySelector('[data-edge="bottom"]')).toBeNull();
     expect(document.querySelector('[data-edge="top"]')).not.toBeNull();
+  });
+
+  it("UXP-12 shows a shadow on the left and right edges that cut a wide content", () => {
+    // 300 px tall and fitting vertically, 1000 px wide in a 300 px box.
+    layout(300, 300, 1000, 300);
+    render(
+      <ScrollRegion label="Rows">
+        <p>content</p>
+      </ScrollRegion>,
+    );
+    const region = screen.getByRole("region", { name: "Rows" });
+    // At the start: the right is cut, the left is not, and nothing is cut vertically.
+    expect(region).toHaveAttribute("data-left", "false");
+    expect(region).toHaveAttribute("data-right", "true");
+    expect(document.querySelector('[data-edge="right"]')).not.toBeNull();
+    expect(document.querySelector('[data-edge="left"]')).toBeNull();
+    expect(document.querySelector('[data-edge="top"]')).toBeNull();
+    expect(document.querySelector('[data-edge="bottom"]')).toBeNull();
+
+    // In the middle: both are cut.
+    scrollSideways(region, 200);
+    expect(region).toHaveAttribute("data-left", "true");
+    expect(region).toHaveAttribute("data-right", "true");
+    expect(document.querySelector('[data-edge="left"]')).not.toBeNull();
+    expect(document.querySelector('[data-edge="right"]')).not.toBeNull();
+
+    // At the end: only the left is cut.
+    scrollSideways(region, 700);
+    expect(region).toHaveAttribute("data-left", "true");
+    expect(region).toHaveAttribute("data-right", "false");
+    expect(document.querySelector('[data-edge="right"]')).toBeNull();
+    expect(document.querySelector('[data-edge="left"]')).not.toBeNull();
   });
 
   it("UXP-12 shows no shadow when the content fits", () => {

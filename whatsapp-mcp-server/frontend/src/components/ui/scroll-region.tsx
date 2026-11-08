@@ -20,14 +20,16 @@ interface Cut {
   scrollable: boolean;
   top: boolean;
   bottom: boolean;
+  left: boolean;
+  right: boolean;
 }
 
-const FIT: Cut = { scrollable: false, top: false, bottom: false };
+const FIT: Cut = { scrollable: false, top: false, bottom: false, left: false, right: false };
 const EDGE = 1;
 
 /**
  * A box that scrolls inside itself. While its content overflows it is a focusable named region, so the keyboard
- * can scroll it, and a shadow marks each edge that cuts content (data-top and data-bottom say which).
+ * can scroll it, and a shadow marks each edge that cuts content (data-top, data-bottom, data-left and data-right say which).
  */
 export function ScrollRegion({ label, children, bordered, header, className, scrollerClassName, id }: ScrollRegionProps) {
   const scroller = useRef<HTMLDivElement>(null);
@@ -37,14 +39,22 @@ export function ScrollRegion({ label, children, bordered, header, className, scr
     const el = scroller.current;
     if (!el) return;
     const vertical = el.scrollHeight - el.clientHeight > EDGE;
-    // Sideways overflow also makes the region something the keyboard must reach; only the vertical edges get a shadow.
+    const sideways = el.scrollWidth - el.clientWidth > EDGE;
     const next: Cut = {
-      scrollable: vertical || el.scrollWidth - el.clientWidth > EDGE,
+      scrollable: vertical || sideways,
       top: vertical && el.scrollTop > EDGE,
       bottom: vertical && el.scrollTop + el.clientHeight < el.scrollHeight - EDGE,
+      left: sideways && el.scrollLeft > EDGE,
+      right: sideways && el.scrollLeft + el.clientWidth < el.scrollWidth - EDGE,
     };
     setCut((previous) =>
-      previous.scrollable === next.scrollable && previous.top === next.top && previous.bottom === next.bottom ? previous : next,
+      previous.scrollable === next.scrollable &&
+      previous.top === next.top &&
+      previous.bottom === next.bottom &&
+      previous.left === next.left &&
+      previous.right === next.right
+        ? previous
+        : next,
     );
   }, []);
 
@@ -67,6 +77,8 @@ export function ScrollRegion({ label, children, bordered, header, className, scr
         {...(cut.scrollable ? { role: "region", tabIndex: 0, "aria-label": label } : {})}
         data-top={cut.top}
         data-bottom={cut.bottom}
+        data-left={cut.left}
+        data-right={cut.right}
         onScroll={measure}
         className={cn("max-h-full overflow-auto overscroll-contain", scrollerClassName)}
       >
@@ -78,6 +90,12 @@ export function ScrollRegion({ label, children, bordered, header, className, scr
       ) : null}
       {cut.bottom ? (
         <div aria-hidden="true" data-edge="bottom" className="pointer-events-none absolute inset-x-0 bottom-0 h-3 bg-linear-to-t from-ink/20 to-transparent" />
+      ) : null}
+      {cut.left ? (
+        <div aria-hidden="true" data-edge="left" className="pointer-events-none absolute inset-y-0 left-0 w-3 bg-linear-to-r from-ink/20 to-transparent" />
+      ) : null}
+      {cut.right ? (
+        <div aria-hidden="true" data-edge="right" className="pointer-events-none absolute inset-y-0 right-0 w-3 bg-linear-to-l from-ink/20 to-transparent" />
       ) : null}
     </div>
   );

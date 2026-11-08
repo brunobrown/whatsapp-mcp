@@ -566,6 +566,51 @@ test("UXP-12 a scroll region shows a shadow on each edge that cuts content, and 
   await expect(page.getByRole("region", { name: "Allow, items" })).toHaveCount(0);
 });
 
+
+test("UXP-12 at 360 px a table cut sideways shows a shadow on each cut edge: the right at the start, both in the middle, the left at the end", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await harness.current.signIn(page);
+  await page.goto(`${harness.current.url}/activity`);
+  for (const title of ["Pending drafts", "Send audit", "Monitor audit"]) {
+    const region = page.getByRole("region", { name: `${title} table` });
+    await region.scrollIntoViewIfNeeded();
+    const shell0 = region.locator("xpath=..");
+    const left = shell0.locator('[data-edge="left"]');
+    const right = shell0.locator('[data-edge="right"]');
+    const reach = await region.evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(reach, `${title} is cut sideways`).toBeGreaterThan(50);
+    await region.evaluate((node) => {
+      node.scrollLeft = 0;
+    });
+    // At the start only the right is cut.
+    await expect(right, title).toBeVisible();
+    await expect(left, title).toHaveCount(0);
+    await expect(region).toHaveAttribute("data-right", "true");
+    await expect(region).toHaveAttribute("data-left", "false");
+    const look = await right.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      return { image: getComputedStyle(node).backgroundImage, height: box.height, width: box.width };
+    });
+    expect(look.image).toContain("gradient");
+    expect(look.width).toBeGreaterThan(4);
+    expect(look.height).toBeGreaterThan(40);
+    // In the middle both edges are cut.
+    await region.evaluate((node) => {
+      node.scrollLeft = 30;
+    });
+    await expect(left, title).toBeVisible();
+    await expect(right, title).toBeVisible();
+    // At the end only the left is cut.
+    await region.evaluate((node) => {
+      node.scrollLeft = node.scrollWidth;
+    });
+    await expect(left, title).toBeVisible();
+    await expect(right, title).toHaveCount(0);
+    await expect(region).toHaveAttribute("data-left", "true");
+    await expect(region).toHaveAttribute("data-right", "false");
+  }
+});
+
 test("UXP-13 opening another section returns the content to the top and keeps the menu's scroll position", async ({ page }) => {
   // A short window, so that the menu itself has more entries than it can show.
   await page.setViewportSize({ width: 1280, height: 520 });
