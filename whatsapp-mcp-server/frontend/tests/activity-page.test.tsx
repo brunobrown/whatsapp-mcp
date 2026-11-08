@@ -6,6 +6,7 @@ import { AppProviders } from "../src/app/providers";
 import { createAppRouter } from "../src/app/router";
 import { queryClient } from "../src/lib/queryClient";
 import { useUiStore } from "../src/stores/ui";
+import { mockOverflow } from "./helpers/overflow";
 import { mockViewport } from "./helpers/viewport";
 import { server } from "./msw/server";
 
@@ -14,6 +15,7 @@ const sections = [
 ];
 
 let viewport: ReturnType<typeof mockViewport>;
+let overflow: ReturnType<typeof mockOverflow>;
 
 function openActivity() {
   const router = createAppRouter(createMemoryHistory({ initialEntries: ["/activity"] }));
@@ -43,6 +45,8 @@ function firstColumn(name: string): string[] {
 
 beforeEach(() => {
   viewport = mockViewport(1280);
+  // A table is a focusable region only while it overflows; jsdom has no layout, so say it does.
+  overflow = mockOverflow();
   queryClient.clear();
   useUiStore.setState(useUiStore.getInitialState(), true);
   server.use(
@@ -52,6 +56,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   viewport.restore();
+  overflow.restore();
   queryClient.setDefaultOptions({});
 });
 
@@ -101,7 +106,8 @@ describe("activity page", () => {
     openActivity();
     const region = await screen.findByRole("region", { name: "Send audit table" });
     expect(region).toHaveAttribute("tabindex", "0");
-    expect(region.className).toContain("overflow-x-auto");
+    expect(region.className).toContain("overflow-auto");
+    expect(region.className).toContain("max-h-[24rem]");
   });
 
   it("shows a dash for a field a row lacks and Yes or No for flags", async () => {

@@ -8,6 +8,7 @@ import { createAppRouter } from "../src/app/router";
 import { queryClient } from "../src/lib/queryClient";
 import { resetNoticeMemory } from "../src/lib/notices";
 import { useUiStore } from "../src/stores/ui";
+import { mockOverflow } from "./helpers/overflow";
 import { mockViewport } from "./helpers/viewport";
 import { server } from "./msw/server";
 
@@ -26,6 +27,7 @@ const counters = {
 };
 
 let viewport: ReturnType<typeof mockViewport>;
+let overflow: ReturnType<typeof mockOverflow> | undefined;
 
 function openStatus() {
   const router = createAppRouter(createMemoryHistory({ initialEntries: ["/status"] }));
@@ -58,6 +60,8 @@ afterEach(() => {
     toast.dismiss();
   });
   viewport.restore();
+  overflow?.restore();
+  overflow = undefined;
 });
 
 describe("status page", () => {
@@ -126,6 +130,7 @@ describe("status page", () => {
   });
 
   it("shows counts formatted, and the tables scroll inside a focusable region", async () => {
+    overflow = mockOverflow();
     serve({ status: { connected: true } });
     openStatus();
     const received = (await screen.findByText("Messages received")).parentElement as HTMLElement;

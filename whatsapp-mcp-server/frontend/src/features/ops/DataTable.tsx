@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ScrollRegion } from "@/components/ui/scroll-region";
 import { cn } from "@/lib/utils";
 
 export interface DataTableProps {
@@ -10,24 +11,19 @@ export interface DataTableProps {
 }
 
 /**
- * A table that scrolls inside its own box, so a wide one never widens the page. The box takes focus, which lets a
- * keyboard operator scroll it with the arrow keys.
+ * A table that scrolls inside its own box (24 rem tall at most, sideways when it is wide), so a long or wide one never
+ * stretches the page. The header row stays in view while the rows scroll (index.css), and under 600 px the first column
+ * does too. The box takes focus once it scrolls, which lets a keyboard operator use the arrow keys.
  */
 export function DataTable({ label, columns, children, className }: DataTableProps) {
   return (
-    <div
-      role="region"
-      aria-label={label}
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- a scrollable region must be reachable by keyboard
-      tabIndex={0}
-      className={cn("max-w-full overflow-x-auto rounded-control border border-line bg-panel", className)}
-    >
-      <table className="w-full border-collapse text-left text-sm">
+    <ScrollRegion label={label} bordered className={className} scrollerClassName="max-h-[24rem]">
+      <table data-table className="w-full border-separate border-spacing-0 text-left text-sm">
         <caption className="sr-only">{label}</caption>
         <thead>
-          <tr className="border-b border-line bg-surface">
+          <tr>
             {columns.map((column) => (
-              <th key={column} scope="col" className="px-3 py-2 font-semibold whitespace-nowrap text-muted">
+              <th key={column} scope="col" className="border-b border-line px-3 py-2 font-semibold whitespace-nowrap text-muted">
                 {column}
               </th>
             ))}
@@ -35,7 +31,7 @@ export function DataTable({ label, columns, children, className }: DataTableProp
         </thead>
         <tbody>{children}</tbody>
       </table>
-    </div>
+    </ScrollRegion>
   );
 }
 

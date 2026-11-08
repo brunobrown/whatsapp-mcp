@@ -36,11 +36,12 @@ export function ScrollRegion({ label, children, bordered, header, className, scr
   const measure = useCallback(() => {
     const el = scroller.current;
     if (!el) return;
-    const scrollable = el.scrollHeight - el.clientHeight > EDGE;
+    const vertical = el.scrollHeight - el.clientHeight > EDGE;
+    // Sideways overflow also makes the region something the keyboard must reach; only the vertical edges get a shadow.
     const next: Cut = {
-      scrollable,
-      top: scrollable && el.scrollTop > EDGE,
-      bottom: scrollable && el.scrollTop + el.clientHeight < el.scrollHeight - EDGE,
+      scrollable: vertical || el.scrollWidth - el.clientWidth > EDGE,
+      top: vertical && el.scrollTop > EDGE,
+      bottom: vertical && el.scrollTop + el.clientHeight < el.scrollHeight - EDGE,
     };
     setCut((previous) =>
       previous.scrollable === next.scrollable && previous.top === next.top && previous.bottom === next.bottom ? previous : next,
@@ -60,7 +61,7 @@ export function ScrollRegion({ label, children, bordered, header, className, scr
   });
 
   return (
-    <div id={id} className={cn("relative min-h-0 overflow-hidden", bordered && "rounded-card border border-line", className)}>
+    <div id={id} className={cn("relative min-h-0 max-w-full overflow-hidden", bordered && "rounded-card border border-line", className)}>
       <div
         ref={scroller}
         {...(cut.scrollable ? { role: "region", tabIndex: 0, "aria-label": label } : {})}
