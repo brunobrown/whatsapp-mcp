@@ -131,6 +131,41 @@ describe("cards", () => {
   });
 });
 
+describe("card error marker", () => {
+  it("UXP-19 a card with an invalid field is marked and the summary link still focuses the field", async () => {
+    current = section({
+      fields: [
+        f({ key: "name", label: "Name" }),
+        f({ key: "limit", label: "Limit", kind: "int", group: "Timing" }),
+      ],
+      values: { name: "alpha", limit: 5 },
+      state: {},
+    });
+    server.use(
+      http.post("*/api/sections/s/validate", () =>
+        HttpResponse.json({ errors: { limit: "must be a whole number" }, general: [], can_save: false }),
+      ),
+      http.put("*/api/sections/s", () =>
+        HttpResponse.json({ ...okOutcome, ok: false, restarts: [], errors: { limit: "must be a whole number" }, general: [] }, { status: 422 }),
+      ),
+    );
+    await mount();
+    expect(within(screen.getByRole("region", { name: /^General/ })).queryByText("needs attention")).toBeNull();
+    await userEvent.type(field("Limit"), "z");
+    const timing = await screen.findByRole("region", { name: /^Timing/ });
+    await waitFor(() => {
+      expect(within(timing).getByText("needs attention")).toBeInTheDocument();
+    });
+    expect(timing.querySelector("[data-needs-attention] svg")).not.toBeNull();
+    expect(within(timing).getByRole("heading", { level: 2 })).toHaveTextContent("Timing");
+    expect(within(screen.getByRole("region", { name: /^General/ })).queryByText("needs attention")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    const summary = await screen.findByRole("alert");
+    await userEvent.click(within(summary).getByRole("button", { name: "Go to Limit" }));
+    expect(field("Limit")).toHaveFocus();
+  });
+});
+
 describe("loading and failing", () => {
   it("shows a skeleton while the section loads", async () => {
     server.use(http.get("*/api/sections/s", async () => {

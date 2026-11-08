@@ -182,7 +182,7 @@ function SectionForm({ sectionId }: { sectionId: string }) {
         <div className="flex flex-col gap-4">
           {groupFields(view.fields).map((group) => (
             <Card key={group.id}>
-              <CardHeader title={group.title} />
+              <CardHeader title={group.title} error={group.fields.some((field) => failing.includes(field))} />
               <CardBody className="flex flex-col divide-y divide-line py-0">
                 {group.fields.map((field) => (
                   <div key={field.key} className="py-4">
