@@ -34,6 +34,16 @@
   --warning-soft: light-dark(#fff4d6, #3a3320);
 
   --focus: var(--accent-ink);
+
+  /* Safe areas (notch, home indicator): the shell edges keep 1 rem of air and never sit under them. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --edge-top: max(1rem, var(--safe-top));
+  --edge-right: max(1rem, var(--safe-right));
+  --edge-bottom: max(1rem, var(--safe-bottom));
+  --edge-left: max(1rem, var(--safe-left));
 }
 
 :root[data-theme="light"] {
@@ -88,7 +98,6 @@
     color: var(--ink);
   }
 
-  /* 16 px keeps iOS from zooming into a focused field. */
   input,
   select,
   textarea {
@@ -107,13 +116,41 @@
   }
 }
 
+/*
+ * Phones: 16 px fields keep the browser from zooming into a focused field, and every control has a
+ * hit area of at least 44 by 44 px.
+ */
+@media (max-width: 599.98px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  button,
+  a[href],
+  summary,
+  select,
+  input[type="checkbox"],
+  input[type="radio"],
+  [role="button"],
+  [role="switch"],
+  [role="radio"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="tab"] {
+    min-height: var(--min-target);
+    min-width: var(--min-target);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 1ms !important;
     scroll-behavior: auto !important;
   }
 }
