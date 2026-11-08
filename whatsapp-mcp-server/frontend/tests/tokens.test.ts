@@ -142,6 +142,8 @@ describe("design tokens", () => {
   it("UXP-35 controls have a 44 px hit area under 600 px", () => {
     expect(css).toMatch(/--min-target:\s*2\.75rem/);
     const body = block("@media \\(max-width: 599\\.98px\\)");
+    // 2.75rem alone is 41.25 px at the 15 px root, so the phone floor is stated in pixels too.
+    expect(body).toMatch(/--min-target:\s*max\(\s*2\.75rem\s*,\s*44px\s*\)/);
     for (const selector of ["button", "a[href]", '[role="switch"]', '[role="radio"]', '[role="checkbox"]', "summary"]) {
       expect(body, selector).toContain(selector);
     }

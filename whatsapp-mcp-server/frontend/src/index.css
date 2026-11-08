@@ -121,6 +121,11 @@
  * hit area of at least 44 by 44 px.
  */
 @media (max-width: 599.98px) {
+  /* 2.75rem is 41.25 px at the 15 px root: under 600 px the floor is 44 px whatever the root size. */
+  :root {
+    --min-target: max(2.75rem, 44px);
+  }
+
   input,
   select,
   textarea {
