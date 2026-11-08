@@ -23,19 +23,19 @@ def _validate(values: Dict[str, Any]) -> List[Problem]:
 
 FIELDS = (
     Field("mode", "Mode", "choice", default="denylist", options=("denylist", "allowlist"),
-          help="Denylist sends anywhere that is not denied. Allowlist sends only to the chats listed under Allow."),
+          help="Denylist sends anywhere that is not denied. Allowlist sends only to the chats listed under Allow.", group="Rules"),
     Field("allow", "Allow", "list",
-          help="Chats the server may send to when the mode is allowlist. One per line: a chat name, a phone number or a JID."),
+          help="Chats the server may send to when the mode is allowlist. One per line: a chat name, a phone number or a JID.", group="Rules"),
     Field("deny", "Deny", "list",
-          help="Chats the server never sends to. Deny always wins. One per line: a chat name, a phone number or a JID."),
+          help="Chats the server never sends to. Deny always wins. One per line: a chat name, a phone number or a JID.", group="Rules"),
     Field("override_token", "Override token", "secret",
           help="A value the agent can pass to release one blocked send. A deliberate speed bump, not a security boundary: "
-               "whoever can read the file can read the token."),
+               "whoever can read the file can read the token.", group="Safety"),
     Field("session_taint", "Session taint", "choice", default="block", options=("block", "off"),
           help="Block sending to a different chat than the ones read in the session. The environment variable "
                "WHATSAPP_SESSION_TAINT wins over this value.",
           risk="Turning this off lets text read in one chat make the agent pass its content to another chat.",
-          risk_when=("off",)),
+          risk_when=("off",), group="Safety"),
 )
 
 SECTION = Section(
