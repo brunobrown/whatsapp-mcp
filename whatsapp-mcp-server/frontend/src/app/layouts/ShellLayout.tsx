@@ -1,5 +1,6 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
+import { useLayoutEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSessionWatch } from "@/features/auth/useSessionWatch";
@@ -60,8 +61,13 @@ function ListPane({ rail }: { rail: boolean }) {
   );
 }
 
-function DetailPane({ active, drawer }: { active: SectionSummary | undefined; drawer: boolean }) {
+function DetailPane({ active, drawer, pathname }: { active: SectionSummary | undefined; drawer: boolean; pathname: string }) {
   const t = useT();
+  const content = useRef<HTMLElement>(null);
+  // A new section opens at its top; the menu is another scroller and keeps its own position.
+  useLayoutEffect(() => {
+    if (content.current) content.current.scrollTop = 0;
+  }, [pathname]);
   const restartSections = useUiStore((state) => state.restartSections);
   const pending = active !== undefined && (active.pending || restartSections.includes(active.id));
   return (
@@ -71,7 +77,12 @@ function DetailPane({ active, drawer }: { active: SectionSummary | undefined; dr
         <h1 className="m-0 min-w-0 flex-1 truncate text-lg font-semibold">{active?.title ?? t("app.settings")}</h1>
         {pending ? <Badge variant="warning">{t("shell.pendingRestart")}</Badge> : null}
       </header>
-      <main id="content" tabIndex={-1} className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+      <main
+        id="content"
+        ref={content}
+        tabIndex={-1}
+        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain"
+      >
         <div className="mx-auto w-full max-w-3xl px-4 py-5 sm:px-6 sm:py-6">
           <Outlet />
         </div>
@@ -108,7 +119,7 @@ export function ShellLayout() {
       </a>
       {mode === "drawer" ? null : <ListPane rail={mode === "collapsed"} />}
       <div className="flex min-w-0 flex-1 flex-col">
-        <DetailPane active={active} drawer={mode === "drawer"} />
+        <DetailPane active={active} drawer={mode === "drawer"} pathname={pathname} />
       </div>
     </div>
   );

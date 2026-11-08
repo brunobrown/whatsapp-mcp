@@ -376,3 +376,47 @@ describe("menu collapse", () => {
     }
   });
 });
+
+describe("one scroller", () => {
+  /** jsdom lays nothing out, so the element gets a scrollTop that holds what is written to it. */
+  function scrollable(el: Element, top: number): void {
+    let value = top;
+    Object.defineProperty(el, "scrollTop", { configurable: true, get: () => value, set: (next: number) => void (value = next) });
+  }
+
+  it("UXP-13 route change resets the content scroll and keeps the menu scroll", async () => {
+    viewport = mockViewport(1280);
+    const router = open("/s/media");
+    const nav = await listed();
+    const menuScroller = nav.querySelector("[data-menu-scroll]") as HTMLElement;
+    const main = screen.getByRole("main");
+    scrollable(menuScroller, 180);
+    scrollable(main, 420);
+
+    await userEvent.click(within(nav).getByRole("link", { name: /Send policy/ }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/s/send_policy");
+    });
+    expect(main.scrollTop).toBe(0);
+    // The menu is the same element, not rebuilt, and still where the operator left it.
+    expect(screen.getByRole("navigation", { name: "Sections" }).querySelector("[data-menu-scroll]")).toBe(menuScroller);
+    expect(menuScroller.scrollTop).toBe(180);
+
+    main.scrollTop = 90;
+    await userEvent.click(within(nav).getByRole("link", { name: /Account/ }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/account");
+    });
+    expect(main.scrollTop).toBe(0);
+    expect(menuScroller.scrollTop).toBe(180);
+  });
+
+  it("UXP-08 the shell is as tall as the window and is the only thing that fills it, with the content as the one scroller", async () => {
+    viewport = mockViewport(360);
+    open("/s/media");
+    await screen.findByRole("heading", { level: 1, name: "Media downloads" });
+    expect(screen.getByTestId("shell")).toHaveClass("h-dvh", "overflow-hidden");
+    expect(screen.getByRole("banner")).toHaveClass("shrink-0");
+    expect(screen.getByRole("main")).toHaveClass("overflow-y-auto", "min-h-0", "flex-1");
+  });
+});
