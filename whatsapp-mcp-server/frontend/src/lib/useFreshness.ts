@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { t } from "@/i18n/t";
 import { relativeText } from "@/lib/relativeTime";
 
@@ -53,19 +53,23 @@ export interface Freshness {
   refresh: () => void;
 }
 
-/** 'Updated N s ago' for a query, counting every second, with a refresh and a failure flag. */
-export function useFreshness(query: FreshnessSource): Freshness {
+/**
+ * 'Updated N s ago' for a query, counting every second, with a refresh and a failure flag. Given several queries it
+ * reads the oldest good data, refreshes them all and reports a failure of any.
+ */
+export function useFreshness(source: FreshnessSource | readonly FreshnessSource[]): Freshness {
   const now = useNow();
-  const { refetch } = query;
-  const refresh = useCallback(() => {
-    void refetch();
-  }, [refetch]);
-  const updatedAt = query.dataUpdatedAt;
+  const queries = Array.isArray(source) ? (source as readonly FreshnessSource[]) : [source as FreshnessSource];
+  const refresh = (): void => {
+    for (const query of queries) void query.refetch();
+  };
+  const good = queries.map((query) => query.dataUpdatedAt).filter((moment) => moment > 0);
+  const updatedAt = good.length > 0 ? Math.min(...good) : 0;
   return {
     label: updatedAt > 0 ? t("freshness.updated", { when: relativeText(now, updatedAt) }) : "",
     updatedAt,
-    failed: query.isRefetchError,
-    refreshing: query.isFetching,
+    failed: queries.some((query) => query.isRefetchError),
+    refreshing: queries.some((query) => query.isFetching),
     refresh,
   };
 }

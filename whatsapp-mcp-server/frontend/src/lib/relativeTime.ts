@@ -13,6 +13,15 @@ export function relativeText(now: number, then: number): string {
   return t("time.days", { n: Math.floor(seconds / DAY) });
 }
 
+/** How long until `then`, for a moment still ahead of `now`: 'in 5 s', 'in 3 min', 'in 2 h', 'in 4 d'. */
+export function untilText(now: number, then: number): string {
+  const seconds = Math.max(0, Math.floor((then - now) / 1000));
+  if (seconds < MINUTE) return t("time.in.seconds", { n: seconds });
+  if (seconds < HOUR) return t("time.in.minutes", { n: Math.floor(seconds / MINUTE) });
+  if (seconds < DAY) return t("time.in.hours", { n: Math.floor(seconds / HOUR) });
+  return t("time.in.days", { n: Math.floor(seconds / DAY) });
+}
+
 /** The exact moment in UTC to the second, '2026-11-07 21:44:03 UTC'; empty for a value that is not a moment. */
 export function exactUtc(moment: number): string {
   if (!Number.isFinite(moment)) return "";

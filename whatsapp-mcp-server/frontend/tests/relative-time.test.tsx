@@ -45,6 +45,13 @@ describe("RelativeTime", () => {
     expect(element).toHaveAttribute("title", "2026-11-07 10:00:00 UTC");
   });
 
+  it("UXP-30 reads a moment still ahead as 'in 2 h', with the same title and datetime", () => {
+    render(<RelativeTime value="2026-11-07T14:00:00Z" />);
+    const element = screen.getByText("in 2 h");
+    expect(element.tagName).toBe("TIME");
+    expect(element).toHaveAttribute("title", "2026-11-07 14:00:00 UTC");
+  });
+
   it("UXP-30 renders nothing for a value that is not a moment", () => {
     const { container } = render(<RelativeTime value="not a date" />);
     expect(container).toBeEmptyDOMElement();

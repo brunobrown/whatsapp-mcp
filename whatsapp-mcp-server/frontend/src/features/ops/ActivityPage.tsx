@@ -1,11 +1,15 @@
+import { Inbox, Radio, Send } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { EmptyState, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { useT } from "@/i18n/t";
-import { formatCount, formatMoment } from "@/lib/format";
+import { formatCount } from "@/lib/format";
 import { useOpsAudit, useOpsDrafts } from "@/services/services";
 import type { AuditRow, DraftRow } from "@/types/api";
 import { Cell, DataTable } from "./DataTable";
+import { Freshness } from "./Freshness";
+import { Moment } from "./Moment";
 
 interface ListQuery<Row> {
   isPending: boolean;
@@ -21,6 +25,7 @@ interface ListQuery<Row> {
  */
 function Listing<Row>({
   title,
+  icon,
   empty,
   emptyHelp,
   query,
@@ -28,8 +33,9 @@ function Listing<Row>({
   row,
 }: {
   title: string;
+  icon: LucideIcon;
   empty: string;
-  emptyHelp?: string;
+  emptyHelp: string;
   query: ListQuery<Row>;
   columns: readonly string[];
   row: (item: Row) => ReactNode;
@@ -43,7 +49,7 @@ function Listing<Row>({
         <Skeleton className="h-10" />
       </div>
     );
-  } else if (query.isError) {
+  } else if (query.isError && query.data === undefined) {
     body = (
       <ErrorState
         title={t("activity.loadError")}
@@ -54,7 +60,7 @@ function Listing<Row>({
       />
     );
   } else if (query.data === undefined || query.data.rows.length === 0) {
-    body = <EmptyState title={empty} {...(emptyHelp !== undefined && { description: emptyHelp })} />;
+    body = <EmptyState icon={icon} level={3} title={empty} description={emptyHelp} />;
   } else {
     body = (
       <DataTable label={t("activity.table", { title })} columns={columns}>
@@ -88,6 +94,7 @@ function Drafts() {
   return (
     <Listing<DraftRow>
       title={t("activity.drafts")}
+      icon={Inbox}
       empty={t("activity.drafts.empty")}
       emptyHelp={t("activity.drafts.emptyHelp")}
       query={query}
@@ -105,8 +112,8 @@ function Drafts() {
           <Cell>{text(draft.profile, missing)}</Cell>
           <Cell>{text(draft.chat_jid, missing)}</Cell>
           <Cell>{text(draft.sender, missing)}</Cell>
-          <Cell>{formatMoment(draft.created_at)}</Cell>
-          <Cell>{formatMoment(draft.expires_at)}</Cell>
+          <Cell><Moment value={draft.created_at} /></Cell>
+          <Cell><Moment value={draft.expires_at} /></Cell>
         </>
       )}
     />
@@ -121,7 +128,9 @@ function SendAudit() {
   return (
     <Listing<AuditRow>
       title={t("activity.send")}
+      icon={Send}
       empty={t("activity.send.empty")}
+      emptyHelp={t("activity.send.emptyHelp")}
       query={query}
       columns={[
         t("activity.col.when"),
@@ -135,7 +144,7 @@ function SendAudit() {
       ]}
       row={(entry) => (
         <>
-          <Cell>{formatMoment(entry.ts)}</Cell>
+          <Cell><Moment value={entry.ts} /></Cell>
           <Cell>{text(entry.kind, missing)}</Cell>
           <Cell>{text(entry.chat_name ?? entry.chat_jid, missing)}</Cell>
           <Cell>{formatCount(entry.size)}</Cell>
@@ -157,7 +166,9 @@ function MonitorAudit() {
   return (
     <Listing<AuditRow>
       title={t("activity.monitor")}
+      icon={Radio}
       empty={t("activity.monitor.empty")}
+      emptyHelp={t("activity.monitor.emptyHelp")}
       query={query}
       columns={[
         t("activity.col.when"),
@@ -174,7 +185,7 @@ function MonitorAudit() {
       ]}
       row={(entry) => (
         <>
-          <Cell>{formatMoment(entry.ts)}</Cell>
+          <Cell><Moment value={entry.ts} /></Cell>
           <Cell>{text(entry.profile, missing)}</Cell>
           <Cell>{text(entry.chat_jid, missing)}</Cell>
           <Cell>{text(entry.sender, missing)}</Cell>
@@ -194,9 +205,13 @@ function MonitorAudit() {
 /** Pending drafts and the two audit logs, read only. Message text never reaches this page. */
 export function ActivityPage() {
   const t = useT();
+  const drafts = useOpsDrafts();
+  const send = useOpsAudit("send");
+  const monitor = useOpsAudit("monitor");
   return (
     <div className="flex max-w-6xl flex-col gap-4">
       <p className="m-0 text-muted">{t("activity.readOnly")}</p>
+      <Freshness queries={[drafts, send, monitor]} />
       <Drafts />
       <SendAudit />
       <MonitorAudit />

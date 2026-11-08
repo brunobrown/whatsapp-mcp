@@ -1,4 +1,5 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -173,5 +174,61 @@ describe("status page", () => {
     expect(grid.tagName).toBe("DL");
     expect(grid.className).toMatch(/(^|\s)grid-cols-2(\s|$)/);
     expect(grid.className).not.toMatch(/(^|\s)(sm:)?grid-cols-1(\s|$)/);
+  });
+
+  it("UXP-26 shows how long ago the status was read, and a Refresh button", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    expect(await screen.findByText(/^Updated \d+ s ago$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
+  it("UXP-27 Refresh fetches the status and the counters again at once and reads Updated 0 s ago", async () => {
+    let reads = 0;
+    serve({ status: { connected: true } });
+    server.use(
+      http.get("*/api/ops/status", () => {
+        reads += 1;
+        return HttpResponse.json({ status: { connected: true } });
+      }),
+    );
+    openStatus();
+    await screen.findByText("Connected");
+    const before = reads;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(reads).toBeGreaterThan(before);
+    });
+    expect(await screen.findByText("Updated 0 s ago")).toBeInTheDocument();
+  });
+
+  it("UXP-28 a failed fetch shows Could not update and keeps the previous status", async () => {
+    queryClient.setDefaultOptions({ queries: { retry: false } });
+    let fail = false;
+    serve({ status: { connected: true } });
+    server.use(
+      http.get("*/api/ops/status", () =>
+        fail ? HttpResponse.json({ code: "x", message: "Down." }, { status: 500 }) : HttpResponse.json({ status: { connected: true, version: "9.9.9" } }),
+      ),
+    );
+    openStatus();
+    await screen.findByText("9.9.9");
+    fail = true;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Could not update")).toBeInTheDocument();
+    expect(screen.getByText("9.9.9")).toBeInTheDocument();
+    expect(screen.getByText(/^Updated \d+ s ago$/)).toBeInTheDocument();
+  });
+
+  it("UXP-30 every time is relative text with the exact UTC time in title and datetime", async () => {
+    serve({ status: { connected: true, started_at: "2026-01-02T03:04:05Z" } });
+    openStatus();
+    const started = (await screen.findByText("Started")).parentElement as HTMLElement;
+    const moment = started.querySelector("time") as HTMLElement;
+    expect(moment.textContent).toMatch(/ ago$/);
+    expect(moment).toHaveAttribute("datetime", "2026-01-02T03:04:05.000Z");
+    expect(moment).toHaveAttribute("title", "2026-01-02 03:04:05 UTC");
+    const window = (await screen.findByText(/^Counted since/)).querySelector("time") as HTMLElement;
+    expect(window).toHaveAttribute("datetime", "2026-01-02T03:04:05.000Z");
   });
 });
