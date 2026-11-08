@@ -90,6 +90,47 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("cards", () => {
+  it("UXP-14 titled cards: the form is one titled card per group, fields without a group in General", async () => {
+    current = section({
+      fields: [
+        f({ key: "name", label: "Name" }),
+        f({ key: "limit", label: "Limit", kind: "int", group: "Timing" }),
+        f({ key: "mode", label: "Mode", group: "Timing" }),
+      ],
+      values: { name: "alpha", limit: 5, mode: "x" },
+      state: {},
+    });
+    await mount();
+    const general = screen.getByRole("region", { name: "General" });
+    const timing = screen.getByRole("region", { name: "Timing" });
+    expect(within(general).getByLabelText("Name")).toBeInTheDocument();
+    expect(within(general).queryByLabelText("Limit")).toBeNull();
+    expect(within(timing).getByLabelText("Limit")).toBeInTheDocument();
+    expect(within(timing).getByLabelText("Mode")).toBeInTheDocument();
+    expect(within(timing).getByRole("heading", { level: 2, name: "Timing" })).toBeInTheDocument();
+  });
+
+  it("UXP-14 a section with no labels keeps a single card", async () => {
+    await mount();
+    expect(within(screen.getByRole("main")).getAllByRole("heading", { level: 2 })).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "General" })).toBeInTheDocument();
+  });
+
+  it("UXP-16 a records or list field is its own card", async () => {
+    current = section({
+      fields: [f({ key: "name", label: "Name" }), f({ key: "targets", label: "Targets", kind: "list" })],
+      values: { name: "alpha", targets: ["one"] },
+      state: {},
+    });
+    await mount();
+    const card = screen.getByRole("region", { name: "Targets" });
+    expect(within(card).getByRole("heading", { level: 2, name: "Targets" })).toBeInTheDocument();
+    expect(within(card).getByLabelText("Targets, item 1")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "General" })).queryByLabelText("Targets, item 1")).toBeNull();
+  });
+});
+
 describe("loading and failing", () => {
   it("shows a skeleton while the section loads", async () => {
     server.use(http.get("*/api/sections/s", async () => {

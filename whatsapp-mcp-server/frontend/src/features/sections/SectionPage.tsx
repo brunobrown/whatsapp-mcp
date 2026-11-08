@@ -5,9 +5,11 @@ import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { useNotify } from "@/components/feedback/toaster";
 import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { Button } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { useT } from "@/i18n/t";
 import type { FieldSchema, SectionView } from "@/types/api";
+import { groupFields } from "./groupFields";
 import { useLeaveGuard } from "./useLeaveGuard";
 import { useSection } from "./useSection";
 
@@ -177,23 +179,31 @@ function SectionForm({ sectionId }: { sectionId: string }) {
         }}
         className="flex flex-col"
       >
-        <div className="flex flex-col divide-y divide-line">
-          {view.fields.map((field) => (
-            <div key={field.key} className="py-4 first:pt-0">
-              <FieldRenderer
-                field={field}
-                value={draft[field.key]}
-                loaded={view.values[field.key]}
-                state={view.state[field.key]}
-                error={errors[field.key]}
-                errors={errors}
-                readOnly={readOnly}
-                onChange={(next) => {
-                  section.setField(field.key, next);
-                }}
-                onRestore={readOnly ? undefined : section.restoreField}
-              />
-            </div>
+        <div className="flex flex-col gap-4">
+          {groupFields(view.fields).map((group) => (
+            <Card key={group.id}>
+              <CardHeader title={group.title} />
+              <CardBody className="flex flex-col divide-y divide-line py-0">
+                {group.fields.map((field) => (
+                  <div key={field.key} className="py-4">
+                    <FieldRenderer
+                      field={field}
+                      value={draft[field.key]}
+                      loaded={view.values[field.key]}
+                      state={view.state[field.key]}
+                      error={errors[field.key]}
+                      errors={errors}
+                      readOnly={readOnly}
+                      labelHidden={group.solo}
+                      onChange={(next) => {
+                        section.setField(field.key, next);
+                      }}
+                      onRestore={readOnly ? undefined : section.restoreField}
+                    />
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
           ))}
         </div>
 

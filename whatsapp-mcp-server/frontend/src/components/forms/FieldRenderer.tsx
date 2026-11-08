@@ -35,6 +35,8 @@ export interface FieldRendererProps {
   errors?: Readonly<Record<string, string>>;
   /** Locks every control without a notice, for a section that is read-only as a whole. */
   readOnly?: boolean;
+  /** The card already shows the label as its title: keep it for assistive technology only. */
+  labelHidden?: boolean;
   /** Makes ids unique when the same field appears on several cards. */
   idPrefix?: string;
   onChange: (value: EditorValue) => void;
@@ -151,7 +153,7 @@ function Control({
  * lock when the environment sets it, the warning of a risky value, the server's message and the way back to the
  * default. A kind this version does not know shows a notice instead of a control.
  */
-export function FieldRenderer({ field, value, loaded, state, error, errors, idPrefix = "", readOnly = false, onChange, onRestore }: FieldRendererProps) {
+export function FieldRenderer({ field, value, loaded, state, error, errors, idPrefix = "", labelHidden = false, readOnly = false, onChange, onRestore }: FieldRendererProps) {
   const t = useT();
   const base = `${idPrefix}${useId()}`;
   const [pendingRisk, setPendingRisk] = useState<EditorValue>(undefined);
@@ -273,7 +275,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
         </label>
       ) : null}
       {!known || field.kind === "secret" || field.kind === "list" || field.kind === "records" ? (
-        <p id={`${base}-label`} className="m-0 font-medium">
+        <p id={`${base}-label`} className={cn("m-0 font-medium", labelHidden && "sr-only")}>
           {field.label}
         </p>
       ) : null}
