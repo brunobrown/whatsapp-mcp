@@ -442,7 +442,7 @@ test("UX-04 each result shows beside the control, and a global event shows once 
   await withHarness({ seed: ["send_policy.json"] }, async (fresh) => {
     await fresh.signIn(page);
     await openSection(page, fresh, "send_policy");
-    // Saved: the note beside the button and one notification; a second save inside a minute does not repeat it.
+    // Saved: one notification (the save bar goes away); a second save inside a minute does not repeat it.
     await field(page, "deny").getByRole("button", { name: "Add item" }).click();
     await page.getByRole("textbox", { name: "Deny, item 2" }).fill("First");
     await save(page);

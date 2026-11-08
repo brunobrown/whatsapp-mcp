@@ -252,18 +252,18 @@ describe("read-only sections", () => {
 });
 
 describe("saving", () => {
-  it("keeps Save and Discard off until something changes", async () => {
+  it("keeps Save and Discard away until something changes", async () => {
     await mount();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Discard changes" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();
     await userEvent.type(field("Name"), "!");
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(field("Name")).toHaveValue("alpha");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
-  it("saves the changes, confirms next to the buttons and records the restart", async () => {
+  it("saves the changes, confirms with a notice and records the restart", async () => {
     await mount();
     await userEvent.clear(field("Name"));
     await userEvent.type(field("Name"), "beta");
@@ -271,7 +271,7 @@ describe("saving", () => {
     await waitFor(() => {
       expect(puts).toEqual([{ version: "v1", changes: { name: "beta" }, restore: [] }]);
     });
-    expect(await screen.findByText("Changes saved.", { selector: "p" })).toBeInTheDocument();
+    expect(await screen.findByText("Changes saved.")).toBeInTheDocument();
     expect(useUiStore.getState().restart).toEqual(["bridge"]);
   });
 
@@ -432,7 +432,7 @@ describe("restore defaults", () => {
     await userEvent.click(screen.getByRole("button", { name: "Restore defaults" }));
     await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Cancel" }));
     expect(field("Name")).toHaveValue("alpha");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("restores one field after its own confirmation", async () => {

@@ -1,6 +1,6 @@
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Outlet, useRouterState } from "@tanstack/react-router";
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSessionWatch } from "@/features/auth/useSessionWatch";
@@ -8,6 +8,7 @@ import { MenuBody } from "@/features/menu/MenuBody";
 import { MenuDrawer } from "@/features/menu/MenuDrawer";
 import { MenuTools } from "@/features/menu/MenuTools";
 import { pathOf } from "@/features/menu/model";
+import { SectionSlotsContext } from "@/features/sections/slots";
 import { useT } from "@/i18n/t";
 import { cn } from "@/lib/utils";
 import { DESKTOP_QUERY, useMediaQuery, WIDE_QUERY } from "@/lib/useMediaQuery";
@@ -68,9 +69,12 @@ function DetailPane({ active, drawer, pathname }: { active: SectionSummary | und
   useLayoutEffect(() => {
     if (content.current) content.current.scrollTop = 0;
   }, [pathname]);
+  const [bar, setBar] = useState<HTMLElement | null>(null);
+  const slots = useMemo(() => ({ actions: null, bar }), [bar]);
   const restartSections = useUiStore((state) => state.restartSections);
   const pending = active !== undefined && (active.pending || restartSections.includes(active.id));
   return (
+    <SectionSlotsContext.Provider value={slots}>
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="flex h-16 shrink-0 items-center gap-2 border-b border-line bg-surface px-2 sm:px-4">
         {drawer ? <MenuDrawer /> : null}
@@ -87,7 +91,9 @@ function DetailPane({ active, drawer, pathname }: { active: SectionSummary | und
           <Outlet />
         </div>
       </main>
+      <div ref={setBar} className="shrink-0 empty:hidden" />
     </div>
+    </SectionSlotsContext.Provider>
   );
 }
 
