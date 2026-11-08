@@ -4,7 +4,7 @@ import { expect, test, withHarness } from "./support/fixtures";
 import { confirm, field, json, openSection, saveButton } from "./support/sections";
 import { documentScrolls, panel, phoneOf, PHONE, shell, smallTargets, uxHarness } from "./support/ux";
 
-// UXP-14 and 16..43 of the ui-ux-polish spec (UXP-15 is proved by the Python test of the section schema): cards, the
+// UXP-14 to 43 of the ui-ux-polish spec (UXP-15 also has the Python test of the section schema): cards, the
 // contextual save bar, the live pages, the small touches and the phone rules. One interface per file, with extension
 // sections, sixteen profiles and 45 log rows; a test that saves or needs another start uses a harness of its own.
 //
@@ -72,6 +72,42 @@ test("UXP-14 every section form is cards with a heading, a border, a rounded cor
   expect(await cardTitles(page)).toEqual(["Notices", "Monitor profiles", "Polls", "Excerpt", "Timing"]);
   await expect(page.getByRole("region", { name: "Timing", exact: true }).locator(FIELD_OF_CARD)).toHaveCount(4);
   await expect(page.getByRole("region", { name: "Excerpt", exact: true }).locator(FIELD_OF_CARD)).toHaveCount(2);
+});
+
+test("UXP-15 a field with a group label sits in the card headed by that label, and a field without one in the first card, General", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await harness.current.signIn(page);
+  let grouped = 0;
+  let ungrouped = 0;
+  // send_policy, channel and database label every field; media and webhooks label none.
+  for (const id of ["send_policy", "channel", "database", "media", "webhooks"]) {
+    const answer = await page.request.get(`${harness.current.url}/api/sections/${id}`);
+    expect(answer.ok(), id).toBe(true);
+    const view = (await answer.json()) as { fields: { key: string; kind: string; group?: string }[] };
+    await openSection(page, harness.current, id);
+    const titles = await cardTitles(page);
+    if (view.fields.every((item) => (item.group?.trim() ?? "") !== "")) expect(titles, `${id}: no unlabelled field, no General card`).not.toContain("General");
+    for (const item of view.fields) {
+      // A records or list field is its own card, titled by its label (UXP-16): not placed by a group.
+      if (item.kind === "records" || item.kind === "list") continue;
+      const owner = await field(page, item.key).evaluate((node) => {
+        const card = node.closest("section[aria-labelledby]");
+        return document.getElementById(card?.getAttribute("aria-labelledby") ?? "")?.firstChild?.textContent?.trim() ?? "";
+      });
+      const label = item.group?.trim() ?? "";
+      if (label === "") {
+        ungrouped += 1;
+        expect(owner, `${id}.${item.key} has no group`).toBe("General");
+        expect(titles[0], `${id}: General is the first card`).toBe("General");
+      } else {
+        grouped += 1;
+        expect(owner, `${id}.${item.key} is grouped`).toBe(label);
+      }
+    }
+  }
+  // The proof is not empty: grouped and ungrouped fields were both placed.
+  expect(grouped).toBeGreaterThan(0);
+  expect(ungrouped).toBeGreaterThan(0);
 });
 
 test("UXP-16 a records or list field with its own title is its own card", async ({ page }) => {
