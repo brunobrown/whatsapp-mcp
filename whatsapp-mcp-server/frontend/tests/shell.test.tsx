@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
@@ -37,6 +37,7 @@ function open(path: string) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   queryClient.clear();
   useUiStore.setState(useUiStore.getInitialState(), true);
   server.use(
@@ -54,6 +55,8 @@ afterEach(() => {
 describe("wide screens (600 px and more)", () => {
   beforeEach(() => {
     viewport = mockViewport(600);
+    // 600 px is a rail by default; these tests read the full entries (title, description, badge), so they ask for the expanded menu.
+    useUiStore.setState({ menu: "expanded" });
   });
 
   it("shows the section list and the detail together, built from the sections endpoint", async () => {
@@ -275,5 +278,93 @@ describe("states and header actions", () => {
     open("/status");
     await listed();
     expect(screen.getByRole("link", { name: "Skip to the content" })).toHaveAttribute("href", "#content");
+  });
+});
+
+describe("menu collapse", () => {
+  const rail = () => screen.getByTestId("shell").querySelector("[data-menu]");
+
+  it("UXP-01 collapse and expand with the right names and aria-expanded", async () => {
+    viewport = mockViewport(1280);
+    open("/s/media");
+    const nav = await listed();
+    expect(rail()).toHaveAttribute("data-menu", "expanded");
+    const collapse = screen.getByRole("button", { name: "Collapse menu" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(collapse);
+    const expand = screen.getByRole("button", { name: "Expand menu" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(rail()).toHaveAttribute("data-menu", "collapsed");
+    // One icon per section, no visible title.
+    const links = within(nav).getAllByRole("link");
+    expect(links).toHaveLength(4);
+    expect(links.every((link) => link.textContent === "")).toBe(true);
+    expect(screen.queryByRole("button", { name: "Collapse menu" })).toBeNull();
+
+    // The keyboard does the same: focus the button and press Enter.
+    expand.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("button", { name: "Collapse menu" })).toHaveAttribute("aria-expanded", "true");
+    expect(rail()).toHaveAttribute("data-menu", "expanded");
+    expect(within(nav).getByText("Who may send")).toBeInTheDocument();
+  });
+
+  it("UXP-01 the theme and sign-out buttons stay in the menu when it is a rail", async () => {
+    viewport = mockViewport(800);
+    open("/s/media");
+    await listed();
+    const panel = screen.getByRole("complementary", { name: "Settings menu" });
+    expect(within(panel).getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /^Theme:/ })).toBeInTheDocument();
+  });
+
+  it("UXP-03 defaults by width and the stored choice", async () => {
+    // No stored choice: a rail from 600 to 1023 px, expanded from 1024 px.
+    viewport = mockViewport(1023);
+    open("/s/media");
+    await listed();
+    expect(rail()).toHaveAttribute("data-menu", "collapsed");
+    act(() => {
+      viewport.setWidth(1024);
+    });
+    await waitFor(() => {
+      expect(rail()).toHaveAttribute("data-menu", "expanded");
+    });
+    // The open section survives the change of width.
+    expect(screen.getByRole("heading", { level: 1, name: "Media downloads" })).toBeInTheDocument();
+
+    // The operator's choice wins at every width from 600 px and is read back after a reload.
+    await userEvent.click(screen.getByRole("button", { name: "Collapse menu" }));
+    const saved = localStorage.getItem("wmcp.ui") ?? "";
+    expect(saved).toContain('"menu":"collapsed"');
+    act(() => {
+      viewport.setWidth(1400);
+    });
+    expect(rail()).toHaveAttribute("data-menu", "collapsed");
+    cleanup();
+    useUiStore.setState({ menu: "auto" });
+    localStorage.setItem("wmcp.ui", saved);
+    await useUiStore.persist.rehydrate();
+    open("/s/media");
+    await listed();
+    expect(rail()).toHaveAttribute("data-menu", "collapsed");
+    expect(screen.getByRole("button", { name: "Expand menu" })).toBeInTheDocument();
+  });
+
+  it("UXP-04 no button under 600", async () => {
+    for (const width of [360, 599]) {
+      cleanup();
+      viewport = mockViewport(width);
+      useUiStore.setState({ menu: "collapsed" });
+      open("/s/media");
+      await listed();
+      expect(screen.queryByRole("button", { name: "Collapse menu" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Expand menu" })).toBeNull();
+      // Not a rail either: the entries carry their titles as text.
+      expect(rail()).toHaveAttribute("data-menu", "drawer");
+      expect(within(screen.getByRole("navigation", { name: "Sections" })).getByText("Who may send")).toBeInTheDocument();
+      viewport.restore();
+    }
   });
 });
