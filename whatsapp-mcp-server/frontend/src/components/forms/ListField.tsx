@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { ScrollRegion } from "@/components/ui/scroll-region";
 import { useT } from "@/i18n/t";
 
 /** The text the server reads for a list: one item per line, blank ones left out. */
@@ -64,44 +65,46 @@ export function ListField({ label, value, id, describedBy, invalid = false, disa
   return (
     <div role="group" aria-labelledby={`${id}-label`} aria-describedby={describedBy} className="flex flex-col gap-2">
       {items.length === 0 ? <p className="m-0 text-muted">{t("list.empty")}</p> : null}
-      <ul className="m-0 flex list-none flex-col gap-2 p-0">
-        {items.map((item, index) => (
-          // Rows have no state of their own, so the position is a stable enough key.
-          <li key={index} className="flex items-center gap-2">
-            <Input
-              ref={(element) => {
-                inputs.current[index] = element;
-              }}
-              id={index === 0 ? id : undefined}
-              value={item}
-              readOnly={disabled}
-              autoComplete="off"
-              aria-label={t("list.itemAria", { label, number: index + 1 })}
-              aria-invalid={invalid || undefined}
-              onChange={(event) => {
-                onChange(items.map((existing, position) => (position === index ? event.target.value : existing)));
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !disabled) {
-                  event.preventDefault();
-                  insertAt(index + 1);
-                }
-              }}
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              disabled={disabled}
-              aria-label={t("list.removeAria", { label, number: index + 1 })}
-              onClick={() => {
-                askRemove(index);
-              }}
-            >
-              <X aria-hidden="true" />
-            </Button>
-          </li>
-        ))}
-      </ul>
+      <ScrollRegion label={t("field.itemsRegion", { label })} scrollerClassName="max-h-96">
+        <ul className="m-0 flex list-none flex-col gap-2 p-1">
+          {items.map((item, index) => (
+            // Rows have no state of their own, so the position is a stable enough key.
+            <li key={index} className="flex items-center gap-2">
+              <Input
+                ref={(element) => {
+                  inputs.current[index] = element;
+                }}
+                id={index === 0 ? id : undefined}
+                value={item}
+                readOnly={disabled}
+                autoComplete="off"
+                aria-label={t("list.itemAria", { label, number: index + 1 })}
+                aria-invalid={invalid || undefined}
+                onChange={(event) => {
+                  onChange(items.map((existing, position) => (position === index ? event.target.value : existing)));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !disabled) {
+                    event.preventDefault();
+                    insertAt(index + 1);
+                  }
+                }}
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                disabled={disabled}
+                aria-label={t("list.removeAria", { label, number: index + 1 })}
+                onClick={() => {
+                  askRemove(index);
+                }}
+              >
+                <X aria-hidden="true" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </ScrollRegion>
       <div>
         <Button
           ref={addButton}

@@ -5,7 +5,7 @@ import type { Harness } from "./harness";
 /** Opens a section by its address and waits until its form is on the page. */
 export async function openSection(page: Page, harness: Harness, id: string): Promise<void> {
   await page.goto(`${harness.url}/s/${id}`);
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(page.locator("form [data-field]").first()).toBeVisible();
 }
 
 /** The block of one field, found by the key the form marks it with. */
@@ -15,12 +15,15 @@ export function field(page: Page, key: string): Locator {
 
 export const saveButton = (page: Page): Locator => page.getByRole("button", { name: "Save", exact: true });
 
-/** The confirmation that follows a save. */
-export const savedNote = (page: Page): Locator => page.locator("p[role=status]").filter({ hasText: "Changes saved." });
+/** The confirmation that follows a save: the "Saved" notice (the save bar itself goes away). */
+export const savedNote = (page: Page): Locator =>
+  page.getByRole("region", { name: "Notifications" }).getByText("Changes saved.").last();
 
-/** Saves and waits for the confirmation next to the button. */
+/** Saves and waits for the confirmation. */
 export async function save(page: Page): Promise<void> {
   await saveButton(page).click();
+  // The bar goes away once the file is written; an earlier notice may still be on the screen.
+  await expect(saveButton(page)).toHaveCount(0);
   await expect(savedNote(page)).toBeVisible();
 }
 

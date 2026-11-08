@@ -3,6 +3,9 @@ import { useSyncExternalStore } from "react";
 /** Width from which the shell shows the section list and the detail side by side. */
 export const WIDE_QUERY = "(min-width: 600px)";
 
+/** Width from which the menu is expanded by default instead of a rail. */
+export const DESKTOP_QUERY = "(min-width: 1024px)";
+
 /** Follows a CSS media query; false where `matchMedia` does not exist. */
 export function useMediaQuery(query: string): boolean {
   return useSyncExternalStore(

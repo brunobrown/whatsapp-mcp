@@ -103,7 +103,7 @@ describe("unsaved changes", () => {
       expect(router.state.location.pathname).toBe("/s/b");
     });
     expect(await screen.findByLabelText("Name")).toHaveValue("b-value");
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("the browser's back is guarded too", async () => {
@@ -144,7 +144,7 @@ describe("unsaved changes", () => {
     await userEvent.type(screen.getByLabelText("Name"), "!");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     });
     await userEvent.click(within(nav()).getByRole("link", { name: /Section B/ }));
     await waitFor(() => {

@@ -12,19 +12,19 @@ from ui.config.registry import JsonFile, Section
 FIELDS = (
     Field("enabled", "Enabled", "bool", default=False,
           help="The channel is off unless this is on. It lets a notice wake an open Claude Code session.",
-          risk="A notice from WhatsApp can wake an agent session that nobody is watching.", risk_when=(True,)),
+          risk="A notice from WhatsApp can wake an agent session that nobody is watching.", risk_when=(True,), group="Notices"),
     Field("profiles", "Monitor profiles", "list", max_items=20,
-          help="Names of the monitor profiles whose messages are announced, one per line."),
-    Field("polls", "Polls", "list", max_items=20, help="Message ids of the polls whose votes are announced, one per line."),
+          help="Names of the monitor profiles whose messages are announced, one per line.", group="Notices"),
+    Field("polls", "Polls", "list", max_items=20, help="Message ids of the polls whose votes are announced, one per line.", group="Notices"),
     Field("include_excerpt", "Include an excerpt", "bool", default=False,
           help="Add a short piece of the message text to the notice. It is another person's words.",
-          risk="A piece of the text of messages reaches the agent inside the notice.", risk_when=(True,)),
-    Field("excerpt_chars", "Excerpt length", "int", default=120, bounds=(1, 280)),
+          risk="A piece of the text of messages reaches the agent inside the notice.", risk_when=(True,), group="Excerpt"),
+    Field("excerpt_chars", "Excerpt length", "int", default=120, bounds=(1, 280), group="Excerpt"),
     Field("batch_seconds", "Batch window in seconds", "float", default=3, bounds=(0, 60),
-          help="Messages that arrive within this time are announced together."),
-    Field("min_interval_seconds", "Minimum seconds between notices", "float", default=5, bounds=(0, 3600)),
-    Field("max_batch", "Largest batch", "int", default=20, bounds=(1, 100)),
-    Field("poll_interval_seconds", "Seconds between checks", "float", default=2, bounds=(0.05, 60)),
+          help="Messages that arrive within this time are announced together.", group="Timing"),
+    Field("min_interval_seconds", "Minimum seconds between notices", "float", default=5, bounds=(0, 3600), group="Timing"),
+    Field("max_batch", "Largest batch", "int", default=20, bounds=(1, 100), group="Timing"),
+    Field("poll_interval_seconds", "Seconds between checks", "float", default=2, bounds=(0.05, 60), group="Timing"),
 )
 _KEYS = {f.key for f in FIELDS}
 

@@ -1,14 +1,20 @@
 import { useParams } from "@tanstack/react-router";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { SyntheticEvent } from "react";
 import { Banner, ErrorState, Skeleton } from "@/components/feedback/feedback";
 import { useNotify } from "@/components/feedback/toaster";
 import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { Button } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { useT } from "@/i18n/t";
 import type { FieldSchema, SectionView } from "@/types/api";
+import { groupFields } from "./groupFields";
+import { SaveBar } from "./SaveBar";
+import { SectionHeaderActions } from "./SectionHeaderActions";
+import { InSlot } from "./slots";
 import { useLeaveGuard } from "./useLeaveGuard";
+import { useSaveShortcut } from "./useSaveShortcut";
 import { useSection } from "./useSection";
 
 /** The top-level field a dotted error key belongs to: `profiles.0.targets` belongs to `profiles`. */
@@ -33,7 +39,6 @@ function Notes({ view }: { view: SectionView }) {
   const t = useT();
   return (
     <div className="flex flex-col gap-3">
-      {view.description ? <p className="m-0 text-muted">{view.description}</p> : null}
       {view.restart ? <p className="m-0 text-sm text-muted">{t(`section.restartNote.${view.restart}`)}</p> : null}
       {view.status === "error" && view.banner ? (
         <Banner kind="error" title={t("section.problem.title")}>
@@ -67,14 +72,7 @@ export function SectionPage() {
 function SectionForm({ sectionId }: { sectionId: string }) {
   const t = useT();
   const section = useSection(sectionId);
-  const guard = useLeaveGuard(section.dirty);
-  const { view, draft, errors, general, dirty, query } = section;
-  const { requestPermission } = useNotify();
-  const form = useRef<HTMLFormElement>(null);
-  const [attempted, setAttempted] = useState(false);
-  const [askRestore, setAskRestore] = useState(false);
-  const [askReplace, setAskReplace] = useState(false);
-  const [skipped, setSkipped] = useState<string[]>([]);
+  const { view, query } = section;
 
   if (view === undefined && query.isError) {
     return (
@@ -88,6 +86,21 @@ function SectionForm({ sectionId }: { sectionId: string }) {
     );
   }
   if (view === undefined) return <Loading />;
+  return <LoadedForm section={section} view={view} />;
+}
+
+function LoadedForm({ section, view }: { section: ReturnType<typeof useSection>; view: SectionView }) {
+  const t = useT();
+  const guard = useLeaveGuard(section.dirty);
+  const { draft, errors, general, dirty } = section;
+  const { requestPermission } = useNotify();
+  const form = useRef<HTMLFormElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  const formId = useId();
+  const [attempted, setAttempted] = useState(false);
+  const [askRestore, setAskRestore] = useState(false);
+  const [askReplace, setAskReplace] = useState(false);
+  const [skipped, setSkipped] = useState<string[]>([]);
 
   const readOnly = view.read_only;
   const errorKeys = Object.keys(errors);
@@ -104,8 +117,13 @@ function SectionForm({ sectionId }: { sectionId: string }) {
     target?.focus();
   };
 
-  const submit = async (event: SyntheticEvent): Promise<void> => {
-    event.preventDefault();
+  // The bar goes away when the edits do; the focus must not fall to the page with it.
+  const keepFocus = (): void => {
+    const active = document.activeElement;
+    if (active instanceof Node && bar.current?.contains(active)) document.getElementById("content")?.focus({ preventScroll: true });
+  };
+
+  const save = async (): Promise<void> => {
     if (readOnly || !dirty || section.saving) return;
     void requestPermission();
     setAttempted(true);
@@ -113,12 +131,27 @@ function SectionForm({ sectionId }: { sectionId: string }) {
     const outcome = await section.save();
     if (outcome === undefined) return;
     if (outcome.needs_confirmation) setAskReplace(true);
-    else if (outcome.ok) setAttempted(false);
-    else {
+    else if (outcome.ok) {
+      setAttempted(false);
+      keepFocus();
+    } else {
       const first = view.fields.find((field) => Object.keys(outcome.errors).some((key) => ownerOf(key) === field.key));
       if (first !== undefined) focusField(first.key);
     }
   };
+
+  const submit = (event: SyntheticEvent): void => {
+    event.preventDefault();
+    void save();
+  };
+
+  useSaveShortcut({
+    inside: (target) => form.current?.contains(target) === true || bar.current?.contains(target) === true,
+    onSave: () => {
+      void save();
+    },
+    enabled: !readOnly,
+  });
 
   const labelOf = (field: FieldSchema): string => field.label;
 
@@ -169,57 +202,70 @@ function SectionForm({ sectionId }: { sectionId: string }) {
         </Banner>
       ) : null}
 
+      {skipped.length > 0 ? <Banner kind="info">{t("section.skipped", { names: skipped.join(", ") })}</Banner> : null}
+
       <form
         ref={form}
+        id={formId}
         noValidate
-        onSubmit={(event) => {
-          void submit(event);
-        }}
+        onSubmit={submit}
         className="flex flex-col"
       >
-        <div className="flex flex-col divide-y divide-line">
-          {view.fields.map((field) => (
-            <div key={field.key} className="py-4 first:pt-0">
-              <FieldRenderer
-                field={field}
-                value={draft[field.key]}
-                loaded={view.values[field.key]}
-                state={view.state[field.key]}
-                error={errors[field.key]}
-                errors={errors}
-                readOnly={readOnly}
-                onChange={(next) => {
-                  section.setField(field.key, next);
-                }}
-                onRestore={readOnly ? undefined : section.restoreField}
-              />
-            </div>
+        {/* Enter in a field submits the form even while the visible Save lives in the bar outside it. */}
+        <button type="submit" hidden tabIndex={-1} aria-hidden="true" />
+        <div className="flex flex-col gap-4">
+          {groupFields(view.fields).map((group) => (
+            <Card key={group.id}>
+              <CardHeader title={group.title} error={group.fields.some((field) => failing.includes(field))} />
+              <CardBody className="flex flex-col divide-y divide-line py-0">
+                {group.fields.map((field) => (
+                  <div key={field.key} className="py-4">
+                    <FieldRenderer
+                      field={field}
+                      value={draft[field.key]}
+                      loaded={view.values[field.key]}
+                      state={view.state[field.key]}
+                      error={errors[field.key]}
+                      errors={errors}
+                      readOnly={readOnly}
+                      labelHidden={group.solo}
+                      onChange={(next) => {
+                        section.setField(field.key, next);
+                      }}
+                      onRestore={readOnly ? undefined : section.restoreField}
+                    />
+                  </div>
+                ))}
+              </CardBody>
+            </Card>
           ))}
         </div>
 
-        {readOnly ? null : (
-          <div className="sticky bottom-0 -mx-4 mt-4 flex flex-wrap items-center gap-2 border-t border-line bg-surface px-4 py-3 sm:-mx-6 sm:px-6">
-            <Button type="submit" busy={section.saving} disabled={!dirty}>
-              {t("common.save")}
-            </Button>
-            <Button variant="secondary" disabled={!dirty || section.saving} onClick={section.discard}>
-              {t("section.discard")}
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setAskRestore(true);
-              }}
-            >
-              {t("section.restoreAll")}
-            </Button>
-            <p role="status" className="m-0 ml-auto text-sm text-muted">
-              {section.saved && !dirty ? t("section.saved") : ""}
-              {skipped.length > 0 ? t("section.skipped", { names: skipped.join(", ") }) : ""}
-            </p>
-          </div>
-        )}
       </form>
+
+      {readOnly ? null : (
+        <InSlot slot="actions">
+          <SectionHeaderActions
+            onRestoreDefaults={() => {
+              setAskRestore(true);
+            }}
+          />
+        </InSlot>
+      )}
+
+      {readOnly || !dirty ? null : (
+        <InSlot slot="bar">
+          <SaveBar
+            ref={bar}
+            formId={formId}
+            saving={section.saving}
+            onDiscard={() => {
+              section.discard();
+              keepFocus();
+            }}
+          />
+        </InSlot>
+      )}
 
       <ConfirmDialog
         open={guard.open}

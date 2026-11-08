@@ -1,13 +1,15 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AppProviders } from "../src/app/providers";
 import { createAppRouter } from "../src/app/router";
 import { queryClient } from "../src/lib/queryClient";
 import { resetNoticeMemory } from "../src/lib/notices";
 import { useUiStore } from "../src/stores/ui";
+import { mockOverflow } from "./helpers/overflow";
 import { mockViewport } from "./helpers/viewport";
 import { server } from "./msw/server";
 
@@ -26,6 +28,7 @@ const counters = {
 };
 
 let viewport: ReturnType<typeof mockViewport>;
+let overflow: ReturnType<typeof mockOverflow> | undefined;
 
 function openStatus() {
   const router = createAppRouter(createMemoryHistory({ initialEntries: ["/status"] }));
@@ -54,10 +57,13 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
+  Reflect.deleteProperty(navigator, "clipboard");
   act(() => {
     toast.dismiss();
   });
   viewport.restore();
+  overflow?.restore();
+  overflow = undefined;
 });
 
 describe("status page", () => {
@@ -126,6 +132,7 @@ describe("status page", () => {
   });
 
   it("shows counts formatted, and the tables scroll inside a focusable region", async () => {
+    overflow = mockOverflow();
     serve({ status: { connected: true } });
     openStatus();
     const received = (await screen.findByText("Messages received")).parentElement as HTMLElement;
@@ -140,5 +147,112 @@ describe("status page", () => {
     openStatus();
     await screen.findByText("Connected");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
+
+  it("UXP-17 Status cards: Bridge connection, Webhooks and Counters, in two columns from 1100 px", async () => {
+    serve({ status: { connected: true, webhooks: { enabled: true, endpoints: [{ name: "crm" }] } } });
+    openStatus();
+    await screen.findByText("Connected");
+    const connection = screen.getByRole("region", { name: "Bridge connection" });
+    const hooks = screen.getByRole("region", { name: "Webhooks" });
+    const count = screen.getByRole("region", { name: "Counters" });
+    expect(within(hooks).getByText("On")).toBeInTheDocument();
+    expect(within(hooks).getByRole("cell", { name: "crm" })).toBeInTheDocument();
+    expect(within(connection).queryByText("On")).not.toBeInTheDocument();
+    expect(within(count).getByText("Messages received")).toBeInTheDocument();
+    const grid = connection.parentElement as HTMLElement;
+    expect(grid).toContainElement(hooks);
+    expect(grid).toContainElement(count);
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("min-[1100px]:grid-cols-2");
+  });
+
+  it("UXP-37 counters in two columns under 600", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    const received = (await screen.findByText("Messages received")).parentElement as HTMLElement;
+    const grid = received.parentElement as HTMLElement;
+    expect(grid.tagName).toBe("DL");
+    expect(grid.className).toMatch(/(^|\s)grid-cols-2(\s|$)/);
+    expect(grid.className).not.toMatch(/(^|\s)(sm:)?grid-cols-1(\s|$)/);
+  });
+
+  it("UXP-26 shows how long ago the status was read, and a Refresh button", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    expect(await screen.findByText(/^Updated \d+ s ago$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
+  it("UXP-27 Refresh fetches the status and the counters again at once and reads Updated 0 s ago", async () => {
+    let reads = 0;
+    serve({ status: { connected: true } });
+    server.use(
+      http.get("*/api/ops/status", () => {
+        reads += 1;
+        return HttpResponse.json({ status: { connected: true } });
+      }),
+    );
+    openStatus();
+    await screen.findByText("Connected");
+    const before = reads;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(reads).toBeGreaterThan(before);
+    });
+    expect(await screen.findByText("Updated 0 s ago")).toBeInTheDocument();
+  });
+
+  it("UXP-28 a failed fetch shows Could not update and keeps the previous status", async () => {
+    queryClient.setDefaultOptions({ queries: { retry: false } });
+    let fail = false;
+    serve({ status: { connected: true } });
+    server.use(
+      http.get("*/api/ops/status", () =>
+        fail ? HttpResponse.json({ code: "x", message: "Down." }, { status: 500 }) : HttpResponse.json({ status: { connected: true, version: "9.9.9" } }),
+      ),
+    );
+    openStatus();
+    await screen.findByText("9.9.9");
+    fail = true;
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Could not update")).toBeInTheDocument();
+    expect(screen.getByText("9.9.9")).toBeInTheDocument();
+    expect(screen.getByText(/^Updated \d+ s ago$/)).toBeInTheDocument();
+  });
+
+  it("UXP-30 every time is relative text with the exact UTC time in title and datetime", async () => {
+    serve({ status: { connected: true, started_at: "2026-01-02T03:04:05Z" } });
+    openStatus();
+    const started = (await screen.findByText("Started")).parentElement as HTMLElement;
+    const moment = started.querySelector("time") as HTMLElement;
+    expect(moment.textContent).toMatch(/ ago$/);
+    expect(moment).toHaveAttribute("datetime", "2026-01-02T03:04:05.000Z");
+    expect(moment).toHaveAttribute("title", "2026-01-02 03:04:05 UTC");
+    const window = (await screen.findByText(/^Counted since/)).querySelector("time") as HTMLElement;
+    expect(window).toHaveAttribute("datetime", "2026-01-02T03:04:05.000Z");
+  });
+
+  it("UXP-31 copy shows Copied: the phone and the bridge version are copied, each time", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    serve({ status: { connected: true, phone: "15550100001", version: "1.2.3" } });
+    openStatus();
+    await userEvent.click(await screen.findByRole("button", { name: "Copy phone" }));
+    expect(writeText).toHaveBeenLastCalledWith("15550100001");
+    expect(await screen.findAllByText("Copied")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Copy bridge version" }));
+    expect(writeText).toHaveBeenLastCalledWith("1.2.3");
+    await waitFor(() => {
+      expect(screen.getAllByText("Copied").length).toBeGreaterThan(1);
+    });
+  });
+
+  it("UXP-31 offers no copy button for a value the bridge did not give", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    await screen.findByText("Connected");
+    expect(screen.queryByRole("button", { name: "Copy phone" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy bridge version" })).not.toBeInTheDocument();
   });
 });

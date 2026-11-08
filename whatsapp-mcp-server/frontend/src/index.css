@@ -34,6 +34,16 @@
   --warning-soft: light-dark(#fff4d6, #3a3320);
 
   --focus: var(--accent-ink);
+
+  /* Safe areas (notch, home indicator): the shell edges keep 1 rem of air and never sit under them. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --edge-top: max(1rem, var(--safe-top));
+  --edge-right: max(1rem, var(--safe-right));
+  --edge-bottom: max(1rem, var(--safe-bottom));
+  --edge-left: max(1rem, var(--safe-left));
 }
 
 :root[data-theme="light"] {
@@ -88,7 +98,6 @@
     color: var(--ink);
   }
 
-  /* 16 px keeps iOS from zooming into a focused field. */
   input,
   select,
   textarea {
@@ -107,13 +116,149 @@
   }
 }
 
+/*
+ * Phones: 16 px fields keep the browser from zooming into a focused field, and every control has a
+ * hit area of at least 44 by 44 px.
+ */
+@media (max-width: 599.98px) {
+  /* 2.75rem is 41.25 px at the 15 px root: under 600 px the floor is 44 px whatever the root size. */
+  :root {
+    --min-target: max(2.75rem, 44px);
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  button,
+  a[href],
+  summary,
+  select,
+  input[type="checkbox"],
+  input[type="radio"],
+  [role="button"],
+  [role="switch"],
+  [role="radio"],
+  [role="checkbox"],
+  [role="menuitem"],
+  [role="tab"] {
+    min-height: var(--min-target);
+    min-width: var(--min-target);
+  }
+}
+
+/*
+ * Data tables (features/ops/DataTable): the header row sticks to the top of the table's own scroll box; under 600 px the
+ * first column sticks to its left edge, so a wide table keeps its row names in view while it scrolls sideways.
+ */
+[data-table] thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--surface);
+}
+
+@media (max-width: 599.98px) {
+  [data-table] th:first-child,
+  [data-table] td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    background-color: var(--panel);
+    box-shadow: 1px 0 0 var(--line);
+  }
+
+  [data-table] thead th:first-child {
+    z-index: 3;
+    background-color: var(--surface);
+  }
+}
+
+/*
+ * The save bar on a phone: fixed to the bottom of the screen, above the on-screen keyboard (--keyboard-offset, set by
+ * the bar from visualViewport) and the home indicator, buttons side by side and 44 px tall. The spacer keeps the end of
+ * the content clear of it.
+ */
+[data-save-bar-spacer] {
+  display: none;
+}
+
+@media (max-width: 599.98px) {
+  [data-save-bar] {
+    position: fixed;
+    right: 0;
+    bottom: var(--keyboard-offset, 0px);
+    left: 0;
+    z-index: 40;
+    flex-wrap: wrap;
+    padding-top: 0.75rem;
+    padding-right: var(--edge-right);
+    padding-bottom: max(0.75rem, var(--safe-bottom));
+    padding-left: var(--edge-left);
+  }
+
+  [data-save-bar] > p {
+    flex-basis: 100%;
+  }
+
+  [data-save-bar] > button {
+    flex: 1 1 0;
+    /* --min-target is 2.75rem, which is 41 px at the 15 px root: the bar states the 44 px itself. */
+    min-height: max(var(--min-target), 44px);
+  }
+
+  [data-save-bar-spacer] {
+    display: block;
+    height: calc(5.5rem + max(0.75rem, var(--safe-bottom)));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 1ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* The menu drawer slides in from the left; the reduced-motion rule above shortens it to 1 ms. */
+@keyframes sheet-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes sheet-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes sheet-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }

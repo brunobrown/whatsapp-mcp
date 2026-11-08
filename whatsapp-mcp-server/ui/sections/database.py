@@ -13,13 +13,13 @@ from ui.config.registry import ReadOnly, Section
 
 FIELDS = (
     Field("encryption", "Encryption setting", "text", readonly=True,
-          help="WHATSAPP_DB_ENCRYPTION as the bridge sees it: on encrypts the databases, off keeps them in plain SQLite."),
-    Field("key_present", "Key found", "bool", readonly=True, help="Whether a usable master key can be read."),
-    Field("key_source", "Key source", "text", readonly=True),
-    Field("key_location", "Key location", "text", readonly=True, help="The variable or file the key is read from."),
-    Field("key_problem", "Key problem", "text", readonly=True, help="Why the key cannot be used, when it cannot."),
-    Field("messages_db", "Messages database", "text", readonly=True, help="encrypted, plain or missing."),
-    Field("whatsapp_db", "Session database", "text", readonly=True, help="encrypted, plain or missing."),
+          help="WHATSAPP_DB_ENCRYPTION as the bridge sees it: on encrypts the databases, off keeps them in plain SQLite.", group="Encryption"),
+    Field("key_present", "Key found", "bool", readonly=True, help="Whether a usable master key can be read.", group="Master key"),
+    Field("key_source", "Key source", "text", readonly=True, group="Master key"),
+    Field("key_location", "Key location", "text", readonly=True, help="The variable or file the key is read from.", group="Master key"),
+    Field("key_problem", "Key problem", "text", readonly=True, help="Why the key cannot be used, when it cannot.", group="Master key"),
+    Field("messages_db", "Messages database", "text", readonly=True, help="encrypted, plain or missing.", group="Databases"),
+    Field("whatsapp_db", "Session database", "text", readonly=True, help="encrypted, plain or missing.", group="Databases"),
 )
 
 

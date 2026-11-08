@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { blankRecord, changeFor, editorFromValue } from "../src/components/forms/editor";
 import { FieldRenderer } from "../src/components/forms/FieldRenderer";
 import type { FieldSchema } from "../src/types/api";
@@ -155,5 +155,27 @@ describe("editor conversions", () => {
       { name: "delta", enabled: false, mode: "draft", targets: [], token: { clear: true }, limit: null },
       { name: "eps", enabled: false, mode: "draft", targets: [], limit: "abc" },
     ]);
+  });
+
+  describe("scrolling", () => {
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+    });
+
+    it("UXP-11 items scroll while the title and add button stay", () => {
+      Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 900 });
+      Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 384 });
+      render(<Harness />);
+      const region = screen.getByRole("region", { name: "Profiles, items" });
+      expect(region).toHaveAttribute("tabindex", "0");
+      expect(region).toHaveClass("max-h-96");
+      expect(within(region).getByRole("heading", { level: 3, name: "alpha" })).toBeInTheDocument();
+      expect(within(region).getByRole("heading", { level: 3, name: "beta" })).toBeInTheDocument();
+      // The label (title) and the add button are outside the scrolling box.
+      const add = screen.getByRole("button", { name: "Add record to Profiles" });
+      expect(region.contains(add)).toBe(false);
+      expect(region.contains(screen.getByText("Profiles", { selector: "p" }))).toBe(false);
+    });
   });
 });

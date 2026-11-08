@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, FIXTURE_DIR, harnessForFile, SERVER_DIR, test, withHarness } from "./support/fixtures";
-import { confirm, field, json, openSection, save, saveButton, unloadIsGuarded } from "./support/sections";
+import { confirm, field, json, openSection, save, saveButton, savedNote, unloadIsGuarded } from "./support/sections";
 
 // Parity with 0.6.0 for CFG-01..CFG-12 of the interface-grafica spec. One test per requirement, titled with its ID.
 // The files of tests/fixtures/ui were written by the 0.6.0 code, so a file the SPA writes is compared with them.
@@ -84,7 +84,7 @@ test("CFG-02 the webhooks file is judged by the bridge: its refusal shows, and a
     expect(readFileSync(fresh.file("webhooks.json"), "utf8")).toBe(before);
     fresh.bridge.mode = "connected";
     await saveButton(page).click();
-    await expect(page.locator("p[role=status]").filter({ hasText: "Changes saved." })).toBeVisible();
+    await expect(savedNote(page)).toBeVisible();
     expect(json(fresh, "webhooks.json")).toEqual({ ...(fixture("webhooks.json") as object), enabled: false });
   });
 });
@@ -152,7 +152,8 @@ test("CFG-04 a value set by an environment variable is locked and names the vari
     await host.getByRole("textbox").click();
     await page.keyboard.type("0.0.0.0");
     await expect(host.getByRole("textbox")).toHaveValue("127.0.0.1");
-    await expect(saveButton(page)).toBeDisabled();
+    // Nothing is unsaved, so the save bar is not on the page.
+    await expect(saveButton(page)).toHaveCount(0);
     // A value that only the file holds is not locked.
     await openSection(page, fresh, "media");
     await expect(field(page, "auto_download_max_mb").getByRole("textbox")).toBeEditable();
@@ -186,7 +187,8 @@ test("CFG-05 a file changed on disk after it was loaded is not overwritten and o
     await page.getByRole("button", { name: "Reload and discard my changes" }).click();
     await expect(page.getByRole("textbox", { name: "Deny, item 1" })).toHaveValue("Theirs");
     await expect(page.getByRole("radio", { name: "denylist" })).toBeChecked();
-    await expect(saveButton(page)).toBeDisabled();
+    // Nothing is unsaved, so the save bar is not on the page.
+    await expect(saveButton(page)).toHaveCount(0);
     expect(readFileSync(fresh.file("send_policy.json"), "utf8")).toBe(onDisk);
   });
 });
@@ -234,7 +236,8 @@ test("CFG-07 restoring a default asks first and removes the saved value only whe
     await expect(page.getByRole("alertdialog")).toContainText("Restore the default?");
     await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("radio", { name: "allowlist" })).toBeChecked();
-    await expect(saveButton(page)).toBeDisabled();
+    // Nothing is unsaved, so the save bar is not on the page.
+    await expect(saveButton(page)).toHaveCount(0);
     // Confirming returns the field to its default, and the file is untouched until Save.
     await page.getByRole("button", { name: "Restore the default of Mode" }).click();
     await confirm(page, "Restore default");
@@ -244,7 +247,8 @@ test("CFG-07 restoring a default asks first and removes the saved value only whe
     const rest = Object.fromEntries(Object.entries(reference).filter(([key]) => key !== "mode"));
     expect(json(fresh, "send_policy.json")).toEqual(rest);
     // The whole section: the same, for every saved value.
-    await page.getByRole("button", { name: "Restore defaults" }).click();
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Restore defaults" }).click();
     await expect(page.getByRole("alertdialog")).toContainText("Restore the defaults of this section?");
     await confirm(page, "Restore defaults");
     expect(json(fresh, "send_policy.json")).toEqual(rest);
@@ -297,7 +301,7 @@ test("CFG-09 an existing file that is invalid shows the project's error, is not 
     expect(fresh.read("send_policy.json")).toBe(broken);
     await saveButton(page).click();
     await confirm(page, "Replace file");
-    await expect(page.locator("p[role=status]").filter({ hasText: "Changes saved." })).toBeVisible();
+    await expect(savedNote(page)).toBeVisible();
     expect(json(fresh, "send_policy.json")).toEqual({ mode: "allowlist" });
     // A file that parses but breaks a rule of the project is reported the same way.
     const invalid = `${JSON.stringify({ mode: "sometimes", allow: ["a"] }, null, 2)}\n`;
