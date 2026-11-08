@@ -243,6 +243,7 @@ export const en = {
   "form.saveFailed": "The changes could not be saved",
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
+  "card.needsAttention": "needs attention",
 } as const;
 
 export type Catalog = typeof en;
