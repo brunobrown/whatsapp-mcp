@@ -14,9 +14,6 @@ OLD_TOOLKIT = re.compile("fl" + "et", re.I)
 # not tracked, so today the scan finds nothing there; the prefix is allowed so that tracking .specs/ later does not
 # turn history into a failure.
 DECISIONS_PREFIXES = (".specs/",)
-# This file is the other exception: the guards are named after the word (the names are fixed by the checks), so the
-# path itself is allowed, and only this exact path.
-THIS_FILE = "whatsapp-mcp-server/tests/test_ui_repo.py"
 
 
 def tracked(*paths, others=False):
@@ -25,10 +22,10 @@ def tracked(*paths, others=False):
     return [p for p in out.split("\0") if p and (ROOT / p).is_file()]
 
 
-def test_repo_has_no_flet_outside_decisions():  # MIG-08
+def test_repo_has_no_old_toolkit_outside_decisions():  # MIG-08
     hits = []
     for path in tracked(others=True):
-        if path.startswith(DECISIONS_PREFIXES) or path == THIS_FILE:
+        if path.startswith(DECISIONS_PREFIXES):
             continue
         data = (ROOT / path).read_bytes()
         if b"\0" in data:
@@ -38,7 +35,7 @@ def test_repo_has_no_flet_outside_decisions():  # MIG-08
     assert hits == [], f"the old toolkit is named in: {hits}"
 
 
-def test_lock_and_pyproject_list_no_flet():  # MIG-09
+def test_lock_and_pyproject_list_no_old_toolkit():  # MIG-09
     lock = (SERVER / "uv.lock").read_text(encoding="utf-8")
     assert not OLD_TOOLKIT.search(lock), "uv.lock lists the old toolkit or a package of it"
     project = tomllib.loads((SERVER / "pyproject.toml").read_text(encoding="utf-8"))
