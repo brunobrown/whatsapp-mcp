@@ -65,7 +65,7 @@ export const en = {
   "menu.open": "Open menu",
   "menu.close": "Close menu",
   "menu.drawer": "Sections menu",
-  "menu.restartDot": "{title}, restart needed",
+  "menu.entryPending": "{title}: Restart needed",
   "auth.loading": "Checking your session",
   "auth.login.title": "Sign in",
   "auth.login.intro": "Enter the interface password to manage your settings.",

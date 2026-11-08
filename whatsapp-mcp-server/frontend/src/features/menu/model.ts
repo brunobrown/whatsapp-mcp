@@ -1,7 +1,8 @@
 import type { MessageKey } from "@/i18n/en";
 import type { SectionSummary } from "@/types/api";
 
-export type MenuGroupId = "overview" | "messaging" | "safety" | "preferences" | "more";
+export type MenuGroupId =
+  "overview" | "messaging" | "safety" | "preferences" | "more";
 
 export interface MenuGroup {
   id: MenuGroupId;
@@ -10,13 +11,14 @@ export interface MenuGroup {
   entries: SectionSummary[];
 }
 
-const GROUPS: readonly { id: MenuGroupId; titleKey: MenuGroup["titleKey"] }[] = [
-  { id: "overview", titleKey: "menu.group.overview" },
-  { id: "messaging", titleKey: "menu.group.messaging" },
-  { id: "safety", titleKey: "menu.group.safety" },
-  { id: "preferences", titleKey: "menu.group.preferences" },
-  { id: "more", titleKey: "menu.group.more" },
-];
+const GROUPS: readonly { id: MenuGroupId; titleKey: MenuGroup["titleKey"] }[] =
+  [
+    { id: "overview", titleKey: "menu.group.overview" },
+    { id: "messaging", titleKey: "menu.group.messaging" },
+    { id: "safety", titleKey: "menu.group.safety" },
+    { id: "preferences", titleKey: "menu.group.preferences" },
+    { id: "more", titleKey: "menu.group.more" },
+  ];
 
 /** The group of each known section; any other id lands in More. */
 const GROUP_OF: Readonly<Record<string, MenuGroupId>> = {
@@ -42,13 +44,25 @@ export const FILTER_FROM = 9;
 export function menuGroups(entries: readonly SectionSummary[]): MenuGroup[] {
   return GROUPS.map((group) => ({
     ...group,
-    entries: entries.filter((entry) => (GROUP_OF[entry.id] ?? "more") === group.id),
+    entries: entries.filter(
+      (entry) => (GROUP_OF[entry.id] ?? "more") === group.id,
+    ),
   })).filter((group) => group.entries.length > 0);
 }
 
 /** The entries whose title or description contains the text, ignoring case; a blank text keeps everything. */
-export function filterEntries(entries: readonly SectionSummary[], text: string): SectionSummary[] {
+export function filterEntries(
+  entries: readonly SectionSummary[],
+  text: string,
+): SectionSummary[] {
   const needle = text.trim().toLowerCase();
   if (needle === "") return [...entries];
-  return entries.filter((entry) => `${entry.title}\n${entry.description}`.toLowerCase().includes(needle));
+  return entries.filter((entry) =>
+    `${entry.title}\n${entry.description}`.toLowerCase().includes(needle),
+  );
+}
+
+/** The path of an entry: a section lives under /s, a page at its own id. */
+export function pathOf(entry: SectionSummary): string {
+  return entry.kind === "section" ? `/s/${entry.id}` : `/${entry.id}`;
 }
