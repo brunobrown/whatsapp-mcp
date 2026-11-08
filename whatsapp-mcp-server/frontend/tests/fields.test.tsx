@@ -182,6 +182,11 @@ describe("label in name (WCAG 2.5.3)", () => {
 });
 
 describe("help, origin and errors", () => {
+  it("UXP-43 a long unbroken word in the help or the lock note wraps instead of widening the page (a variable name on a 180 px screen)", () => {
+    render(<Harness schema={field({ help: "WHATSAPP_SESSION_TAINT_AND_OTHER_LONG_VARIABLE_NAME wins." })} initial="x" />);
+    expect(document.querySelector("[data-field]")).toHaveClass("[overflow-wrap:anywhere]");
+  });
+
   it("links the help text to the control", () => {
     render(<Harness schema={field({ help: "Where files go." })} initial="" />);
     expect(screen.getByLabelText("Field label")).toHaveAccessibleDescription("Where files go.");

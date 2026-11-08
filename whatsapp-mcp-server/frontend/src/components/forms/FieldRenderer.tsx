@@ -268,7 +268,7 @@ export function FieldRenderer({ field, value, loaded, state, error, errors, idPr
   const inline = field.kind === "bool";
 
   return (
-    <div className="flex flex-col gap-1.5" data-field={field.key}>
+    <div className="flex flex-col gap-1.5 [overflow-wrap:anywhere]" data-field={field.key}>
       {labelled && !inline ? (
         <label htmlFor={base} className="font-medium">
           {field.label}
