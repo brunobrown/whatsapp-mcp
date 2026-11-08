@@ -223,6 +223,7 @@ export const en = {
   "activity.send.empty": "No sends are logged yet.",
   "activity.monitor": "Monitor audit",
   "activity.monitor.empty": "No monitor replies are logged yet.",
+  "activity.table": "{title} table",
   "activity.readOnly": "This page only shows what happened. Drafts are approved or discarded outside the interface.",
   "activity.loadError": "This list could not be loaded.",
   "activity.loading": "Loading the list",

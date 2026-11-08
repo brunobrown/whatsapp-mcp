@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { EmptyState, ErrorState, Skeleton } from "@/components/feedback/feedback";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { useT } from "@/i18n/t";
 import { formatCount, formatMoment } from "@/lib/format";
 import { useOpsAudit, useOpsDrafts } from "@/services/services";
@@ -19,7 +20,6 @@ interface ListQuery<Row> {
  * re-sorts, and there is no control that acts on a row.
  */
 function Listing<Row>({
-  id,
   title,
   empty,
   emptyHelp,
@@ -27,7 +27,6 @@ function Listing<Row>({
   columns,
   row,
 }: {
-  id: string;
   title: string;
   empty: string;
   emptyHelp?: string;
@@ -58,7 +57,7 @@ function Listing<Row>({
     body = <EmptyState title={empty} {...(emptyHelp !== undefined && { description: emptyHelp })} />;
   } else {
     body = (
-      <DataTable label={title} columns={columns}>
+      <DataTable label={t("activity.table", { title })} columns={columns}>
         {query.data.rows.map((item, index) => (
           <tr key={index}>{row(item)}</tr>
         ))}
@@ -66,12 +65,10 @@ function Listing<Row>({
     );
   }
   return (
-    <section className="flex flex-col gap-3">
-      <h2 id={id} className="m-0 text-base font-semibold">
-        {title}
-      </h2>
-      {body}
-    </section>
+    <Card>
+      <CardHeader title={title} />
+      <CardBody>{body}</CardBody>
+    </Card>
   );
 }
 
@@ -90,7 +87,6 @@ function Drafts() {
   const missing = t("format.missing");
   return (
     <Listing<DraftRow>
-      id="activity-drafts"
       title={t("activity.drafts")}
       empty={t("activity.drafts.empty")}
       emptyHelp={t("activity.drafts.emptyHelp")}
@@ -124,7 +120,6 @@ function SendAudit() {
   const missing = t("format.missing");
   return (
     <Listing<AuditRow>
-      id="activity-send"
       title={t("activity.send")}
       empty={t("activity.send.empty")}
       query={query}
@@ -161,7 +156,6 @@ function MonitorAudit() {
   const missing = t("format.missing");
   return (
     <Listing<AuditRow>
-      id="activity-monitor"
       title={t("activity.monitor")}
       empty={t("activity.monitor.empty")}
       query={query}
@@ -201,7 +195,7 @@ function MonitorAudit() {
 export function ActivityPage() {
   const t = useT();
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex max-w-6xl flex-col gap-4">
       <p className="m-0 text-muted">{t("activity.readOnly")}</p>
       <Drafts />
       <SendAudit />
