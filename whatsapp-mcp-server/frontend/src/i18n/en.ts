@@ -44,7 +44,6 @@ export const en = {
   "shell.panel": "Settings menu",
   "shell.nav": "Sections",
   "shell.skip": "Skip to the content",
-  "shell.back": "Back to the sections",
   "shell.theme": "Theme: {name}. Change it.",
   "shell.theme.system": "System",
   "shell.theme.light": "Light",

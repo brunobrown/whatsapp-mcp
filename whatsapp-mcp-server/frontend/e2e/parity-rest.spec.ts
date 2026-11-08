@@ -309,15 +309,17 @@ test("UX-01 the layout adapts to 360, 768 and 1280 px with the menu beside the p
           await expect(nav).toBeVisible();
           await expect(page.getByRole("main")).toBeVisible();
         } else {
-          // One pane at a time: the list first, the page after a choice, and a way back.
+          // One pane: the section fills the screen; the menu is the drawer behind "Open menu".
+          await expect(nav).toHaveCount(0);
+          await expect(page.getByRole("main")).toBeVisible();
+          await page.getByRole("button", { name: "Open menu" }).click();
           await expect(nav).toBeVisible();
-          await expect(page.getByRole("main")).toHaveCount(0);
           await nav.getByRole("link").first().click();
           await expect(page.getByRole("main")).toBeVisible();
           await expect(nav).toHaveCount(0);
-          await expect(page.getByRole("button", { name: "Back to the sections" })).toBeVisible();
+          await expect(page.getByRole("button", { name: "Open menu" })).toBeVisible();
           await page.goto(`${fresh.url}${path}`);
-          await expect(nav).toBeVisible();
+          await page.getByRole("button", { name: "Open menu" }).click();
           await page.getByRole("navigation", { name: "Sections" }).locator(`a[href="${path}"]`).click();
           await expect(page.getByRole("main")).toBeVisible();
         }

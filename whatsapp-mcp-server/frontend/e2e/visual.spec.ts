@@ -38,6 +38,9 @@ test("MIG-16 from 600 px the sections are a chat-style list on the left and the 
     const nav = page.getByRole("navigation", { name: "Sections" });
     const main = page.getByRole("main");
     await expect(main).toBeVisible();
+    // Below 1024 px the menu starts as a rail (and the choice is remembered); this test reads the full rows, so it expands it.
+    const expand = page.getByRole("button", { name: "Expand menu" });
+    if ((await expand.count()) > 0) await expand.click();
     const left = await page.getByRole("complementary", { name: "Settings menu" }).boundingBox();
     const right = await main.boundingBox();
     const header = await page.getByRole("banner").boundingBox();
@@ -45,8 +48,9 @@ test("MIG-16 from 600 px the sections are a chat-style list on the left and the 
     if (left === null || right === null || header === null) return;
     // Side by side, the list narrower than the page, the page's header on top of it.
     expect(left.x + left.width, `${String(width)}: list is left of the page`).toBeLessThanOrEqual(right.x + 1);
-    expect(left.width).toBeLessThan(right.width + 1);
-    expect(left.width).toBeLessThanOrEqual(420);
+    // The expanded menu is 320 px (it was 30% of the width); at 600 px that leaves the page the narrower side.
+    expect(left.width).toBe(320);
+    if (width > 600) expect(left.width).toBeLessThan(right.width + 1);
     expect(header.y + header.height).toBeLessThanOrEqual(right.y + 1);
     expect(header.x).toBeGreaterThanOrEqual(left.x + left.width - 1);
     await expect(page.getByRole("banner").getByRole("heading", { level: 1, name: "Monitor profiles" })).toBeVisible();
@@ -199,12 +203,15 @@ test("MIG-18 axe finds no serious violation and no contrast failure in either th
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
     found.push(...(await scanBoth(page, path)));
   }
-  // The narrow layout, one pane.
+  // The narrow layout: the section, then the menu as a drawer.
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto(`${harness.current.url}/s/send_policy`);
-  found.push(...(await scanBoth(page, "360 px list")));
-  await page.getByRole("navigation", { name: "Sections" }).locator('a[href="/s/send_policy"]').click();
   found.push(...(await scanBoth(page, "360 px page")));
+  await page.getByRole("button", { name: "Open menu" }).click();
+  await expect(page.getByRole("dialog", { name: "Sections menu" })).toBeVisible();
+  found.push(...(await scanBoth(page, "360 px drawer")));
+  await page.getByRole("navigation", { name: "Sections" }).locator('a[href="/s/send_policy"]').click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.setViewportSize({ width: 1280, height: 900 });
 
   // States that bring colors of their own: a refusal, a warning, a notification, a dialog, a forced theme.

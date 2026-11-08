@@ -162,40 +162,46 @@ describe("narrow screens (below 600 px)", () => {
     viewport = mockViewport(360);
   });
 
-  it("shows the list alone first, then the detail alone after a choice, and back returns to the list", async () => {
+  it("shows the open section alone under a header with the Open menu button; the menu is only in the drawer", async () => {
     open("/s/media");
-    const nav = await listed();
-    expect(screen.queryByRole("main")).toBeNull();
-
-    await userEvent.click(within(nav).getByRole("link", { name: /Send policy/ }));
-    expect(await screen.findByRole("main")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Media downloads" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toContainElement(screen.getByRole("button", { name: "Open menu" }));
     expect(screen.queryByRole("navigation", { name: "Sections" })).toBeNull();
-    expect(screen.getByRole("heading", { level: 1, name: "Send policy" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back to the sections" })).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: "Back to the sections" }));
-    expect(await screen.findByRole("navigation", { name: "Sections" })).toBeInTheDocument();
-    expect(screen.queryByRole("main")).toBeNull();
-  });
-
-  it("reaches back by keyboard", async () => {
-    open("/s/media");
+    await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
     const nav = await listed();
-    await userEvent.click(within(nav).getByRole("link", { name: /Account/ }));
-    const back = await screen.findByRole("button", { name: "Back to the sections" });
-    back.focus();
-    await userEvent.keyboard("{Enter}");
-    expect(await screen.findByRole("navigation", { name: "Sections" })).toBeInTheDocument();
+    await userEvent.click(within(nav).getByRole("link", { name: /Send policy/ }));
+    expect(await screen.findByRole("heading", { level: 1, name: "Send policy" })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Sections" })).toBeNull();
   });
 
-  it("switches to two panes when the window grows past 600 px", async () => {
+  it("reaches the menu and an entry by keyboard", async () => {
+    const router = open("/s/media");
+    await screen.findByRole("heading", { level: 1, name: "Media downloads" });
+    screen.getByRole("button", { name: "Open menu" }).focus();
+    await userEvent.keyboard("{Enter}");
+    const nav = await listed();
+    within(nav).getByRole("link", { name: /Account/ }).focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/account");
+    });
+  });
+
+  it("switches to the menu beside the section when the window grows past 600 px, keeping the open section", async () => {
     open("/s/media");
-    await listed();
-    expect(screen.queryByRole("main")).toBeNull();
+    await screen.findByRole("heading", { level: 1, name: "Media downloads" });
+    expect(screen.queryByRole("navigation", { name: "Sections" })).toBeNull();
     act(() => {
       viewport.setWidth(768);
     });
-    expect(await screen.findByRole("main")).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "Sections" })).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Sections" })).toBeInTheDocument();
+    expect(screen.getByRole("main")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Media downloads" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
   });
 });
 
@@ -282,7 +288,7 @@ describe("states and header actions", () => {
 });
 
 describe("menu collapse", () => {
-  const rail = () => screen.getByTestId("shell").querySelector("[data-menu]");
+  const rail = () => screen.getByTestId("shell");
 
   it("UXP-01 collapse and expand with the right names and aria-expanded", async () => {
     viewport = mockViewport(1280);
@@ -358,12 +364,14 @@ describe("menu collapse", () => {
       viewport = mockViewport(width);
       useUiStore.setState({ menu: "collapsed" });
       open("/s/media");
-      await listed();
+      await screen.findByRole("heading", { level: 1, name: "Media downloads" });
       expect(screen.queryByRole("button", { name: "Collapse menu" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Expand menu" })).toBeNull();
-      // Not a rail either: the entries carry their titles as text.
+      // No rail either: the menu is the drawer, and its entries carry their titles as text.
       expect(rail()).toHaveAttribute("data-menu", "drawer");
-      expect(within(screen.getByRole("navigation", { name: "Sections" })).getByText("Who may send")).toBeInTheDocument();
+      expect(screen.queryByRole("navigation", { name: "Sections" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Open menu" }));
+      expect(within(await listed()).getByText("Who may send")).toBeInTheDocument();
       viewport.restore();
     }
   });

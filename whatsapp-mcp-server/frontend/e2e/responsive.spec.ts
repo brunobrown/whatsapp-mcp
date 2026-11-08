@@ -7,7 +7,7 @@ const harness = harnessForFile({ seed: ["send_policy.json", "monitor_profiles.js
 
 const PAGES = ["/status", "/activity", "/account", "/s/send_policy", "/s/monitor", "/s/webhooks", "/s/channel", "/s/agent_safety", "/s/database", "/s/media", "/s/privacy", "/s/timezone", "/s/interface"];
 
-test("MIG-06 from 360 to 1280 px nothing scrolls sideways, and below 600 px one pane shows at a time with a way back", async ({ page }) => {
+test("MIG-06 from 360 to 1280 px nothing scrolls sideways, and below 600 px the section fills the screen and the menu is a drawer", async ({ page }) => {
   const { url } = harness.current;
   harness.current.seedActivity({
     drafts: [{ id: "d_a_rather_long_identifier_for_a_draft", profile: "a-long-profile-name", chat_jid: "120363000000000001@g.us", sender: "15550100001", created_at: "2026-01-02T01:00:00+00:00", expires_at: "2099-01-01T00:00:00+00:00" }],
@@ -31,19 +31,16 @@ test("MIG-06 from 360 to 1280 px nothing scrolls sideways, and below 600 px one 
         const mainBox = await main.boundingBox();
         expect(listBox !== null && mainBox !== null && listBox.x + listBox.width <= mainBox.x + 1, `${path} at ${String(width)}`).toBe(true);
       } else {
-        // One pane: the list comes first; choosing an entry shows the page alone, and Back returns to the list.
+        // One pane: the section fills the screen; the menu is the drawer behind "Open menu".
+        await expect(nav).toHaveCount(0);
+        await expect(main).toBeVisible();
+        await page.getByRole("button", { name: "Open menu" }).click();
         await expect(nav).toBeVisible();
-        await expect(main).toHaveCount(0);
         await nav.locator(`a[href="${path}"]`).click();
         await expect(main).toBeVisible();
         await expect(nav).toHaveCount(0);
         await expect(page.getByRole("banner").getByRole("heading", { level: 1 })).toBeVisible();
-        await page.getByRole("button", { name: "Back to the sections" }).click();
-        await expect(nav).toBeVisible();
-        await expect(main).toHaveCount(0);
         await expect(page.getByRole("button", { name: "Back to the sections" })).toHaveCount(0);
-        await nav.locator(`a[href="${path}"]`).click();
-        await expect(main).toBeVisible();
       }
       const overflow = await page.evaluate(() => ({
         page: document.documentElement.scrollWidth - window.innerWidth,

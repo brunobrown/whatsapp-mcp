@@ -4,8 +4,6 @@ import type { StateStorage } from "zustand/middleware";
 import type { RestartScope } from "@/types/api";
 
 export type Theme = "system" | "light" | "dark";
-export type MobilePane = "list" | "detail";
-
 /** The operator's choice for the side menu; "auto" follows the width. */
 export type MenuPreference = "auto" | "expanded" | "collapsed";
 /** What the menu is at a given width: a drawer on phones, otherwise expanded or a rail. */
@@ -67,7 +65,6 @@ const safeStorage: StateStorage = {
 
 interface UiState {
   theme: Theme;
-  mobilePane: MobilePane;
   menu: MenuPreference;
   restart: RestartScope[];
   /** Sections whose saved value waits for a restart; the marker belongs to them, not to every section of the scope. */
@@ -77,7 +74,6 @@ interface UiState {
   setDraftDirty: (dirty: boolean) => void;
   notices: Notice[];
   setTheme: (theme: Theme) => void;
-  setMobilePane: (pane: MobilePane) => void;
   setMenu: (menu: MenuPreference) => void;
   addRestart: (scopes: readonly RestartScope[], sectionId?: string) => void;
   /** Forgets everything that belonged to the session that ended: restart markers and unsaved-edit state. */
@@ -101,7 +97,6 @@ export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
       theme: "system",
-      mobilePane: "list",
       menu: "auto",
       restart: [],
       restartSections: [],
@@ -112,9 +107,6 @@ export const useUiStore = create<UiState>()(
       notices: [],
       setTheme: (theme) => {
         set({ theme });
-      },
-      setMobilePane: (mobilePane) => {
-        set({ mobilePane });
       },
       setMenu: (menu) => {
         set({ menu });
