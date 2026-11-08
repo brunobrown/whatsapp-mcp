@@ -141,4 +141,32 @@ describe("status page", () => {
     await screen.findByText("Connected");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
+
+  it("UXP-17 Status cards: Bridge connection, Webhooks and Counters, in two columns from 1100 px", async () => {
+    serve({ status: { connected: true, webhooks: { enabled: true, endpoints: [{ name: "crm" }] } } });
+    openStatus();
+    await screen.findByText("Connected");
+    const connection = screen.getByRole("region", { name: "Bridge connection" });
+    const hooks = screen.getByRole("region", { name: "Webhooks" });
+    const count = screen.getByRole("region", { name: "Counters" });
+    expect(within(hooks).getByText("On")).toBeInTheDocument();
+    expect(within(hooks).getByRole("cell", { name: "crm" })).toBeInTheDocument();
+    expect(within(connection).queryByText("On")).not.toBeInTheDocument();
+    expect(within(count).getByText("Messages received")).toBeInTheDocument();
+    const grid = connection.parentElement as HTMLElement;
+    expect(grid).toContainElement(hooks);
+    expect(grid).toContainElement(count);
+    expect(grid.className).toContain("grid-cols-1");
+    expect(grid.className).toContain("min-[1100px]:grid-cols-2");
+  });
+
+  it("UXP-37 counters in two columns under 600", async () => {
+    serve({ status: { connected: true } });
+    openStatus();
+    const received = (await screen.findByText("Messages received")).parentElement as HTMLElement;
+    const grid = received.parentElement as HTMLElement;
+    expect(grid.tagName).toBe("DL");
+    expect(grid.className).toMatch(/(^|\s)grid-cols-2(\s|$)/);
+    expect(grid.className).not.toMatch(/(^|\s)(sm:)?grid-cols-1(\s|$)/);
+  });
 });

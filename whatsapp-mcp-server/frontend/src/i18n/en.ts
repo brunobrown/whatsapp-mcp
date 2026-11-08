@@ -187,6 +187,7 @@ export const en = {
   "status.lastDisconnected": "Last disconnected",
   "status.mediaRetries": "Media retries waiting",
   "status.webhooks": "Webhooks",
+  "status.webhooks.unknown": "The webhook state is not available while the bridge status cannot be read.",
   "status.webhooks.on": "On",
   "status.webhooks.off": "Off",
   "status.webhooks.endpoints": "Webhook endpoints",
