@@ -2,6 +2,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { ScrollRegion } from "@/components/ui/scroll-region";
 import { useT } from "@/i18n/t";
 import type { FieldSchema } from "@/types/api";
 import { blankRecord } from "./editor";
@@ -82,57 +83,61 @@ export function RecordsField({ field, value, loaded, errors = {}, id, path = fie
     <div className="flex flex-col gap-3">
       {whole ? <p className="m-0 font-medium text-danger-ink">{whole}</p> : null}
       {records.length === 0 ? <p className="m-0 text-muted">{t("records.empty")}</p> : null}
-      {records.map((row, index) => {
-        const key = keys[index] ?? index;
-        const name = nameOf(field, row, index, untitled);
-        const mine = field.id_key === null ? undefined : stored.find((record) => record[field.id_key ?? ""] === row[field.id_key ?? ""]);
-        const headingId = `${id}-card-${String(key)}`;
-        return (
-          <section
-            key={key}
-            ref={(element) => {
-              if (element) cards.current.set(key, element);
-              else cards.current.delete(key);
-            }}
-            tabIndex={-1}
-            aria-labelledby={headingId}
-            className="flex flex-col gap-4 rounded-card border border-line bg-panel p-4 focus-visible:outline-offset-2"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <h3 id={headingId} className="m-0 min-w-0 truncate text-base font-semibold">
-                {name}
-              </h3>
-              <Button
-                variant="ghost"
-                disabled={disabled}
-                aria-label={t("records.removeAria", { name })}
-                onClick={() => {
-                  setRemoving(index);
+      <ScrollRegion label={t("field.itemsRegion", { label: field.label })} scrollerClassName="max-h-96">
+        <div className="flex flex-col gap-3 p-1">
+          {records.map((row, index) => {
+            const key = keys[index] ?? index;
+            const name = nameOf(field, row, index, untitled);
+            const mine = field.id_key === null ? undefined : stored.find((record) => record[field.id_key ?? ""] === row[field.id_key ?? ""]);
+            const headingId = `${id}-card-${String(key)}`;
+            return (
+              <section
+                key={key}
+                ref={(element) => {
+                  if (element) cards.current.set(key, element);
+                  else cards.current.delete(key);
                 }}
+                tabIndex={-1}
+                aria-labelledby={headingId}
+                className="flex flex-col gap-4 rounded-card border border-line bg-panel p-4 focus-visible:outline-offset-2"
               >
-                <Trash2 aria-hidden="true" />
-                {t("records.remove")}
-              </Button>
-            </div>
-            {errors[`${path}.${String(index)}`] ? (
-              <p className="m-0 font-medium text-danger-ink">{errors[`${path}.${String(index)}`]}</p>
-            ) : null}
-            {field.fields.map((sub) => (
-              <FieldRenderer
-                key={sub.key}
-                field={disabled ? { ...sub, readonly: true } : sub}
-                value={row[sub.key]}
-                loaded={mine?.[sub.key]}
-                error={errors[`${path}.${String(index)}.${sub.key}`]}
-                idPrefix={`${id}-${String(key)}-`}
-                onChange={(next) => {
-                  change(index, sub.key, next);
-                }}
-              />
-            ))}
-          </section>
-        );
-      })}
+                <div className="flex items-center justify-between gap-2">
+                  <h3 id={headingId} className="m-0 min-w-0 truncate text-base font-semibold">
+                    {name}
+                  </h3>
+                  <Button
+                    variant="ghost"
+                    disabled={disabled}
+                    aria-label={t("records.removeAria", { name })}
+                    onClick={() => {
+                      setRemoving(index);
+                    }}
+                  >
+                    <Trash2 aria-hidden="true" />
+                    {t("records.remove")}
+                  </Button>
+                </div>
+                {errors[`${path}.${String(index)}`] ? (
+                  <p className="m-0 font-medium text-danger-ink">{errors[`${path}.${String(index)}`]}</p>
+                ) : null}
+                {field.fields.map((sub) => (
+                  <FieldRenderer
+                    key={sub.key}
+                    field={disabled ? { ...sub, readonly: true } : sub}
+                    value={row[sub.key]}
+                    loaded={mine?.[sub.key]}
+                    error={errors[`${path}.${String(index)}.${sub.key}`]}
+                    idPrefix={`${id}-${String(key)}-`}
+                    onChange={(next) => {
+                      change(index, sub.key, next);
+                    }}
+                  />
+                ))}
+              </section>
+            );
+          })}
+        </div>
+      </ScrollRegion>
       <div>
         <Button variant="secondary" disabled={disabled || atLimit} aria-label={t("records.addAria", { label: field.label })} onClick={add}>
           <Plus aria-hidden="true" />

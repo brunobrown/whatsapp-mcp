@@ -258,6 +258,7 @@ export const en = {
   "form.errorCount.other": "{count} fields need attention",
   "card.needsAttention": "needs attention",
   "card.general": "General",
+  "field.itemsRegion": "{label}, items",
   "section.unsaved": "Unsaved changes",
   "section.moreActions": "More actions",
   "time.seconds": "{n} s ago",

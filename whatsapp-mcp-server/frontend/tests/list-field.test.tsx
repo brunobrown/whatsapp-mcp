@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FieldRenderer } from "../src/components/forms/FieldRenderer";
 import { joinLines, ListField } from "../src/components/forms/ListField";
 import type { FieldSchema } from "../src/types/api";
@@ -21,6 +21,12 @@ function Harness({ initial, onChange, disabled = false, maxItems }: { initial: u
       }}
     />
   );
+}
+
+/** jsdom has no layout: report the sizes a browser would for a box that overflows. */
+function overflow(): void {
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => 900 });
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => 384 });
 }
 
 const inputs = () => screen.getAllByRole("textbox").map((input) => (input as HTMLInputElement).value);
@@ -141,5 +147,25 @@ describe("list field in a form", () => {
     const group = screen.getByRole("group", { name: "Blocked chats" });
     expect(within(group).getByRole("textbox", { name: "Blocked chats, item 1" })).toHaveValue("x");
     expect(group).toHaveAccessibleDescription("One per line.");
+  });
+
+  describe("scrolling", () => {
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+    });
+
+    it("UXP-11 items scroll while the title and add button stay", () => {
+      overflow();
+      render(<Harness initial={Array.from({ length: 30 }, (_, index) => `item ${String(index)}`)} />);
+      const region = screen.getByRole("region", { name: "Deny, items" });
+      expect(region).toHaveAttribute("tabindex", "0");
+      expect(region).toHaveClass("max-h-96");
+      expect(within(region).getAllByRole("textbox")).toHaveLength(30);
+      // The add button is not inside the scrolling box, so it stays in view while the items scroll.
+      const add = screen.getByRole("button", { name: "Add item" });
+      expect(region.contains(add)).toBe(false);
+      expect(region.parentElement?.parentElement?.contains(add)).toBe(true);
+    });
   });
 });
