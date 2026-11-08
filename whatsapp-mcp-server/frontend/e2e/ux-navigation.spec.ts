@@ -850,8 +850,20 @@ test("UXP-47 a swipe of the drawer to the left past a third of its width closes 
     expect(width).toBe(320);
     // A short swipe (a quarter of the width): the drawer comes back and stays open.
     await swipe(cdp, { x: 260, y: 700 }, -Math.round(width * 0.25));
+    // The close animation lasts 150 ms: wait it out, so a drawer that is closing is not mistaken for one that stayed.
+    await page.waitForTimeout(500);
     await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
     await expect(drawer).toBeVisible();
+    // Just under a third (30 %): stays open. Just over (38 %): closes. Pins the threshold at one third.
+    await swipe(cdp, { x: 260, y: 700 }, -Math.round(width * 0.3));
+    // The close animation lasts 150 ms: wait it out, so a drawer that is closing is not mistaken for one that stayed.
+    await page.waitForTimeout(500);
+    await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
+    await expect(drawer).toBeVisible();
+    await swipe(cdp, { x: 260, y: 700 }, -Math.round(width * 0.38));
+    await expect(drawer).toHaveCount(0);
+    await page.getByRole("button", { name: "Open menu" }).click();
+    await expect.poll(async () => (await drawer.boundingBox())?.x).toBe(0);
     // A swipe past a third (about 53 %): the drawer closes.
     await swipe(cdp, { x: 260, y: 700 }, -Math.round(width * 0.53));
     await expect(drawer).toHaveCount(0);
