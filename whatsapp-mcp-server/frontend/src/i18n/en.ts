@@ -244,6 +244,13 @@ export const en = {
   "form.errorCount.one": "{count} field needs attention",
   "form.errorCount.other": "{count} fields need attention",
   "card.needsAttention": "needs attention",
+  "time.seconds": "{n} s ago",
+  "time.minutes": "{n} min ago",
+  "time.hours": "{n} h ago",
+  "time.days": "{n} d ago",
+  "freshness.updated": "Updated {when}",
+  "freshness.failed": "Could not update",
+  "freshness.refresh": "Refresh",
 } as const;
 
 export type Catalog = typeof en;
