@@ -431,4 +431,14 @@ describe("one scroller", () => {
     expect(screen.getByRole("banner")).toHaveClass("shrink-0");
     expect(screen.getByRole("main")).toHaveClass("overflow-y-auto", "min-h-0", "flex-1");
   });
+
+  it("UXP-08 the shell and the content box are positioned, so a hidden control inside them cannot lengthen the document", async () => {
+    // The switches and radio groups carry a hidden input with position:absolute. With no positioned ancestor it is placed
+    // against the page, escapes the clip of the shell and the scroll box, and gave the document 860 px of scroll at 360 px.
+    viewport = mockViewport(360);
+    open("/s/media");
+    await screen.findByRole("heading", { level: 1, name: "Media downloads" });
+    expect(screen.getByTestId("shell")).toHaveClass("relative", "overflow-hidden");
+    expect(screen.getByRole("main")).toHaveClass("relative", "overflow-y-auto");
+  });
 });
