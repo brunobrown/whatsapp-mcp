@@ -626,6 +626,8 @@ Everything the bridge prints also goes to `whatsapp-bridge/store/bridge.log` (ro
 
 The bridge starts a web interface with it (a child process, ended with the bridge), so the settings of this project can be seen and changed from a browser instead of the terminal and a text editor. Open the address it prints in its log (`http://127.0.0.1:8765` by default). The interface is in English; more languages are planned (Portuguese among them), and every text already comes from one catalog so a language is a new catalog, not a rewrite.
 
+![The web interface after sign-in: the grouped section menu on the left and the Send policy section as cards on the right](./docs/ui-home.png)
+
 It is a React page served by the same Python process that answers its JSON API (`python -m ui`), so one port serves both. The Python side needs only the environment of the server (`cd whatsapp-mcp-server && uv sync`); Node is needed only to build the page yourself.
 
 **Getting the page.** The built page lives in `whatsapp-mcp-server/ui/web/` and is not kept in git. There are two ways to get it:
